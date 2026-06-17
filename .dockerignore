@@ -1,0 +1,93 @@
+# =============================================================================
+# .dockerignore — qué NO entra al build context que se envia al daemon
+# =============================================================================
+# Filosofia: el Dockerfile usa COPY selectivo (solo src/, scripts/, main.py,
+# requirements.txt). Este archivo acelera el envio al daemon ignorando todo
+# lo que no se va a usar nunca durante el build.
+
+# ── Git ──────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── Datos locales (se montan como volumen en runtime, no van en la imagen)
+data/
+
+# ── Salidas (se generan en runtime, montadas como volumen) ───────────────
+artifacts/
+logs/
+reports/
+
+# ── Legacy del modo file:// (ADR-001) ────────────────────────────────────
+mlruns/
+
+# ── Notebooks y experimentacion ──────────────────────────────────────────
+notebooks/
+
+# ── Subproyectos que NO entran al contexto raiz (trainer/api) ─────────────
+# La UI buildea con su propio contexto (ui/). La API SI necesita api/ + src/
+# (no excluir), pero no ui/. La infra Terraform vive solo en GUIA_MLOPS_AWS_V2.md
+# (single source of truth, no hay carpeta `infra/` en este repo).
+ui/
+
+# ── Cache Python ─────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Tests y caches de tooling (no van a la imagen de runtime) ────────────
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Entornos virtuales ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── IDE ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── Documentacion (no necesaria en runtime; el build context vuela menos) ─
+docs/
+*.md
+LICENSE
+
+# ── Meta de build / orquestacion del HOST (el container no las necesita) ──
+Taskfile.yml
+Taskfile.*.yml
+docker-compose.yml
+docker-compose.*.yml
+# Excluye el contenido de docker/ (mlflow/, nginx-reports.conf: solo host/compose)
+# salvo docker/reports/, cuyo Dockerfile hace COPY de nginx.conf + entrypoint.sh
+# desde el build context. Glob `docker/*` + re-inclusion: el padre docker/ queda
+# "caminable", requisito para que BuildKit pueda re-incluir el subdirectorio.
+docker/*
+!docker/reports
+Dockerfile
+.dockerignore
+
+# ── Dev-only deps (la imagen runtime usa solo requirements.txt) ──────────
+requirements-dev.txt
+
+# ── Variables de entorno locales (NUNCA en la imagen) ────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Claude Code / agentes ────────────────────────────────────────────────
+.claude/
+
+# ── Sistema operativo ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Archivos temporales ──────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak

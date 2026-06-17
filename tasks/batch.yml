@@ -1,0 +1,107 @@
+# =============================================================================
+# tasks/batch.yml  -  AWS Batch (training jobs en la nube)
+# =============================================================================
+# Incluido por Taskfile.yml raiz con namespace "batch:".
+#
+# El submit pasa por el Lambda dispatcher (valida variety + hydrate de S3
+# antes de encolar). Si necesitas bypass, llama `aws batch submit-job` directo.
+#
+# USO TIPICO:
+#   task batch:train VARIETIES=POP                    una variedad, espera
+#   task batch:train VARIETIES=POP,VENTURA            multiples en serie
+#   task batch:train VARIETIES=POP TUNING=smoke       sanity check (~1 min)
+#   task batch:train VARIETIES=POP WAIT=false         fire-and-forget
+#   task batch:smoke                                  atajo: POP + smoke
+#   task batch:eda   VARIETIES=POP                    EDA exploratorio (opcional, on-demand)
+#   task batch:status                                 jobs activos en queues
+#   task batch:cancel JOB_ID=<id>                     terminar un job
+# =============================================================================
+
+version: "3"
+
+vars:
+  DISPATCHER_FN: '{{.DISPATCHER_FN | default (printf "%s-dispatcher" .PROJECT)}}'
+  JOBDEF:        '{{.JOBDEF        | default (printf "%s-trainer" .PROJECT)}}'
+  QUEUE_SPOT:    '{{.QUEUE_SPOT    | default (printf "%s-job-queue-spot"     .PROJECT)}}'
+  QUEUE_OD:      '{{.QUEUE_OD      | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
+  TUNING:        '{{.TUNING        | default "prod"}}'
+  WAIT:          '{{.WAIT          | default "true"}}'
+
+tasks:
+
+  train:
+    desc: "Submit via Lambda dispatcher. Vars: VARIETIES=POP[,VENTURA] (REQ), TUNING, WAIT"
+    requires:
+      vars: [VARIETIES]
+    cmds:
+      - |
+        set -e
+        source tasks/lib/batch_wait.sh
+        # Preflight: aborta en ~2s si la job-def apunta a una imagen ausente en
+        # ECR, en vez de encolar y esperar ~3 min al CannotPullImageManifestError.
+        assert_jobdef_image "{{.JOBDEF}}" "{{.REGION}}"
+        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" --arg t "{{.TUNING}}" \
+          '{varieties: $v, tuning: $t}')
+        aws lambda invoke \
+          --function-name "{{.DISPATCHER_FN}}" \
+          --cli-binary-format raw-in-base64-out \
+          --payload "$PAYLOAD" \
+          /tmp/dispatcher-out.json \
+          --query 'StatusCode' --output text
+        cat /tmp/dispatcher-out.json
+        JOB_ID=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
+                 || jq -r '.jobId' /tmp/dispatcher-out.json)
+        echo ">>> Submitted  job=$JOB_ID  tuning={{.TUNING}}  varieties={{.VARIETIES}}"
+        [ "{{.WAIT}}" != "true" ] && exit 0
+        wait_job "$JOB_ID" "{{.VARIETIES}}"
+
+  eda:
+    desc: "EDA exploratorio en Batch (opcional, standalone, on-demand). Vars: VARIETIES=POP[,VENTURA] (REQ), WAIT"
+    requires:
+      vars: [VARIETIES]
+    cmds:
+      - |
+        set -e
+        source tasks/lib/batch_wait.sh
+        assert_jobdef_image "{{.JOBDEF}}" "{{.REGION}}"
+        # mode=eda -> el dispatcher arma command=["--eda","--varieties",...] (sin tuning).
+        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" '{varieties: $v, mode: "eda"}')
+        aws lambda invoke \
+          --function-name "{{.DISPATCHER_FN}}" \
+          --cli-binary-format raw-in-base64-out \
+          --payload "$PAYLOAD" \
+          /tmp/dispatcher-out.json \
+          --query 'StatusCode' --output text
+        cat /tmp/dispatcher-out.json
+        JOB_ID=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
+                 || jq -r '.jobId' /tmp/dispatcher-out.json)
+        echo ">>> Submitted EDA  job=$JOB_ID  varieties={{.VARIETIES}}"
+        [ "{{.WAIT}}" != "true" ] && exit 0
+        wait_job "$JOB_ID" "{{.VARIETIES}}"
+
+  smoke:
+    desc: "Sanity check end-to-end (~1 min). Equivalente a train VARIETIES=POP TUNING=smoke"
+    cmds:
+      - task: train
+        vars: { VARIETIES: POP, TUNING: smoke }
+
+  status:
+    desc: "Jobs activos (SUBMITTED/PENDING/RUNNABLE/STARTING/RUNNING) en ambas queues"
+    silent: true
+    cmds:
+      - |
+        for queue in "{{.QUEUE_SPOT}}" "{{.QUEUE_OD}}"; do
+          echo "=== $queue ==="
+          for s in SUBMITTED PENDING RUNNABLE STARTING RUNNING; do
+            aws batch list-jobs --job-queue "$queue" --job-status $s \
+              --query 'jobSummaryList[].[jobId,jobName,status,createdAt]' --output table 2>/dev/null || true
+          done
+          echo ""
+        done
+
+  cancel:
+    desc: "Terminar job RUNNING/PENDING. Vars: JOB_ID=<id> (REQ), REASON=<texto>"
+    requires:
+      vars: [JOB_ID]
+    cmds:
+      - aws batch terminate-job --job-id "{{.JOB_ID}}" --reason "{{.REASON | default \"cancelled via task\"}}"

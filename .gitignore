@@ -1,0 +1,99 @@
+# =============================================================================
+# .gitignore — qué NO se versiona
+# =============================================================================
+# Filosofia: solo viven en git codigo + docs + config plantilla (no secretos).
+# Todo lo generado en runtime, los datos reales, las credenciales y las
+# caches de herramientas se quedan fuera.
+
+# ── Secretos / config local ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+.env.infra
+*.pem
+*.key
+
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+
+# ── Caches de tooling ────────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Datos (los reales viven en S3) ───────────────────────────────────────
+# Input raw del negocio — pesa varios MB y se baja desde S3 en AWS Batch.
+data/*.xlsx
+data/training/
+data/processed/
+
+# ── Salidas del pipeline ─────────────────────────────────────────────────
+# Bind-mounted al container; los dirs vacios se recrean con Taskfile
+# `_ensure_dirs` o init_dirs() en config.py al arrancar.
+# Anclados a la raiz con `/` por costumbre (no hay carpeta `infra/` en el
+# repo; el Terraform vive como codigo pegable en GUIA_MLOPS_AWS_V2.md).
+/artifacts/
+/reports/
+/logs/
+
+# ── Legacy MLflow (ADR-001: backend ahora es Postgres + S3) ──────────────
+# Regla queda por si alguien checkout-ea una rama vieja con el dir en disco.
+mlruns/
+
+# ── Editores e IDEs ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Sistema operativo ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+*:Zone.Identifier
+
+# ── Archivos temporales ──────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*~
+
+# ── Claude Code (config local del agente) ────────────────────────────────
+.claude/
+
+# Terraform — defensivos: no hay carpeta `infra/` en este repo (todo el codigo
+# pegable vive en GUIA_MLOPS_AWS_V2.md). Estas reglas cubren el caso de que
+# alguien siga la guia y materialice la infra localmente para `terraform apply`
+# (los artefactos generados por terraform nunca deben commitearse).
+**/terraform.tfvars
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+.terraformrc
+terraform.rc
+
+# Patch 13.8 - override del compose para apuntar a prod (NO commitear)
+docker-compose.override.yml
+
+# Terraform
+**/terraform.tfvars
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+.terraformrc
+terraform.rc
+
+# Lambdas .zip (Terraform los crea desde Python source)
+infra/modules/lambdas/*.zip
+infra/modules/scheduler/*.zip

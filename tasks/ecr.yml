@@ -1,0 +1,130 @@
+# =============================================================================
+# tasks/ecr.yml  -  Build + push de las 5 imagenes a ECR
+# =============================================================================
+# Incluido por Taskfile.yml raiz con namespace "ecr:".
+#
+# USO TIPICO:
+#   task ecr:build-all                                build + push de las 5
+#   task ecr:build IMG=trainer                        UNA imagen, tag default
+#   task ecr:build IMG=api TAG=v1.2.3                 UNA imagen, tag custom
+#   task ecr:list                                     listar tags en ECR
+#
+# IMG = trainer | mlflow | reports | api | ui
+# =============================================================================
+
+version: "3"
+
+vars:
+  TAG_TRAINER: '{{.TAG_TRAINER | default "latest"}}'
+  TAG_MLFLOW:  '{{.TAG_MLFLOW  | default "v3.12.0"}}'
+  TAG_REPORTS: '{{.TAG_REPORTS | default "stable"}}'
+  TAG_API:     '{{.TAG_API     | default "latest"}}'
+  TAG_UI:      '{{.TAG_UI      | default "latest"}}'
+
+tasks:
+
+  # ═══ Login (token 12h, run: once) ═══════════════════════════════════════════
+
+  login:
+    desc: "docker login a ECR. Idempotente, token valido 12h"
+    # run: once: si varias tasks dependen de login en una misma corrida,
+    # solo se ejecuta una vez.
+    run: once
+    vars:
+      ACCOUNT:
+        sh: aws sts get-caller-identity --query Account --output text
+    cmds:
+      - aws ecr get-login-password --region {{.REGION}}
+        | docker login --username AWS --password-stdin {{.ACCOUNT}}.dkr.ecr.{{.REGION}}.amazonaws.com
+
+  # ═══ Build + push UNA imagen ════════════════════════════════════════════════
+
+  build:
+    desc: "Build + push UNA imagen. Vars: IMG=trainer|mlflow|reports|api|ui (REQ), TAG=<override>"
+    requires:
+      vars: [IMG]
+    deps: [login]
+    vars:
+      ACCOUNT:
+        sh: aws sts get-caller-identity --query Account --output text
+      REGISTRY: '{{.ACCOUNT}}.dkr.ecr.{{.REGION}}.amazonaws.com'
+      GIT_SHA:
+        sh: git rev-parse --short=12 HEAD 2>/dev/null || echo unknown
+      BUILD_DATE:
+        sh: date -u +%Y-%m-%dT%H:%M:%SZ
+      # Tabla IMG -> (image_name, dockerfile, context, default_tag). Cualquier IMG
+      # fuera del set valido cae en el branch ERROR validado abajo.
+      # CONTEXT: api usa contexto=raiz (necesita src/); ui usa contexto=ui/.
+      IMAGE_NAME: '{{if eq .IMG "trainer"}}{{.PROJECT}}{{else if eq .IMG "mlflow"}}{{.PROJECT}}-mlflow{{else if eq .IMG "reports"}}{{.PROJECT}}-reports{{else if eq .IMG "api"}}{{.PROJECT}}-api{{else if eq .IMG "ui"}}{{.PROJECT}}-ui{{else}}ERROR{{end}}'
+      DOCKERFILE: '{{if eq .IMG "trainer"}}Dockerfile{{else if eq .IMG "mlflow"}}docker/mlflow/Dockerfile{{else if eq .IMG "reports"}}docker/reports/Dockerfile{{else if eq .IMG "api"}}api/Dockerfile{{else if eq .IMG "ui"}}ui/Dockerfile{{else}}ERROR{{end}}'
+      CONTEXT: '{{if eq .IMG "ui"}}ui{{else}}.{{end}}'
+      RESOLVED_TAG: '{{if eq .IMG "trainer"}}{{.TAG | default .TAG_TRAINER}}{{else if eq .IMG "mlflow"}}{{.TAG | default .TAG_MLFLOW}}{{else if eq .IMG "reports"}}{{.TAG | default .TAG_REPORTS}}{{else if eq .IMG "api"}}{{.TAG | default .TAG_API}}{{else if eq .IMG "ui"}}{{.TAG | default .TAG_UI}}{{else}}ERROR{{end}}'
+    cmds:
+      - 'test "{{.IMAGE_NAME}}" != "ERROR" || { echo "ERROR IMG debe ser trainer|mlflow|reports|api|ui (recibido {{.IMG}})"; exit 1; }'
+      - 'echo ">>> Build {{.IMAGE_NAME}}:{{.RESOLVED_TAG}}  (sha-{{.GIT_SHA}})"'
+      # BUILD_DATE va como --label (metadata del config final), no como --build-arg:
+      # asi no invalida la cache de capas ni vuelve no-reproducible el commit.
+      - docker build
+        --build-arg GIT_SHA={{.GIT_SHA}}
+        --build-arg VERSION={{.RESOLVED_TAG}}
+        --label org.opencontainers.image.created={{.BUILD_DATE}}
+        -t {{.REGISTRY}}/{{.IMAGE_NAME}}:{{.RESOLVED_TAG}}
+        -t {{.REGISTRY}}/{{.IMAGE_NAME}}:sha-{{.GIT_SHA}}
+        -f {{.DOCKERFILE}} {{.CONTEXT}}
+      # Push idempotente. En repos IMMUTABLE (p.ej. mlflow) solo pushea si el
+      # tag NO existe -> re-correr el mismo commit es no-op en vez de error.
+      # En repos MUTABLE siempre pushea (sobrescribe latest/stable).
+      - |
+        MUT=$(aws ecr describe-repositories --repository-names {{.IMAGE_NAME}} \
+                --region {{.REGION}} --query 'repositories[0].imageTagMutability' --output text)
+        push_tag() {
+          tag="$1"
+          if [ "$MUT" = "IMMUTABLE" ] && \
+             aws ecr describe-images --repository-name {{.IMAGE_NAME}} \
+                 --image-ids imageTag="$tag" --region {{.REGION}} >/dev/null 2>&1; then
+            echo ">>> $tag ya existe en {{.IMAGE_NAME}} (IMMUTABLE) -- skip push"
+          else
+            docker push {{.REGISTRY}}/{{.IMAGE_NAME}}:"$tag"
+          fi
+        }
+        push_tag "{{.RESOLVED_TAG}}"
+        push_tag "sha-{{.GIT_SHA}}"
+
+  # ═══ Build + push de las 3 ══════════════════════════════════════════════════
+
+  build-all:
+    desc: "Build + push de las 5 imagenes (trainer + mlflow + reports + api + ui)"
+    deps: [login]
+    vars:
+      # Single source of truth del tag trainer = terraform.tfvars. Sin esto,
+      # build-all pushea `latest` mientras la job-def queda pineada a otra tag
+      # (p.ej. v0.2.0) -> CannotPullImageManifestError en el primer smoke.
+      # Si el grep no encuentra nada, queda "" y `build` cae a TAG_TRAINER.
+      TRAINER_TFVARS_TAG:
+        sh: sed -nE 's/^[[:space:]]*trainer_image_tag[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' infra/envs/prod/terraform.tfvars 2>/dev/null | head -1
+    cmds:
+      - task: build
+        vars: { IMG: trainer, TAG: '{{.TRAINER_TFVARS_TAG}}' }
+      - task: build
+        vars: { IMG: mlflow }
+      - task: build
+        vars: { IMG: reports }
+      - task: build
+        vars: { IMG: api }
+      - task: build
+        vars: { IMG: ui }
+
+  # ═══ Inspeccion ═════════════════════════════════════════════════════════════
+
+  list:
+    desc: "Listar las 5 imagenes con tag default presente en cada repo ECR"
+    silent: true
+    cmds:
+      - |
+        for spec in "{{.PROJECT}}:{{.TAG_TRAINER}}" "{{.PROJECT}}-mlflow:{{.TAG_MLFLOW}}" "{{.PROJECT}}-reports:{{.TAG_REPORTS}}" "{{.PROJECT}}-api:{{.TAG_API}}" "{{.PROJECT}}-ui:{{.TAG_UI}}"; do
+          repo="${spec%:*}"; tag="${spec##*:}"
+          echo "=== $repo ($tag) ==="
+          aws ecr list-images --repository-name "$repo" \
+            --query "imageIds[?imageTag=='$tag']" --output table 2>/dev/null || true
+          echo ""
+        done

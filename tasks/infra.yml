@@ -1,0 +1,142 @@
+# =============================================================================
+# tasks/infra.yml  -  Terraform wrapper + bootstrap del backend
+# =============================================================================
+# Incluido por Taskfile.yml raiz con namespace "infra:".
+#
+# USO TIPICO:
+#   task infra:bootstrap                              UNA VEZ por cuenta+region
+#   task infra:bootstrap-oidc                         UNA VEZ (rol GHA)
+#   task infra:plan [TARGET=module.X]                 ver cambios
+#   task infra:apply [TARGET=module.X]                aplicar (parcial o full)
+#   task infra:output                                 outputs (alb_dns, ecr_urls, ...)
+#   task infra:validate                               fmt -check + validate (pre-commit)
+#   task infra:destroy                                DESTRUCTIVO: todo
+#   task infra:destroy-target TARGET=module.X         DESTRUCTIVO: parcial
+# =============================================================================
+
+version: "3"
+
+vars:
+  TF_DIR:  '{{.TF_DIR | default "infra/envs/prod"}}'
+  # Ultimos 7 chars del account ID (sufijo de buckets para evitar colisiones).
+  # Misma fuente que tasks/local.yml -> coherencia local/prod en nombres de bucket.
+  # Resuelto una vez por invocacion del include.
+  SUFFIX:
+    sh: bash scripts/aws-suffix.sh
+
+tasks:
+
+  # ═══ Bootstrap (one-shot, idempotente) ══════════════════════════════════════
+
+  bootstrap:
+    desc: "Backend Terraform (S3 tfstate + SLRs; lock nativo S3). UNA VEZ por cuenta+region"
+    cmds:
+      - bash infra/bootstrap.sh
+
+  bootstrap-oidc:
+    desc: "Rol IAM para GitHub Actions via OIDC. UNA VEZ"
+    cmds:
+      - bash infra/bootstrap-oidc.sh
+
+  # ═══ Init (interno, dep de plan/apply/destroy) ══════════════════════════════
+
+  _init:
+    internal: true
+    cmds:
+      # use_lockfile=true => locking nativo S3 (reemplaza el deprecado
+      # `dynamodb_table`). El lock vive como `<key>.tflock` en el mismo bucket
+      # de tfstate. Requiere Terraform >= 1.10.
+      - terraform -chdir={{.TF_DIR}} init
+        -backend-config=bucket={{.PROJECT}}-tfstate-{{.SUFFIX}}
+        -backend-config=key=envs/prod/terraform.tfstate
+        -backend-config=region={{.REGION}}
+        -backend-config=use_lockfile=true
+        -reconfigure
+
+  # ═══ Plan / Apply / Destroy ═════════════════════════════════════════════════
+
+  plan:
+    desc: "terraform plan. Var opcional: TARGET=module.X"
+    deps: [_init]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} plan {{if .TARGET}}-target={{.TARGET}}{{end}}
+
+  apply:
+    desc: "terraform apply -auto-approve. Var opcional: TARGET=module.X (apply parcial por oleadas)"
+    deps: [_init]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} apply {{if .TARGET}}-target={{.TARGET}}{{end}} -auto-approve
+
+  destroy:
+    desc: "DESTRUCTIVO: terraform destroy completo. Considerar `task ops:teardown` antes (preserva storage)"
+    prompt: "Esto borrara TODA la infra de envs/prod (incluso S3 + ECR). Continuar?"
+    deps: [_init]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} destroy -auto-approve
+
+  destroy-target:
+    desc: "terraform destroy parcial. Vars: TARGET=module.X (REQ)"
+    prompt: "Destruir {{.TARGET}}? Asegurate que no tenga dependencias activas"
+    requires:
+      vars: [TARGET]
+    deps: [_init]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} destroy -target={{.TARGET}} -auto-approve
+
+  # ═══ Inspeccion ═════════════════════════════════════════════════════════════
+
+  output:
+    desc: "Mostrar outputs de envs/prod (alb_dns, ecr_urls, rds_endpoint, ...)"
+    cmds:
+      - terraform -chdir={{.TF_DIR}} output
+
+  output-raw:
+    desc: "Mostrar UN output crudo (para scripts). Var: NAME=alb_dns (REQ)"
+    silent: true
+    requires:
+      vars: [NAME]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} output -raw {{.NAME}}
+
+  urls:
+    desc: "Imprime las URLs publicas de PROD (derivadas del ALB DNS, que varia por deploy)."
+    silent: true
+    cmds:
+      - |
+        ALB=$(terraform -chdir={{.TF_DIR}} output -raw alb_dns 2>/dev/null)
+        if [ -z "$ALB" ]; then
+          echo "  (sin outputs: la infra no esta aplicada todavia -> corre 'task deploy')"
+          exit 0
+        fi
+        cat <<EOF
+
+        ════════════════════════════════════════════════════════════════════
+         Servicios PROD (ALB: $ALB)
+           UI (dashboard gerencial)   http://$ALB/app/
+           API (Swagger)              http://$ALB/docs
+           MLflow runs                http://$ALB/
+           MLflow Model Registry      http://$ALB/#/models
+           Reports (campeon HTML)     http://$ALB/reports/
+           Artifacts                  http://$ALB/artifacts/
+        ────────────────────────────────────────────────────────────────────
+         Todo cuelga del :80 del ALB por paths (a diferencia de local, que usa
+         un puerto por servicio). El DNS del ALB cambia si recreas el LB.
+        ════════════════════════════════════════════════════════════════════
+        EOF
+
+  validate:
+    desc: "terraform fmt -check + validate (init + providers; usable cold antes del primer apply)"
+    deps: [_init]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} fmt -check -recursive
+      - terraform -chdir={{.TF_DIR}} validate
+
+  # ═══ Recovery ═══════════════════════════════════════════════════════════════
+
+  force-unlock:
+    desc: "Liberar state lock huerfano. Var: LOCK_ID=<id> (REQ)"
+    requires:
+      vars: [LOCK_ID]
+    deps: [_init]
+    cmds:
+      - terraform -chdir={{.TF_DIR}} force-unlock -force {{.LOCK_ID}}

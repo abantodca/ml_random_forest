@@ -1,0 +1,194 @@
+# Logging con rotación. Sin esto json-file crece sin bound.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mlflow
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      # initdb crea la base `forecasts` (API) junto a `mlflow`. Solo corre al
+      # inicializar el volumen; si ya existe pg-data, no re-ejecuta (la API
+      # igual la auto-crea si faltara — ensure_database).
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      retries: 10
+    logging: *default-logging
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
+    volumes:
+      - ~/.aws:/aws:ro
+    # Artifacts en modo PROXY (recomendado): el server es el único que toca S3.
+    # `--artifacts-destination` (en vez de `--default-artifact-root`) hace que
+    # los runs nuevos tengan artifact_uri `mlflow-artifacts:/…` y que TODO el
+    # IO de artifacts (subida del trainer, listado/descarga de la UI y del API)
+    # pase por el server — sin que cada cliente necesite creds S3. Evita el
+    # "Loading artifact failed / INTERNAL_ERROR" del modo mixto anterior.
+    # Requiere que el server alcance S3: revisar AWS_DEFAULT_REGION (= región
+    # real del bucket) y las creds montadas en ~/.aws.
+    command: >
+      sh -c "mlflow server
+      --host 0.0.0.0 --port 5000
+      --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
+      --backend-store-uri postgresql://mlflow:$${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      --artifacts-destination s3://${S3_MLFLOW_BUCKET:?Set S3_MLFLOW_BUCKET in .env}/artifacts
+      --serve-artifacts"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health',timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    ports:
+      - "127.0.0.1:5000:5000"
+    logging: *default-logging
+
+  # DISEÑO INTENCIONAL (Tramo Local): nginx plano sirviendo los bind-mounts
+  # ./reports y ./artifacts — NO usa docker/reports/Dockerfile (esa imagen,
+  # con sync S3 + entrypoint propio, es para ECS y la construye tasks/ecr.yml).
+  # No "arreglar" esto agregando build: aquí el host genera los archivos.
+  reports:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./reports:/usr/share/nginx/html/reports:ro
+      - ./artifacts:/usr/share/nginx/html/artifacts:ro
+      - ./docker/nginx-reports.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:8080:80"
+    logging: *default-logging
+
+  # ── API (FastAPI) ────────────────────────────────────────────────────────
+  # Sirve los modelos rnd-forest-* registrados en MLflow y persiste pronósticos
+  # en la base `forecasts`. Comparte el `src/` raíz vía contexto de build = raíz.
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: ml-training-api:local
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      mlflow:   { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/forecasts
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_PRELOAD_MODELS: ${MLFLOW_PRELOAD_MODELS:-false}
+      # El pipeline campeon pesa ~63MB; el proxy S3->server->cliente puede
+      # tardar mas que el default de 120s en enlaces domesticos. Sin esto la
+      # primera carga del modelo muere con ReadTimeout y la API queda sin
+      # modelo (2026-06-12).
+      MLFLOW_HTTP_REQUEST_TIMEOUT: ${MLFLOW_HTTP_REQUEST_TIMEOUT:-900}
+      # Mismo prefijo que registra el trainer (src/config.py MODEL_REGISTRY_PREFIX).
+      EXPERIMENT_PREFIX: ${MODEL_REGISTRY_PREFIX:-rnd-forest-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8501}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # boto3 (vía cliente MLflow) descarga los artifacts desde S3 real.
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - ~/.aws:/aws:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Healthcheck explicito: el gate `service_healthy` del que cuelga `ui`.
+    # /api/health responde 200 aunque MLflow aun no tenga modelos (lazy-load),
+    # asi la UI arranca apenas la API esta lista. start_period cubre init_db.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    logging: *default-logging
+
+  # ── UI (Streamlit) ───────────────────────────────────────────────────────
+  # Arranca SOLO cuando la API esta healthy (depends_on -> service_healthy).
+  ui:
+    build:
+      context: ui
+      dockerfile: Dockerfile
+    image: ml-training-ui:local
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      API_URL: ${UI_API_URL:-http://api:8000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Bind-mount de DEV (read-only): el código del host queda siempre vivo, así
+    # editar una vista se refleja al instante (Streamlit runOnSave) sin esperar
+    # un rebuild. Es seguro: las dependencias viven en /opt/venv (no en /app),
+    # así que el mount NO las pisa. Para una imagen 100% limpia (sin host),
+    # comentá esta línea y reconstruí con `task build`.
+    volumes:
+      - ./ui:/app:ro
+    ports:
+      - "127.0.0.1:8501:8501"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    logging: *default-logging
+
+  trainer:
+    build: .
+    depends_on:
+      mlflow: { condition: service_healthy }
+    environment:
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      # Subida/bajada del pipeline (~63MB) via proxy: mas que el default 120s.
+      MLFLOW_HTTP_REQUEST_TIMEOUT: ${MLFLOW_HTTP_REQUEST_TIMEOUT:-900}
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      S3_ARTIFACTS_BUCKET: ${S3_ARTIFACTS_BUCKET:?Set S3_ARTIFACTS_BUCKET in .env}
+      S3_ARTIFACTS_PREFIX: artifacts
+      S3_REPORTS_PREFIX: reports
+      # Hydrate paritario con AWS Batch (opcional en Tramo Local).
+      # Si estas dos estan seteadas, el trainer baja el Excel ACUMULADO
+      # desde S3 al boot y corre split_workbook() — replica el flujo
+      # productivo end-to-end. Si quedan vacias, lee ./data del bind-mount.
+      # El default de S3_DATA_KEY coincide con el del Lambda dispatcher
+      # (codigo pegable en GUIA_MLOPS_AWS_V2.md #3.8, modulo lambdas/):
+      # el archivo acumulado, no el split. Ver #4.13 (Proximo paso: Tramo II).
+      S3_DATA_BUCKET: ${S3_DATA_BUCKET:-}
+      S3_DATA_KEY: ${S3_DATA_KEY:-BD_HISTORICO_ACUMULADO.xlsx}
+    volumes:
+      - ~/.aws:/aws:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+    mem_limit: ${TRAINER_MEM:-8g}
+    cpus: ${TRAINER_CPUS:-4}
+    command: ["--varieties", "${VARIETIES:-POP}", "--tuning", "${TUNING:-smoke}"]
+    logging: *default-logging
+
+volumes:
+  pg-data:

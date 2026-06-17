@@ -1,0 +1,21 @@
+# Theme aplicado en el PRIMER paint — evita el flash de tema por defecto.
+# Mantener sincronizado con assets/css/style.css (paleta TEMA).
+
+[theme]
+base = "light"
+primaryColor = "#4F46E5"
+backgroundColor = "#F1F3F7"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0F172A"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[server]
+runOnSave = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false

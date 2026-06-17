@@ -1,0 +1,232 @@
+# =============================================================================
+# tasks/ops.yml  -  Operaciones Dia 2: lifecycle del cluster + MLflow registry
+# =============================================================================
+# Incluido por Taskfile.yml raiz con namespace "ops:".
+#
+# Modulos VOLATILES (teardown los destruye, ~10-15 min para recrear):
+#   scheduler, lambdas, monitoring, batch, reports, mlflow, cicd, consumer_iam
+# Modulos PERMANENTES (NO se tocan en teardown):
+#   network (VPC + NAT), storage (S3 + ECR), backend state
+#
+# USO TIPICO:
+#   task ops:status                                   estado RDS + ECS + Batch
+#   task ops:up                                       encender idempotente (espera healthy)
+#   task ops:down [COOLDOWN=600]                      apagar (drena Batch + stop RDS)
+#   task ops:teardown                                 destroy volatiles
+#   task ops:rebuild                                  re-apply + up
+#   task ops:promote MODEL_NAME=rnd-forest-POP VERSION=3 [MAX_MAPE=20]
+#   task ops:registry-list MODEL_NAME=rnd-forest-POP
+# =============================================================================
+
+version: "3"
+
+vars:
+  TF_DIR:       '{{.TF_DIR       | default "infra/envs/prod"}}'
+  SCHEDULER_FN: '{{.SCHEDULER_FN | default (printf "%s-scheduler" .PROJECT)}}'
+  QUEUE_SPOT:   '{{.QUEUE_SPOT   | default (printf "%s-job-queue-spot"     .PROJECT)}}'
+  QUEUE_OD:     '{{.QUEUE_OD     | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
+  MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
+  # Orden reverso de apply: importante para destroy con dependencias.
+  VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd module.consumer_iam"
+
+tasks:
+
+  # ═══ Estado ═════════════════════════════════════════════════════════════════
+
+  status:
+    desc: "Estado del cluster: RDS + ECS services + Batch jobs activos"
+    silent: true
+    cmds:
+      - 'echo "=== RDS ==="'
+      - aws rds describe-db-instances --db-instance-identifier {{.PROJECT}}-mlflow
+        --query 'DBInstances[0].[DBInstanceStatus,DBInstanceClass,Endpoint.Address]'
+        --output table 2>/dev/null || echo "  (RDS no existe o no accesible)"
+      - 'echo ""'
+      - 'echo "=== ECS Services ==="'
+      - aws ecs describe-services --cluster {{.PROJECT}}-cluster
+        --services mlflow reports api ui
+        --query 'services[].[serviceName,desiredCount,runningCount,pendingCount]'
+        --output table 2>/dev/null || echo "  (ECS no existe o servicios no creados)"
+      - 'echo ""'
+      - 'echo "=== Batch jobs activos ==="'
+      - task: _batch-jobs
+        vars: { ABORT_IF_RUNNING: "false" }
+
+  # ═══ Helper unico: estado de Batch + assert opcional ════════════════════════
+
+  _batch-jobs:
+    internal: true
+    silent: true
+    vars:
+      ABORT_IF_RUNNING: '{{.ABORT_IF_RUNNING | default "false"}}'
+    cmds:
+      - |
+        total=0
+        running=0
+        for q in {{.QUEUE_SPOT}} {{.QUEUE_OD}}; do
+          for s in SUBMITTED PENDING RUNNABLE STARTING RUNNING; do
+            n=$(aws batch list-jobs --job-queue "$q" --job-status $s --query 'length(jobSummaryList)' --output text 2>/dev/null || echo 0)
+            [ "$n" -gt 0 ] && echo "  queue=$q  status=$s  count=$n"
+            total=$((total + n))
+            [ "$s" = "RUNNING" ] && running=$((running + n))
+          done
+        done
+        echo "  TOTAL activos $total"
+        if [ "{{.ABORT_IF_RUNNING}}" = "true" ] && [ "$running" -gt 0 ]; then
+          echo "ERROR $running job(s) RUNNING. Cancelar primero:"
+          echo "       task batch:status              (ver detalle)"
+          echo "       task batch:cancel JOB_ID=<id>  (cancelar)"
+          exit 1
+        fi
+
+  # ═══ Drift detection (state vs realidad AWS) ═══════════════════════════════
+
+  state-drift:
+    desc: "Detectar+auto-importar drift de buckets S3: existen en AWS pero no en tfstate (evita BucketAlreadyExists en apply)"
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo ">>> Buckets S3 con prefijo {{.PROJECT}} en AWS:"
+        aws_side=$(aws s3 ls | awk '/{{.PROJECT}}-/ {print $3}' | sort)
+        echo "$aws_side" | sed 's/^/  /'
+        echo ""
+        echo ">>> Buckets S3 en tfstate ({{.TF_DIR}}):"
+        tf_side=$(terraform -chdir={{.TF_DIR}} state list 2>/dev/null \
+          | grep -E 'aws_s3_bucket\.[^.]+$' \
+          | awk -F. '{print $NF}' \
+          | while read r; do terraform -chdir={{.TF_DIR}} state show "module.storage.aws_s3_bucket.$r" 2>/dev/null \
+              | awk -F\" '/^[[:space:]]+bucket[[:space:]]+=/ {print $2; exit}'; done \
+          | sort)
+        echo "$tf_side" | sed 's/^/  /'
+        echo ""
+        only_aws=$(comm -23 <(echo "$aws_side") <(echo "$tf_side"))
+        # tfstate bucket vive fuera del state por diseno (lo crea infra/bootstrap.sh)
+        only_aws=$(echo "$only_aws" | grep -v -- '-tfstate-' || true)
+        if [ -n "$only_aws" ]; then
+          echo "DRIFT: existen en AWS pero faltan en tfstate (causaria BucketAlreadyExists). Auto-importando:"
+          for b in $only_aws; do
+            # bucket = {{.PROJECT}}-<resource>-<suffix>  ->  resource = data|artifacts
+            res=$(echo "$b" | sed 's/^{{.PROJECT}}-//; s/-[^-]*$//')
+            case "$res" in
+              data|artifacts)
+                echo "  - import module.storage.aws_s3_bucket.$res  <-  $b"
+                terraform -chdir={{.TF_DIR}} import "module.storage.aws_s3_bucket.$res" "$b"
+                ;;
+              *)
+                echo "  - $b: recurso '$res' no reconocido (no es data/artifacts); importar a mano." >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "OK drift corregido via import; el apply ya puede crear los recursos auxiliares encima."
+          exit 0
+        fi
+        echo "OK no drift detectado en buckets S3."
+
+  secrets-pending:
+    desc: "Purgar Secrets Manager secrets de este proyecto que quedaron en pending deletion (causan 'already scheduled for deletion' en apply)"
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo ">>> Buscando secrets de {{.PROJECT}} en pending deletion..."
+        pending=$(aws secretsmanager list-secrets \
+          --include-planned-deletion \
+          --filter Key=name,Values={{.PROJECT}}- \
+          --query 'SecretList[?DeletedDate!=null].Name' \
+          --output text)
+        if [ -z "$pending" ]; then
+          echo "OK no hay secrets en pending deletion."
+          exit 0
+        fi
+        source tasks/lib/nuke.sh
+        for s in $pending; do
+          purge_secret "$s"
+        done
+        echo "OK secrets purgados; apply puede re-crearlos."
+
+  # ═══ Lifecycle: up (idempotente) / down (con cooldown opcional) ═════════════
+
+  up:
+    desc: "Encender stack (idempotente: skip si MLflow ya UP, sino invoca scheduler.start y espera RDS+ALB healthy)"
+    silent: true
+    cmds:
+      - |
+        set -e
+        source tasks/lib/wake.sh
+        PROJECT={{.PROJECT}} TF_DIR={{.TF_DIR}} SCHEDULER_FN={{.SCHEDULER_FN}} wake_cluster
+
+  down:
+    desc: "Apagar stack (aborta si Batch RUNNING). Opcional COOLDOWN=N (segundos antes de apagar)"
+    vars:
+      COOLDOWN: '{{.COOLDOWN | default "0"}}'
+    cmds:
+      - 'echo ">>> Pre-check Batch jobs activos"'
+      - task: _batch-jobs
+        vars: { ABORT_IF_RUNNING: "true" }
+      - |
+        if [ "{{.COOLDOWN}}" -gt 0 ]; then
+          echo ">>> Cool-down {{.COOLDOWN}}s antes de apagar..."
+          sleep {{.COOLDOWN}}
+        fi
+      - 'echo ">>> Invocando scheduler.stop..."'
+      # Tolerante a Lambda inexistente: en flujos de destroy / infra parcial,
+      # el scheduler ya puede estar destruido. Skipear es seguro porque
+      # `terraform destroy` igual tumba RDS/ECS a continuacion.
+      - |
+        if aws lambda get-function --function-name {{.SCHEDULER_FN}} >/dev/null 2>&1; then
+          aws lambda invoke --function-name {{.SCHEDULER_FN}} \
+            --payload '{"action":"stop"}' \
+            --cli-binary-format raw-in-base64-out \
+            /tmp/scheduler-stop.json
+          cat /tmp/scheduler-stop.json && echo ""
+        else
+          echo "  Lambda {{.SCHEDULER_FN}} no existe -> skip (probablemente ya destruido)"
+        fi
+
+  # ═══ Teardown / Rebuild ═════════════════════════════════════════════════════
+
+  teardown:
+    desc: "Down + terraform destroy de modulos volatiles. Preserva storage + network"
+    prompt: "Destruira los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
+    cmds:
+      - task: down
+      - 'echo ">>> Destroy modulos volatiles (orden reverso de apply)..."'
+      - |
+        for mod in {{.VOLATILE_MODULES}}; do
+          echo ">>> terraform destroy -target=$mod"
+          terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve || {
+            echo "FAIL destroy de $mod fallo. Revisar manualmente."
+            exit 1
+          }
+        done
+      - 'echo "OK teardown completo. Para volver: task ops:rebuild"'
+
+  rebuild:
+    desc: "Re-apply de modulos volatiles + up"
+    cmds:
+      - 'echo ">>> Apply completo (modulos volatiles se re-crean, resto no-op)..."'
+      - task: ":infra:apply"
+      - task: up
+
+  # ═══ MLflow Model Registry ═════════════════════════════════════════════════
+
+  registry-list:
+    desc: "Listar versiones de un modelo. Var: MODEL_NAME=rnd-forest-POP (REQ)"
+    requires:
+      vars: [MODEL_NAME]
+    cmds:
+      - |
+        set -e
+        source tasks/lib/mlflow_uri.sh
+        URI=$(mlflow_uri {{.TF_DIR}})
+        curl -s "$URI/api/2.0/mlflow/registered-models/get?name={{.MODEL_NAME}}" \
+          | jq '.registered_model.latest_versions[] | {version, current_stage, run_id, creation_timestamp}'
+
+  promote:
+    desc: "Promover a Production con gate MAPE + A/B. Vars: MODEL_NAME (REQ), VERSION=N (REQ), MAX_MAPE=20"
+    requires:
+      vars: [MODEL_NAME, VERSION]
+    cmds:
+      - python scripts/promote_model.py {{.MODEL_NAME}} {{.VERSION}} --max-mape {{.MAX_MAPE}} --tf-dir {{.TF_DIR}}

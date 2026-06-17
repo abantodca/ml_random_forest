@@ -1,0 +1,53 @@
+# =============================================================================
+# tasks/local.yml  -  Helpers para desarrollo local que toca AWS
+# =============================================================================
+# Incluido por Taskfile.yml raiz con namespace "local:".
+#
+# USO TIPICO:
+#   task local:ensure-buckets        crea data + artifacts S3 si no existen (idempotente)
+#                                    Reusa los nombres de prod ({project}-data-<suffix>),
+#                                    asi un sync local puede compartir bucket con AWS Batch.
+#   task local:bucket-name KIND=X    imprime nombre completo (KIND=data|artifacts)
+# =============================================================================
+
+version: "3"
+
+# SUFFIX (ultimos 7 digitos del Account ID) se calcula via scripts/aws-suffix.sh.
+# NO se define a nivel archivo a proposito: si estuviera aqui, Task lo evaluaria
+# al cargar el namespace y dispararia `aws sts get-caller-identity` incluso para
+# `task` (sin args) o `task --list`. Por-tarea => solo corre cuando se invoca.
+
+tasks:
+
+  ensure-buckets:
+    desc: "Crea S3 buckets data + artifacts si no existen (idempotente). Misma cuenta+region que prod."
+    silent: true
+    vars:
+      SUFFIX: { sh: bash scripts/aws-suffix.sh }
+    cmds:
+      - for: [data, artifacts]
+        task: _ensure-bucket
+        vars: { NAME: '{{.PROJECT}}-{{.ITEM}}-{{.SUFFIX}}' }
+      - |
+        cat <<EOF
+
+        Listo. Para que el trainer local sincronice a estos buckets, exporta:
+          export S3_DATA_BUCKET={{.PROJECT}}-data-{{.SUFFIX}}
+          export S3_ARTIFACTS_BUCKET={{.PROJECT}}-artifacts-{{.SUFFIX}}
+        EOF
+
+  bucket-name:
+    desc: "Imprime el nombre del bucket. Var: KIND=data|artifacts (REQ)"
+    silent: true
+    requires: { vars: [KIND] }
+    vars:
+      SUFFIX: { sh: bash scripts/aws-suffix.sh }
+    cmds:
+      - echo "{{.PROJECT}}-{{.KIND}}-{{.SUFFIX}}"
+
+  _ensure-bucket:
+    internal: true
+    silent: true
+    requires: { vars: [NAME] }
+    cmds:
+      - bash scripts/ensure-s3-bucket.sh "{{.NAME}}" "{{.REGION}}"

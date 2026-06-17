@@ -1,0 +1,383 @@
+version: "3"
+
+# `.env` es opcional. Si no existe, los defaults de config.py aplican.
+dotenv: [ ".env" ]
+
+# Includes namespaced por etapa. Cada tasks/X.yml documenta su uso en el header.
+includes:
+  infra:
+    taskfile: ./tasks/infra.yml
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+  ecr:
+    taskfile: ./tasks/ecr.yml
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+  batch:
+    taskfile: ./tasks/batch.yml
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+  ops:
+    taskfile: ./tasks/ops.yml
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+  local:
+    taskfile: ./tasks/local.yml
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+
+vars:
+  TUNING:    '{{.TUNING    | default "prod"}}'
+  VARIETIES: '{{.VARIETIES | default "POP"}}'
+  PARALLEL:  '{{.PARALLEL  | default "1"}}'
+  PROJECT:   '{{.PROJECT   | default "ml-training"}}'
+  REGION:    '{{.AWS_DEFAULT_REGION | default "us-east-1"}}'
+  HOST_UID:  { sh: id -u }
+  HOST_GID:  { sh: id -g }
+  # Patron reutilizado: correr un modulo Python en el container trainer sin
+  # levantar mlflow/postgres. Lo usan data:split y eda.
+  # --user fija el uid/gid del host: lo que el contenedor escriba al bind-mount
+  # (./data, ./reports) sale con tu ownership, no como mluser (uid 1001) — evita
+  # el PermissionError al sobrescribir DB-HISTORICA.xlsx. MPLCONFIGDIR=/tmp porque
+  # con --user el $HOME de la imagen no es escribible por el uid del host (matplotlib en eda).
+  DC_PY: docker compose run --rm --no-deps --user "{{.HOST_UID}}:{{.HOST_GID}}" -e MPLCONFIGDIR=/tmp --entrypoint python trainer
+  # SUFFIX (sufijo del Account ID para bucket/repo names) NO se define aqui a
+  # proposito: si fuera top-level, Task lo evaluaria al cargar y dispararia
+  # `aws sts get-caller-identity` incluso para `task` o `task --list`. Solo
+  # `destroy` y `nuke` lo necesitan -> se computa por-tarea (lazy).
+
+tasks:
+
+  default:
+    desc: "Lista comandos del pipeline + ejemplos TUNING/VARIETIES"
+    silent: true
+    cmds:
+      - |
+        cat <<'EOF'
+
+          ml_training · forecast KG/JR_H por variedad
+          ════════════════════════════════════════════════════════════════════════
+
+          ┌─ LOCAL ──────────────────────────────────────────────────────────────┐
+
+           Setup (1ª vez, antes de build)
+             task local:ensure-buckets   crea buckets S3 (backend artifacts MLflow)
+             # completar S3_MLFLOW_BUCKET / S3_ARTIFACTS_BUCKET en .env
+             # sin esto `task build` aborta. Guia: GUIA_MLOPS_AWS_V2.md #4.8 + #4.7
+
+           Pipeline (correr en orden)
+             task build              rebuild imagenes + up stack completo
+             task up                 levanta db+mlflow+reports+api+ui (sin rebuild)
+             task data:split         genera data/training/DB-HISTORICA.xlsx
+             task data:upload        (opcional) sube Excel a S3 (hydrate paritario Batch)
+             task eda VARIETIES=POP  (opcional) analisis exploratorio
+             task train              entrena + genera HTML en reports/
+             task down               apaga servicios (preserva volumen Postgres)
+
+           Ejemplos train (TUNING × VARIETIES × PARALLEL)
+             task train VARIETIES=POP TUNING=smoke      ~1 min    sanity check
+             task train VARIETIES=POP TUNING=dev        ~20 min   baseline
+             task train VARIETIES=POP TUNING=prod       ~2 h      produccion
+             task train VARIETIES=POP TUNING=prod_xl    ~6 h      overnight
+             task train VARIETIES=POP,VENTURA           multiples variedades
+             task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
+
+           URLs (stack up · sin :80 — eso es el ALB de prod)
+             UI Streamlit          http://localhost:8501
+             API Swagger           http://localhost:8000/docs
+             MLflow UI             http://localhost:5000
+             Reports HTML          http://localhost:8080/reports/
+             Artifacts             http://localhost:8080/artifacts/
+
+          └──────────────────────────────────────────────────────────────────────┘
+
+          ┌─ AWS ────────────────────────────────────────────────────────────────┐
+
+           Bootstrap (1ª vez por cuenta+region, antes del stand-up)
+             task infra:bootstrap         backend tfstate (lock nativo S3)
+             task infra:bootstrap-oidc    rol IAM para GitHub Actions
+             task local:ensure-buckets    (opcional) buckets data + artifacts dev
+
+           Primer stand-up (correr EN ORDEN · ~45 min · ~10 atencion activa)
+             0  source scripts/prod.env                       carga DATA_BUCKET, SUFFIX...
+             1  task infra:validate                           fmt + validate HCL   ~10s
+             2  task infra:apply TARGET=module.storage        Ola A: 2 S3 + 3 ECR  ~1m
+             3  aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx    sube Excel al bucket data
+                  s3://$DATA_BUCKET/
+             4  task ecr:build-all                            Ola B: 5 imagenes    ~12m
+             5  task infra:apply                              Ola C: net+RDS+ALB+ECS+Batch+lambda  ~18m
+             6  task batch:smoke                              1 job Batch POP smoke  ~12m
+             7  open http://$ALB/app/ + http://$ALB/docs      UI + API arriba = fin
+             atajos:  task deploy = 2+4+5   |   task smoke = deploy + 6
+
+           Operacion dia-2
+             task status                                outputs TF + cluster + URLs
+             task urls                                  URLs publicas via ALB
+             task wake  /  task sleep                   encender / apagar (idempotente)
+             task batch:train VARIETIES=POP             entrenamiento en AWS Batch
+             task batch:eda   VARIETIES=POP             EDA exploratorio on-demand
+             task ops:promote MODEL_NAME=... VERSION=N  promover a Production
+
+           Teardown / Recovery / Destroy
+             task teardown        destroy volatiles (preserva storage + network)
+             task rebuild         re-apply tras teardown + up (no destructivo)
+             task ops:state-drift detecta buckets S3 en AWS ausentes en tfstate
+                                  (causa BucketAlreadyExists en apply; corre auto en deploy)
+             task destroy      ⚠  DESTRUCTIVO: S3 + ECR + RDS + todo lo demas
+             task nuke         ⚠  IRREVERSIBLE: destroy + tfstate + OIDC provider
+
+          └──────────────────────────────────────────────────────────────────────┘
+
+          Variables (override por CLI · formato VAR=valor)
+             VARIETIES   POP (default) | POP,VENTURA,... | all
+             TUNING      smoke ~1m | dev ~20m | prod ~2h (default) | prod_xl ~6h
+             PARALLEL    1 (default) | N variedades en paralelo
+             SEED        42 (default) | reproducibilidad
+
+          Mas info:  task --list   ·   GUIA_MLOPS_AWS_V2.md
+
+        EOF
+
+  build:
+    desc: "1ª vez o al cambiar codigo/Dockerfile: rebuild imagenes (trainer+api+ui) + levanta TODO el stack"
+    cmds:
+      - task: _ensure_dirs
+      - docker compose build trainer api ui
+      - docker compose up -d postgres mlflow reports api ui
+      - task: _print_urls
+
+  up:
+    desc: "Levanta el stack local completo (db + mlflow + reports + api + ui) sin rebuild"
+    cmds:
+      - task: _ensure_dirs
+      - docker compose up -d postgres mlflow reports api ui
+      - task: _print_urls
+
+  data:split:
+    desc: "Paso 1: genera data/training/DB-HISTORICA.xlsx desde el Excel historico"
+    cmds:
+      - >-
+        {{.DC_PY}} -m scripts.prepare_data
+        --input  data/BD_HISTORICO_ACUMULADO.xlsx
+        --output data/training/DB-HISTORICA.xlsx
+        --min-rows 100
+
+  data:upload:
+    desc: "Paso 1b (opcional): sube el Excel acumulado a s3://$S3_DATA_BUCKET/$S3_DATA_KEY. Solo si .env activa el hydrate (replica el flujo prod/Batch); si no, `train` lee ./data y este paso sobra."
+    cmds:
+      # El trainer (main.py::_hydrate_data_from_s3) baja este Excel al boot SOLO
+      # si S3_DATA_BUCKET+S3_DATA_KEY estan en .env. Sin el objeto en S3 -> 404 y
+      # `train` aborta. Esta task lo sube para que el hydrate funcione local igual
+      # que en AWS Batch. Ver #4.13.
+      - |
+        : "${S3_DATA_BUCKET:?S3_DATA_BUCKET no esta en .env -> hydrate S3 desactivado; nada que subir (train leeria ./data)}"
+        KEY="${S3_DATA_KEY:-BD_HISTORICO_ACUMULADO.xlsx}"
+        if [ ! -f data/BD_HISTORICO_ACUMULADO.xlsx ]; then
+          echo "ERROR: data/BD_HISTORICO_ACUMULADO.xlsx no existe localmente."
+          exit 1
+        fi
+        aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx "s3://${S3_DATA_BUCKET}/${KEY}" --region "{{.REGION}}"
+
+  eda:
+    desc: "Paso 2 (opcional): EDA estadistico standalone. Args: VARIETIES=POP"
+    cmds:
+      - "{{.DC_PY}} -m src.diagnostics.eda --variety {{.VARIETIES}}"
+
+  train:
+    desc: "Paso 3: entrena + genera HTML estatico en reports/. Vars: VARIETIES TUNING PARALLEL SEED"
+    deps: [_up]
+    vars:
+      GIT_SHA:   { sh: bash scripts/metadata.sh git-sha }
+      GIT_DIRTY: { sh: bash scripts/metadata.sh git-dirty }
+      DATA_SHA:  { sh: bash scripts/metadata.sh data-sha }
+      SEED: '{{.SEED | default "42"}}'
+    cmds:
+      - |
+        if [ "{{.DATA_SHA}}" = "missing" ]; then
+          echo "ERROR: data/training/DB-HISTORICA.xlsx no existe. Correr 'task data:split' primero."
+          exit 1
+        fi
+      # --user/MPLCONFIGDIR: misma razon que DC_PY (ver vars). Sin --user el
+      # trainer corre como mluser (uid 1001) y no puede escribir los bind-mounts
+      # (./logs ./artifacts ./reports) que data:split dejo con tu ownership ->
+      # PermissionError en logs/pipeline_run.log. MPLCONFIGDIR=/tmp porque con
+      # --user el $HOME de la imagen no es escribible (matplotlib en los HTML).
+      - >-
+        docker compose run --rm
+        --user "{{.HOST_UID}}:{{.HOST_GID}}"
+        -e MPLCONFIGDIR=/tmp
+        -e GIT_SHA={{.GIT_SHA}}
+        -e GIT_DIRTY={{.GIT_DIRTY}}
+        -e DATA_SHA={{.DATA_SHA}}
+        -e SEED={{.SEED}}
+        trainer
+        --varieties {{.VARIETIES}}
+        --tuning {{.TUNING}}
+        --parallel-varieties {{.PARALLEL}}
+      - task: _print_urls
+
+  down:
+    desc: "Detiene servicios. Preserva volumen Postgres"
+    cmds:
+      - docker compose down
+
+  _up:
+    internal: true
+    cmds:
+      - task: _ensure_dirs
+      - docker compose up -d postgres mlflow reports
+      - task: _print_urls
+
+  _ensure_dirs:
+    internal: true
+    silent: true
+    cmds:
+      - mkdir -p artifacts reports logs data/training
+
+  _print_urls:
+    internal: true
+    silent: true
+    cmds:
+      - |
+        cat <<EOF
+
+        ════════════════════════════════════════════════════════════════════
+         Servicios LOCAL listos:
+           UI (dashboard gerencial)   http://localhost:8501
+           API (Swagger)              http://localhost:8000/docs
+           MLflow runs                http://localhost:5000
+           MLflow Model Registry      http://localhost:5000/#/models
+           Reports (campeon HTML)     http://localhost:8080/reports/
+           Artifacts                  http://localhost:8080/artifacts/
+           S3 backend                 s3://${S3_MLFLOW_BUCKET}/
+        ────────────────────────────────────────────────────────────────────
+         Nota: en local NO hay :80 (eso es el ALB de produccion). Cada
+         servicio expone su propio puerto. Entrena con: task train VARIETIES=POP TUNING=smoke
+        ════════════════════════════════════════════════════════════════════
+        EOF
+
+  lint:
+    desc: "ruff check src/ main.py scripts/ api/ ui/ (config en pyproject.toml)"
+    cmds:
+      - ruff check src/ main.py scripts/ tests/ api/ ui/
+
+  test:
+    desc: "Suite pytest P0 DENTRO de los contenedores (trainer + api, mismas versiones que prod)"
+    cmds:
+      # Trainer: lag transformer, champion, conformal, variety config, guard.
+      - >-
+        docker compose run --rm -v "{{.PWD}}/tests:/app/tests" --entrypoint sh trainer
+        -c "pip install -q pytest 2>/dev/null; PYTHONPATH=/app python -m pytest tests/ -q"
+      # API: _conformal_halfwidths (en trainer se salta solo via importorskip).
+      - >-
+        docker compose run --rm --user root -v "{{.PWD}}/tests:/app/tests" --entrypoint sh api
+        -c "/opt/venv/bin/pip install -q pytest 2>/dev/null; cd /app && /opt/venv/bin/python -m pytest tests/test_api_conformal.py -q"
+
+  # ═══ Atajos high-level del stack AWS ════════════════════════════════════════
+
+  deploy:
+    desc: "AWS: stand-up completo (storage -> 5 imagenes -> resto) + imprime URLs"
+    cmds:
+      # Pre-check: si los buckets *-data-* / *-artifacts-* existen en AWS pero
+      # no en tfstate (tipico tras nuke parcial o re-bootstrap), `apply
+      # module.storage` falla con BucketAlreadyExists. Fail-fast con instrucciones.
+      - task: ops:state-drift
+      # Pre-check: secrets en pending deletion (recovery window 30d tras destroy)
+      # rompen el apply con "secret already scheduled for deletion". Purga idempotente.
+      - task: ops:secrets-pending
+      - 'echo ">>> Oleada A: apply module.storage (S3 + ECR)..."'
+      - task: infra:apply
+        vars: { TARGET: module.storage }
+      - 'echo ">>> Oleada B: build + push 5 imagenes..."'
+      - task: ecr:build-all
+      - 'echo ">>> Oleada C: apply resto (network, mlflow, batch, ...)..."'
+      - task: infra:apply
+      - 'echo ""'
+      - 'echo "Deploy completo. URLs publicas:"'
+      - task: infra:urls
+
+  smoke:
+    desc: "AWS: deploy + smoke test (POP, tuning=smoke, ~1 min)"
+    cmds:
+      - task: deploy
+      - task: batch:smoke
+
+  wake:
+    desc: "AWS: encender stack (idempotente)"
+    cmds:
+      - task: ops:up
+
+  sleep:
+    desc: "AWS: apagar stack"
+    cmds:
+      - task: ops:down
+
+  status:
+    desc: "AWS: outputs de Terraform + estado del cluster + URLs publicas"
+    cmds:
+      - 'echo "=== Terraform outputs ==="'
+      - task: infra:output
+      - 'echo ""'
+      - 'echo "=== Cluster ==="'
+      - task: ops:status
+      - task: infra:urls
+
+  urls:
+    desc: "AWS: imprime las URLs publicas de produccion (derivadas del ALB)"
+    cmds:
+      - task: infra:urls
+
+  teardown:
+    desc: "AWS: down + destroy volatiles (preserva storage + network)"
+    cmds:
+      - task: ops:teardown
+
+  rebuild:
+    desc: "AWS: re-apply tras teardown + up"
+    cmds:
+      - task: ops:rebuild
+
+  destroy:
+    desc: "AWS DESTRUCTIVO: drena Batch, vacia S3/ECR, terraform destroy total"
+    prompt: "Destruira envs/prod (S3 + ECR + RDS + ...). Irreversible. Continuar?"
+    vars:
+      SUFFIX:
+        sh: bash scripts/aws-suffix.sh
+    cmds:
+      - task: ops:down
+      - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
+      - |
+        set -e
+        source tasks/lib/nuke.sh
+        empty_bucket "{{.PROJECT}}-data-{{.SUFFIX}}"
+        empty_bucket "{{.PROJECT}}-artifacts-{{.SUFFIX}}"
+        purge_ecr    "{{.PROJECT}}"
+        purge_ecr    "{{.PROJECT}}-mlflow"
+        purge_ecr    "{{.PROJECT}}-reports"
+        purge_ecr    "{{.PROJECT}}-api"
+        purge_ecr    "{{.PROJECT}}-ui"
+      - 'echo ">>> terraform destroy total..."'
+      - task: infra:destroy
+      # Post-destroy: force-delete secrets que quedaron en pending deletion
+      # (recovery_window_in_days=30 por defecto en aws_secretsmanager_secret).
+      # Sin esto, el siguiente `task deploy` falla con "secret already
+      # scheduled for deletion" al re-crear el mismo nombre.
+      - 'echo ">>> Force-delete de secrets en pending deletion..."'
+      - |
+        set -e
+        source tasks/lib/nuke.sh
+        purge_secret "{{.PROJECT}}-rds-password"
+
+  nuke:
+    desc: "AWS IRREVERSIBLE: destroy + tfstate bucket + OIDC provider"
+    prompt: "NUKE COMPLETO: borra state remoto + OIDC. Despues necesitas re-bootstrap. Continuar?"
+    vars:
+      SUFFIX:
+        sh: bash scripts/aws-suffix.sh
+    cmds:
+      - task: destroy
+      - 'echo ">>> Borrando bucket tfstate + OIDC..."'
+      - |
+        set -e
+        source tasks/lib/nuke.sh
+        # use_lockfile guarda el lock como objeto en el mismo bucket -> se va
+        # con `empty_bucket` (no hay tabla DynamoDB que limpiar).
+        empty_bucket "{{.PROJECT}}-tfstate-{{.SUFFIX}}" true
+        delete_oidc
+      - 'echo ""'
+      - 'echo "NUKE COMPLETO. Para volver: task infra:bootstrap + task infra:bootstrap-oidc + task deploy"'

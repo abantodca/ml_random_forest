@@ -1,0 +1,1266 @@
+/* ============================================================
+   RND Forest — Clean design system (v2.1 — densidad ejecutiva)
+   ------------------------------------------------------------
+   Reglas:
+   1. Cada capa visual tiene UNA sola superficie elevada.
+   2. Una card tiene `box-shadow` O `border` fuerte, nunca ambos.
+   3. Sidebar usa colores hex puros (no rgba opacity).
+   4. Tres niveles de elevación: flat → soft → raised. Y nada más.
+   5. Densidad > aire: paddings cortos para impresión ejecutiva.
+   6. Legibilidad en proyector: valores ≥1.55rem, eyebrows ≥.69rem,
+      texto muted = slate-600 (AA holgado sobre fondo claro).
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+    /* ── Brand ── */
+    --indigo-50:  #EEF2FF;
+    --indigo-100: #E0E7FF;
+    --indigo-200: #C7D2FE;
+    --indigo-300: #A5B4FC;
+    --indigo-500: #6366F1;
+    --indigo-600: #4F46E5;
+    --indigo-700: #4338CA;
+    --violet-600: #7C3AED;
+
+    --primary: var(--indigo-600);
+    --primary-soft: var(--indigo-50);
+    --primary-hover: var(--indigo-700);
+    --accent: var(--violet-600);
+
+    /* ── Semantic ── */
+    --success: #047857;
+    --warning: #B45309;
+    --danger:  #B91C1C;
+    --info:    #0E7490;
+
+    /* ── Surfaces (light side) ──
+       Lienzo gris frío plano tipo Power BI (slate-100). Los tiles blancos
+       flotan encima; el contraste tile↔lienzo es lo que da el look de
+       reporte de directorio. Sin gradientes ambientales. */
+    --surface-page:    #F1F3F7;   /* slate-100 frío — lienzo de reporte */
+    --surface-card:    #FFFFFF;   /* tile base */
+    --surface-raised:  #FFFFFF;
+    --surface-subtle:  #F1F3F7;   /* zebra/bandas — alineado al lienzo */
+    --surface-section: #F8FAFC;   /* fondo agrupador */
+
+    /* ── Surfaces (dark side / sidebar — paleta ARÁNDANO) ── */
+    --dark-bg-from:  #1E1B4B;     /* indigo-950 — top */
+    --dark-bg-to:    #312E81;     /* indigo-900 — bottom */
+    --dark-text:        #EEF2FF;
+    --dark-text-muted:  #C7D2FE;
+    --dark-text-faint:  #A5B4FC;
+    --dark-divider:     #4338CA;
+    --dark-surface:     rgba(255,255,255,0.07);
+    --dark-surface-hover: rgba(129,140,248,0.22);
+
+    /* ── Text on light ──
+       Escala oscurecida un punto para legibilidad en proyector (AA holgado):
+       muted pasa de slate-500 a slate-600, secondary se mantiene en slate-600/700. */
+    --text:           #0F172A;   /* slate-900 — títulos */
+    --text-body:      #1E293B;   /* slate-800 — cuerpo */
+    --text-secondary: #334155;   /* slate-700 — labels (antes 475569) */
+    --text-muted:     #475569;   /* slate-600 — meta/eyebrow (antes 64748B, AA en proyector) */
+
+    /* ── Borders (escalonados) ── */
+    --hairline:    #E6E9F0;
+    --line:        #DCE0EA;
+    --line-strong: #C2CADC;
+
+    /* ── Elevation ── (Power BI: tile flota con sombra suave, no pesada) */
+    --shadow-1: 0 1px 2px rgba(15,23,42,0.05), 0 2px 6px rgba(15,23,42,0.05);
+    --shadow-2: 0 4px 14px rgba(15,23,42,0.08), 0 2px 5px rgba(15,23,42,0.04);
+    --shadow-3: 0 14px 30px rgba(79,70,229,0.22), 0 4px 8px rgba(79,70,229,0.10);
+
+    /* ── Radii ── */
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 20px;
+
+    /* ── Motion ── */
+    --t-fast: 150ms ease;
+    --t-base: 200ms ease;
+}
+
+/* ============================================================
+   1. RESET / BASE
+   ============================================================ */
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color: var(--text-body);
+}
+
+/* Lienzo plano gris frío tipo Power BI — los tiles blancos aportan el contraste */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"] {
+    background: var(--surface-page) !important;
+}
+
+[data-testid="stHeader"] { background: transparent !important; }
+
+h1, h2, h3, h4 { color: var(--text); letter-spacing: -.012em; }
+
+/* ============================================================
+   2. LAYOUT
+   ============================================================ */
+
+.stMainBlockContainer {
+    padding-top: 1.1rem !important;
+    padding-bottom: 2.5rem !important;
+    /* Lienzo full-width tipo Power BI: el reporte usa TODO el ancho de la
+       pantalla en cualquier vista. Padding lateral acotado para que los tiles
+       respiren sin desperdiciar borde. */
+    max-width: 100% !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+}
+
+/* st.divider — más fino y compacto */
+hr, [data-testid="stDivider"] {
+    border: 0 !important;
+    border-top: 1px solid var(--line) !important;
+    margin: .85rem 0 !important;
+}
+
+/* Separación consistente entre tiles (Power BI ~12–16px) */
+[data-testid="stVerticalBlock"] { gap: .8rem; }
+[data-testid="stHorizontalBlock"] { gap: .9rem; }
+
+/* ============================================================
+   3. SIDEBAR (dark surface)
+   ============================================================ */
+
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"],
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    background: linear-gradient(180deg, var(--dark-bg-from) 0%, var(--dark-bg-to) 100%) !important;
+    border-right: none;
+}
+section[data-testid="stSidebar"] > div { padding-top: .5rem; }
+
+/* Brand: título compacto con presencia + caption tenue */
+section[data-testid="stSidebar"] h1 {
+    font-size: 1.3rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -.01em;
+    margin-bottom: .1rem !important;
+    color: var(--dark-text) !important;
+}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+    color: var(--dark-text-faint) !important;
+    font-size: .72rem !important;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+/* Anular cualquier card/wrapper que el resto del CSS aplique dentro del sidebar:
+   sólo queremos el fondo arándano + texto blanco, sin tarjetas blancas anidadas. */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"],
+section[data-testid="stSidebar"] [data-testid="stExpander"],
+section[data-testid="stSidebar"] [data-testid="stMetric"],
+section[data-testid="stSidebar"] [data-testid="stPlotlyChart"],
+section[data-testid="stSidebar"] [data-testid="stJson"],
+section[data-testid="stSidebar"] .card,
+section[data-testid="stSidebar"] .kpi-card,
+section[data-testid="stSidebar"] .insight-card {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+section[data-testid="stSidebar"] *,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] div,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] li,
+section[data-testid="stSidebar"] small {
+    color: var(--dark-text);
+}
+section[data-testid="stSidebar"] .section-label {
+    color: var(--dark-text-faint) !important;
+    font-size: .62rem !important;
+    font-weight: 700 !important;
+    letter-spacing: .16em !important;
+    text-transform: uppercase;
+    border-left: none;
+    margin: .9rem 0 .3rem;
+    padding-left: 0;
+}
+section[data-testid="stSidebar"] .section-label::before { display: none; }
+
+/* Nav links */
+section[data-testid="stSidebar"] [data-testid="stPageLink"],
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"],
+section[data-testid="stSidebar"] .stPageLink,
+section[data-testid="stSidebar"] .stPageLink > div,
+section[data-testid="stSidebar"] .stPageLink a {
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+
+section[data-testid="stSidebar"] .stPageLink a,
+section[data-testid="stSidebar"] .stPageLink a span,
+section[data-testid="stSidebar"] .stPageLink a p,
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] span,
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] p {
+    color: var(--dark-text-muted) !important;
+    font-weight: 500 !important;
+}
+section[data-testid="stSidebar"] .stPageLink a {
+    border-radius: var(--r-sm) !important;
+    padding: .5rem .8rem !important;
+    margin: 1px 0;
+    transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+    border-left: 2px solid transparent !important;
+}
+section[data-testid="stSidebar"] .stPageLink a:hover {
+    background: var(--dark-surface-hover) !important;
+    border-left-color: var(--indigo-300) !important;
+}
+section[data-testid="stSidebar"] .stPageLink a:hover span,
+section[data-testid="stSidebar"] .stPageLink a:hover p,
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover span,
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover p {
+    color: var(--dark-text) !important;
+}
+
+/* Página actual: fondo + borde de marca + texto pleno (indicador "estás aquí") */
+section[data-testid="stSidebar"] .stPageLink a[aria-current],
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"][aria-current] {
+    background: var(--dark-surface-hover) !important;
+    border-left-color: var(--indigo-300) !important;
+}
+section[data-testid="stSidebar"] .stPageLink a[aria-current] span,
+section[data-testid="stSidebar"] .stPageLink a[aria-current] p,
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"][aria-current] span,
+section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"][aria-current] p {
+    color: var(--dark-text) !important;
+    font-weight: 700 !important;
+}
+
+/* Botones de la sidebar */
+section[data-testid="stSidebar"] .stButton > button {
+    background: var(--dark-surface);
+    color: var(--dark-text) !important;
+    border: 1px solid var(--dark-divider);
+    box-shadow: none;
+    font-weight: 600;
+    padding: .55rem 1rem;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: var(--dark-surface-hover);
+    border-color: var(--indigo-300);
+    color: var(--dark-text) !important;
+}
+
+nav[data-testid="stSidebarNav"],
+div[data-testid="stSidebarNav"],
+navigation-sidebar { display: none !important; }
+
+/* ============================================================
+   4. SECTIONS / HEADERS
+   ============================================================ */
+
+.section-label {
+    font-size: .76rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: .13em;
+    margin: 1.15rem 0 .6rem;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+}
+.section-label::before {
+    content: "";
+    width: 26px;
+    height: 3px;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    border-radius: 999px;
+    flex-shrink: 0;
+}
+
+/* ============================================================
+   5. CARDS — UNA sola receta
+   ============================================================ */
+
+/* ── CARDS REALES ── (las únicas que LEVITAN con shadow) ── */
+.card,
+.kpi-card,
+.insight-card,
+[data-testid="stMetric"] {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-1);
+    transition: border-color var(--t-base), box-shadow var(--t-base), transform var(--t-base);
+}
+.card:hover,
+.kpi-card:hover,
+.insight-card:hover,
+[data-testid="stMetric"]:hover {
+    border-color: var(--line);
+    box-shadow: var(--shadow-2);
+}
+
+/* Expander: card pero más sobrio (sin lift en hover) */
+[data-testid="stExpander"] {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-1);
+    transition: border-color var(--t-base);
+}
+[data-testid="stExpander"]:hover { border-color: var(--line); }
+
+/* ── WRAPPERS DE STREAMLIT ── (NUNCA llevan shadow — sólo agrupan) ──
+   `stVerticalBlockBorderWrapper` lo emite Streamlit en muchos casos
+   (st.form, st.container(border=True), formularios anidados). Si le
+   ponemos shadow, se apila con cualquier card que viva dentro.
+   Regla: NIVEL 1 = card flat (border + bg blanco). NIVEL 2+ = invisible
+   (sólo padding como agrupador, sin chrome). */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-md);
+    box-shadow: none;
+    padding: .85rem 1.05rem !important;
+}
+
+/* Wrapper anidado: invisible — ni fondo, ni borde. Solo conserva el
+   espaciado interior natural para que las cards hijas respiren. */
+[data-testid="stVerticalBlockBorderWrapper"]
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+}
+
+/* Padding interno consistente — denso pero legible en proyector.
+   Padding-left mayor para despejar la barra de acento izquierda. */
+.kpi-card,
+.insight-card { padding: 16px 18px 16px 22px; }
+[data-testid="stMetric"] { padding: 14px 16px 14px 20px; }
+
+/* ── Anti shadow-stacking de cards reales dentro de wrappers ──
+   Si una .card / .kpi-card / .insight-card / stMetric vive dentro de
+   un wrapper con borde, pierde su propia sombra (mantiene border).
+   Resultado: sólo UN nivel de elevación visible por página. */
+[data-testid="stVerticalBlockBorderWrapper"] .card,
+[data-testid="stVerticalBlockBorderWrapper"] .kpi-card,
+[data-testid="stVerticalBlockBorderWrapper"] .insight-card,
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetric"],
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stPlotlyChart"],
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stExpander"],
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stDataFrame"],
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stAlert"],
+[data-testid="stVerticalBlockBorderWrapper"] .page-hero,
+[data-testid="stForm"] .card,
+[data-testid="stForm"] .kpi-card,
+[data-testid="stForm"] [data-testid="stMetric"],
+[data-testid="stForm"] [data-testid="stPlotlyChart"],
+[data-testid="stExpander"] [data-testid="stPlotlyChart"],
+[data-testid="stExpander"] [data-testid="stMetric"] {
+    box-shadow: none !important;
+}
+
+/* Hover dentro de wrappers/forms: sin lift (no levita lo que ya está agrupado) */
+[data-testid="stVerticalBlockBorderWrapper"] .card:hover,
+[data-testid="stVerticalBlockBorderWrapper"] .kpi-card:hover,
+[data-testid="stVerticalBlockBorderWrapper"] .insight-card:hover,
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetric"]:hover,
+[data-testid="stForm"] .kpi-card:hover,
+[data-testid="stForm"] [data-testid="stMetric"]:hover {
+    transform: none !important;
+    box-shadow: none !important;
+    border-color: var(--line);
+}
+
+/* Page-hero dentro de un wrapper: pierde TODO el chrome de card,
+   sólo conserva border-left de marca + border-bottom de separación. */
+[data-testid="stVerticalBlockBorderWrapper"] .page-hero {
+    border-top: none;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+    border-radius: 0;
+    margin: -.85rem -1.05rem 1rem;
+    padding: 14px 20px;
+    box-shadow: none;
+}
+
+/* Expander */
+[data-testid="stExpander"] summary {
+    font-weight: 600;
+    font-size: .9rem;
+    color: var(--text);
+    padding: .65rem 1rem;
+    border-bottom: 1px solid var(--hairline);
+}
+[data-testid="stExpander"] summary:hover { background: var(--surface-subtle); }
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] { padding: .85rem 1rem; }
+
+/* ============================================================
+   6. KPI / Insight — variantes con accent line
+   ============================================================ */
+
+/* Acento Power BI: barra fina a la IZQUIERDA del tile (no top + sin glow).
+   Limpio, mucho espacio en blanco; el color comunica el estado. */
+.kpi-card[data-accent],
+.insight-card[data-accent] { position: relative; overflow: hidden; }
+.kpi-card[data-accent]::before,
+.insight-card[data-accent]::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: 4px;
+    background: currentColor;
+    border-radius: var(--r-md) 0 0 var(--r-md);
+}
+.insight-card.success::before, .kpi-card.success::before { background: var(--success); }
+.insight-card.warning::before, .kpi-card.warning::before { background: var(--warning); }
+.insight-card.danger::before,  .kpi-card.danger::before  { background: var(--danger); }
+.insight-card.primary::before, .kpi-card.primary::before { background: var(--primary); }
+.insight-card.accent::before,  .kpi-card.accent::before  { background: var(--accent); }
+.insight-card.info::before,    .kpi-card.info::before    { background: var(--info); }
+
+.insight-card.success, .kpi-card.success { color: var(--success); }
+.insight-card.warning, .kpi-card.warning { color: var(--warning); }
+.insight-card.danger,  .kpi-card.danger  { color: var(--danger); }
+.insight-card.primary, .kpi-card.primary { color: var(--primary); }
+.insight-card.accent,  .kpi-card.accent  { color: var(--accent); }
+.insight-card.info,    .kpi-card.info    { color: var(--info); }
+
+.kpi-card .kpi-head,
+.insight-card .insight-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .69rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .11em;
+    margin-bottom: 7px;
+    position: relative;
+    z-index: 1;
+    line-height: 1.25;
+}
+.kpi-card .kpi-icon {
+    font-size: 1rem;
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.kpi-card .kpi-value,
+.insight-card .insight-value {
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: -.024em;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    line-height: 1.1;
+    position: relative;
+    z-index: 1;
+    text-wrap: balance;
+}
+.insight-card .insight-meta {
+    font-size: .78rem;
+    color: var(--text-secondary);
+    margin-top: 5px;
+    line-height: 1.45;
+    position: relative;
+    z-index: 1;
+}
+.insight-card .insight-meta strong { color: var(--text); font-weight: 700; }
+
+/* Color del valor según variante */
+.kpi-card.success .kpi-value, .insight-card.success .insight-value { color: var(--success); }
+.kpi-card.warning .kpi-value, .insight-card.warning .insight-value { color: var(--warning); }
+.kpi-card.danger  .kpi-value, .insight-card.danger  .insight-value { color: var(--danger); }
+.kpi-card.primary .kpi-value, .insight-card.primary .insight-value { color: var(--primary); }
+.kpi-card.accent  .kpi-value, .insight-card.accent  .insight-value { color: var(--accent); }
+.kpi-card.info    .kpi-value, .insight-card.info    .insight-value { color: var(--info); }
+
+/* ============================================================
+   7. PAGE HEADER (encabezado principal)
+   ------------------------------------------------------------
+   Compacto + tinte de marca para diferenciarse de un card neutro.
+   ============================================================ */
+
+.page-hero {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 22px;
+    margin-bottom: 1.1rem;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--primary);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-1);
+    position: relative;
+    overflow: hidden;
+}
+.page-hero .hero-icon {
+    width: 46px; height: 46px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.35rem;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    color: white;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+.page-hero h1 {
+    margin: 0;
+    font-size: 1.45rem;
+    font-weight: 800;
+    color: var(--text);
+    line-height: 1.18;
+    letter-spacing: -.02em;
+}
+.page-hero p {
+    margin: 3px 0 0;
+    font-size: .88rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+/* ============================================================
+   8. VERDICT CARD (predicción individual)
+   ============================================================ */
+
+.verdict-card {
+    background: linear-gradient(135deg, var(--indigo-600), var(--violet-600));
+    color: white;
+    border-radius: var(--r-lg);
+    padding: 22px 26px;
+    box-shadow: var(--shadow-3);
+    position: relative;
+    overflow: hidden;
+}
+.verdict-card::after {
+    content: "";
+    position: absolute;
+    top: -40%; right: -10%;
+    width: 240px; height: 240px;
+    background: radial-gradient(circle, rgba(255,255,255,0.15), transparent 70%);
+    pointer-events: none;
+}
+.verdict-card .verdict-label {
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--indigo-100);
+    margin-bottom: 4px;
+}
+.verdict-card .verdict-value {
+    font-size: 2.4rem;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    color: white;
+}
+.verdict-card .verdict-unit {
+    font-size: .95rem;
+    font-weight: 600;
+    color: var(--indigo-100);
+    margin-left: 6px;
+}
+.verdict-card .verdict-meta {
+    font-size: .8rem;
+    color: white;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.30);
+    line-height: 1.65;
+}
+.verdict-card .verdict-meta strong { color: #FDE68A; }
+
+/* ============================================================
+   9. BUTTONS
+   ============================================================ */
+
+.stButton > button {
+    border-radius: var(--r-sm);
+    font-weight: 600;
+    font-size: .85rem;
+    letter-spacing: .015em;
+    padding: .5rem 1.1rem;
+    border: 1px solid var(--line);
+    background: var(--surface-card);
+    color: var(--text-body);
+    box-shadow: none;
+    transition: all var(--t-fast);
+}
+.stButton > button:hover {
+    border-color: var(--indigo-300);
+    color: var(--primary);
+    background: var(--primary-soft);
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    border: none;
+    color: white;
+    box-shadow: 0 4px 12px rgba(79,70,229,0.30);
+}
+.stButton > button[kind="primary"]:hover {
+    color: white;
+    background: linear-gradient(135deg, var(--primary-hover), var(--accent));
+    box-shadow: 0 8px 22px rgba(79,70,229,0.42);
+    transform: translateY(-1px);
+}
+
+/* ============================================================
+  10. INPUTS / SELECTS — sistema cohesivo
+  ------------------------------------------------------------
+  Arquitectura:
+  1. EL CHROME (border, radius, bg, shadow) vive SIEMPRE en el wrapper
+     (no en el <input> ni en el <select>). Esto evita el "doble border"
+     cuando Streamlit usa diferentes data-baseweb por tipo de widget:
+       • text input  → data-baseweb="base-input"
+       • number/date → data-baseweb="input"
+       • select      → data-baseweb="select"
+  2. ALTURA: 40px enforced en el wrapper. Inputs internos = height:100%.
+  3. EL <input> es transparente — sólo aporta texto.
+  ============================================================ */
+
+/* ── 1. WRAPPERS UNIFICADOS (cualquier tipo de input → mismo chrome) ── */
+[data-testid="stTextInput"] [data-baseweb="base-input"],
+[data-testid="stTextInput"] [data-baseweb="input"],
+[data-testid="stNumberInput"] [data-baseweb="input"],
+[data-testid="stDateInput"] [data-baseweb="input"],
+[data-testid="stTimeInput"] [data-baseweb="input"],
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    height: 40px !important;
+    min-height: 40px !important;
+    max-height: 40px !important;
+    border-radius: var(--r-sm) !important;
+    border: 1px solid var(--line) !important;
+    background: var(--surface-card) !important;
+    box-shadow: none !important;
+    box-sizing: border-box !important;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+    overflow: hidden;
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* ── 2. WRAPPER INTERNO (el "div > div" extra que algunos widgets emiten):
+        sin chrome propio — solo hereda altura del padre. ── */
+[data-testid="stTextInput"] [data-baseweb="base-input"] > div,
+[data-testid="stTextInput"] [data-baseweb="input"] > div,
+[data-testid="stNumberInput"] [data-baseweb="input"] > div,
+[data-testid="stDateInput"] [data-baseweb="input"] > div,
+[data-testid="stTimeInput"] [data-baseweb="input"] > div {
+    height: 100% !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+}
+
+/* ── 3. EL <input> ELEMENTO: transparente, sin chrome propio. ── */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stDateInput"] input,
+[data-testid="stTimeInput"] input {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    height: 100% !important;
+    padding: 0 .8rem !important;
+    line-height: 1.4 !important;
+    color: var(--text-body) !important;
+    font-size: .88rem !important;
+    font-variant-numeric: tabular-nums;
+}
+
+input::placeholder, textarea::placeholder {
+    color: var(--text-muted) !important;
+    opacity: .8;
+}
+
+/* ── 4. HOVER (afecta sólo al wrapper) ── */
+[data-testid="stTextInput"] [data-baseweb="base-input"]:hover,
+[data-testid="stTextInput"] [data-baseweb="input"]:hover,
+[data-testid="stNumberInput"] [data-baseweb="input"]:hover,
+[data-testid="stDateInput"] [data-baseweb="input"]:hover,
+[data-testid="stTimeInput"] [data-baseweb="input"]:hover,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover {
+    border-color: var(--line-strong) !important;
+}
+
+/* ── 5. FOCUS (ring indigo) ── */
+[data-testid="stTextInput"] [data-baseweb="base-input"]:focus-within,
+[data-testid="stTextInput"] [data-baseweb="input"]:focus-within,
+[data-testid="stNumberInput"] [data-baseweb="input"]:focus-within,
+[data-testid="stDateInput"] [data-baseweb="input"]:focus-within,
+[data-testid="stTimeInput"] [data-baseweb="input"]:focus-within,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(79,70,229,0.15) !important;
+}
+
+/* ── 6. TEXTAREA — multilínea, sin lock de altura ── */
+[data-testid="stTextArea"] textarea {
+    border-radius: var(--r-sm) !important;
+    border: 1px solid var(--line) !important;
+    background: var(--surface-card) !important;
+    box-shadow: none !important;
+    color: var(--text-body) !important;
+    font-size: .88rem !important;
+    padding: .55rem .8rem !important;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+[data-testid="stTextArea"] textarea:hover { border-color: var(--line-strong) !important; }
+[data-testid="stTextArea"] textarea:focus {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(79,70,229,0.15) !important;
+}
+
+/* ── 7. LABELS ── compactas y consistentes ── */
+[data-testid="stWidgetLabel"] label,
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] {
+    color: var(--text-secondary) !important;
+    font-weight: 600 !important;
+    font-size: .78rem !important;
+    margin-bottom: .25rem !important;
+    letter-spacing: .005em;
+}
+
+/* ── 8. NUMBER INPUT — STEPPER UNIFICADO ──
+   Estructura real de Streamlit: input y botones (-/+) son HERMANOS
+   dentro de un contenedor exterior, no anidados. Por tanto el border
+   del wrapper interno [data-baseweb="input"] sólo rodea el input,
+   dejando los botones afuera como módulos sueltos.
+
+   Solución: poner el border en el CONTENEDOR EXTERIOR (el div hijo de
+   stNumberInput que NO es el label), y vaciar los chromes internos. */
+
+/* 8.1 — Contenedor exterior: la única superficie elevada del stepper */
+[data-testid="stNumberInputContainer"],
+[data-testid="stNumberInput"] > div:has(> button),
+[data-testid="stNumberInput"] > div:has([data-baseweb="input"]) {
+    display: flex !important;
+    align-items: stretch !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    max-height: 40px !important;
+    border: 1px solid var(--line) !important;
+    border-radius: var(--r-sm) !important;
+    background: var(--surface-card) !important;
+    box-shadow: none !important;
+    overflow: hidden;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+    box-sizing: border-box;
+}
+[data-testid="stNumberInputContainer"]:hover,
+[data-testid="stNumberInput"] > div:has(> button):hover,
+[data-testid="stNumberInput"] > div:has([data-baseweb="input"]):hover {
+    border-color: var(--line-strong) !important;
+}
+[data-testid="stNumberInputContainer"]:focus-within,
+[data-testid="stNumberInput"] > div:has(> button):focus-within,
+[data-testid="stNumberInput"] > div:has([data-baseweb="input"]):focus-within {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(79,70,229,0.15) !important;
+}
+
+/* 8.2 — Wrapper interno [data-baseweb="input"] del number: VACIAR chrome
+   SOLO cuando NO contiene botones (en versiones nuevas el wrapper interno
+   sólo tiene el <input>; en versiones viejas el wrapper interno ES el
+   contenedor exterior y debe conservar su border). */
+[data-testid="stNumberInput"] [data-baseweb="input"]:not(:has(> button)):not(:has(button)) {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    height: 100% !important;
+    min-height: 100% !important;
+    max-height: 100% !important;
+    padding: 0 !important;
+    flex: 1 1 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    overflow: visible !important;
+}
+/* Anular hover/focus del wrapper interno (lo lleva el contenedor exterior) */
+[data-testid="stNumberInput"] [data-baseweb="input"]:not(:has(> button)):not(:has(button)):hover,
+[data-testid="stNumberInput"] [data-baseweb="input"]:not(:has(> button)):not(:has(button)):focus-within {
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* 8.3 — Botones +/− pegados, planos, con separador fino */
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepDown"],
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepUp"] {
+    background: var(--surface-subtle) !important;
+    border: none !important;
+    color: var(--text-secondary) !important;
+    box-shadow: none !important;
+    height: 100% !important;
+    min-width: 36px !important;
+    width: 36px !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    transform: none !important;
+    transition: background var(--t-fast), color var(--t-fast) !important;
+    flex-shrink: 0 !important;
+    margin: 0 !important;
+}
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepDown"]:hover,
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepUp"]:hover {
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+    transform: none !important;
+}
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepDown"]:disabled,
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepUp"]:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+    background: var(--surface-subtle) !important;
+    color: var(--text-muted) !important;
+}
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepDown"] {
+    border-right: 1px solid var(--hairline) !important;
+}
+[data-testid="stNumberInput"] button[data-testid="stNumberInputStepUp"] {
+    border-left: 1px solid var(--hairline) !important;
+}
+
+/* ── 9. DATE INPUT — ícono calendario sutil ── */
+[data-testid="stDateInput"] [data-baseweb="input"] {
+    position: relative;
+}
+[data-testid="stDateInput"] [data-baseweb="input"]::before {
+    content: "📅";
+    position: absolute;
+    left: .55rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: .9rem;
+    opacity: .55;
+    pointer-events: none;
+    z-index: 1;
+}
+[data-testid="stDateInput"] input { padding-left: 2rem !important; }
+
+/* ── 10. SELECTBOX — chevron animado ── */
+[data-baseweb="select"] svg {
+    color: var(--text-muted);
+    transition: color var(--t-fast);
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover svg { color: var(--text-secondary); }
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within svg { color: var(--primary); }
+
+/* ── 11. MULTISELECT — sin lock de altura (los chips la dictan) ── */
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+    height: auto !important;
+    min-height: 40px !important;
+    max-height: none !important;
+    padding: 3px 6px !important;
+    flex-wrap: wrap;
+    gap: 4px;
+    border-radius: var(--r-sm) !important;
+    border: 1px solid var(--line) !important;
+    background: var(--surface-card) !important;
+    box-shadow: none !important;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div:hover {
+    border-color: var(--line-strong) !important;
+}
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div:focus-within {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(79,70,229,0.15) !important;
+}
+[data-testid="stMultiSelect"] span[data-baseweb="tag"] { margin: 2px !important; }
+
+/* ── 12. Tooltip "?" de help — mejor contraste ── */
+[data-testid="stTooltipIcon"] svg { color: var(--text-muted); }
+[data-testid="stTooltipIcon"]:hover svg { color: var(--primary); }
+
+/* Popover de selectbox/multiselect: bordes y sombra coherentes con la app */
+ul[role="listbox"], div[data-baseweb="popover"] ul {
+    background: var(--surface-card) !important;
+    border: 1px solid var(--line) !important;
+    border-radius: var(--r-sm) !important;
+    box-shadow: var(--shadow-2) !important;
+    padding: 4px !important;
+}
+ul[role="listbox"] li, div[data-baseweb="popover"] li {
+    border-radius: 6px !important;
+    padding: .45rem .65rem !important;
+    font-size: .85rem !important;
+    color: var(--text-body) !important;
+    transition: background var(--t-fast), color var(--t-fast);
+}
+ul[role="listbox"] li:hover, div[data-baseweb="popover"] li:hover {
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+}
+ul[role="listbox"] li[aria-selected="true"] {
+    background: var(--primary) !important;
+    color: white !important;
+    font-weight: 600 !important;
+}
+
+/* ── RADIO BUTTONS ── */
+[data-testid="stRadio"] [role="radiogroup"] { gap: .35rem; }
+[data-testid="stRadio"] label {
+    background: var(--surface-card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    padding: .45rem .75rem !important;
+    font-size: .85rem !important;
+    color: var(--text-body) !important;
+    font-weight: 500 !important;
+    margin-bottom: 0 !important;
+    transition: all var(--t-fast);
+    cursor: pointer;
+}
+[data-testid="stRadio"] label:hover {
+    border-color: var(--indigo-300);
+    background: var(--primary-soft);
+    color: var(--primary) !important;
+}
+/* Pill seleccionado = slicer activo (relleno de marca, estilo Power BI).
+   `:has()` detecta el input marcado dentro del label de forma robusta. */
+[data-testid="stRadio"] label:has(input:checked) {
+    border-color: var(--primary) !important;
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+    font-weight: 600 !important;
+}
+
+/* ── CHECKBOX & TOGGLE ── */
+[data-testid="stCheckbox"] label,
+[data-testid="stToggle"] label {
+    font-size: .85rem !important;
+    color: var(--text-body) !important;
+    font-weight: 500 !important;
+}
+[data-testid="stCheckbox"] [role="checkbox"][aria-checked="true"],
+[data-testid="stToggle"] [role="checkbox"][aria-checked="true"] {
+    background: var(--primary) !important;
+    border-color: var(--primary) !important;
+}
+
+/* ── SLIDER ── */
+[data-testid="stSlider"] [role="slider"] {
+    background: var(--primary) !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 4px rgba(79,70,229,0.18) !important;
+}
+[data-testid="stSlider"] [data-baseweb="slider"] [data-testid="stTickBarMin"],
+[data-testid="stSlider"] [data-baseweb="slider"] [data-testid="stTickBarMax"] {
+    color: var(--text-muted) !important;
+    font-size: .72rem !important;
+}
+
+/* ── Spacing entre widgets ── un poco más compacto en formularios densos */
+[data-testid="stForm"] [data-testid="stVerticalBlock"] { gap: .55rem; }
+[data-testid="stForm"] [data-testid="stWidgetLabel"] {
+    margin-bottom: .2rem !important;
+}
+
+/* ============================================================
+  11. TABS
+   ============================================================ */
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: .25rem;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 0;
+}
+.stTabs [data-baseweb="tab"] {
+    padding: .58rem 1.15rem;
+    border-radius: var(--r-sm) var(--r-sm) 0 0;
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: .9rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: none;
+    transition: all var(--t-fast);
+    margin-bottom: -1px;
+}
+.stTabs [data-baseweb="tab"]:hover { color: var(--primary); background: var(--primary-soft); }
+.stTabs [aria-selected="true"] {
+    color: var(--primary) !important;
+    background: var(--surface-card);
+    border-color: var(--line);
+    border-bottom: 2px solid var(--primary) !important;
+}
+
+/* ============================================================
+  12. ALERTS
+   ============================================================ */
+
+[data-testid="stAlert"] {
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    box-shadow: var(--shadow-1);
+    padding: .8rem 1rem;
+}
+
+/* ============================================================
+  13. DATAFRAMES / TABLAS
+   ============================================================ */
+
+.stDataFrame, [data-testid="stDataFrame"] {
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    border: 1px solid var(--line) !important;
+    box-shadow: var(--shadow-1);
+}
+
+/* ============================================================
+  14. FILE UPLOADER
+   ============================================================ */
+
+[data-testid="stFileUploader"] section {
+    border: 2px dashed var(--indigo-200) !important;
+    border-radius: var(--r-md) !important;
+    background: var(--primary-soft) !important;
+    transition: border-color var(--t-base), background var(--t-base);
+    box-shadow: none !important;
+    padding: 1rem !important;
+}
+[data-testid="stFileUploader"] section:hover {
+    border-color: var(--indigo-500) !important;
+    background: var(--indigo-100) !important;
+}
+
+/* ============================================================
+  15. METRIC: refinamiento del label
+   ============================================================ */
+
+/* Tile métrico con barra de acento de marca a la izquierda (estilo Power BI) */
+[data-testid="stMetric"] { position: relative; overflow: hidden; }
+[data-testid="stMetric"]::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: 4px;
+    background: var(--primary);
+    border-radius: var(--r-md) 0 0 var(--r-md);
+}
+[data-testid="stMetricLabel"] {
+    color: var(--text-muted) !important;
+    font-weight: 700 !important;
+    font-size: .69rem !important;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+}
+[data-testid="stMetricValue"] {
+    color: var(--text) !important;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+    font-weight: 700;
+    font-size: 1.7rem !important;
+}
+[data-testid="stMetricDelta"] { font-size: .78rem !important; }
+
+/* ============================================================
+  16. FORM helpers
+   ============================================================ */
+
+.form-grid-title {
+    font-size: .66rem;
+    font-weight: 700;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    margin: .15rem 0 .65rem;
+    padding-bottom: .3rem;
+    border-bottom: 1px solid var(--line);
+}
+.form-grid-title--muted {
+    color: var(--text-muted);
+    margin-top: 1.1rem;
+}
+
+/* ============================================================
+  18. PLOTLY
+   ============================================================ */
+
+.js-plotly-plot, .plot-container { background: transparent !important; }
+
+/* Wrapper del chart = TILE Power BI: superficie blanca, esquinas redondeadas,
+   sombra suave, hairline. El plot ya pinta blanco (template) y se recorta al
+   radio del tile. Dentro de wrappers/expander pierde chrome (anti-stacking). */
+[data-testid="stPlotlyChart"] {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-md);
+    padding: 10px 12px 6px;
+    box-shadow: var(--shadow-1);
+    overflow: hidden;
+    transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+[data-testid="stPlotlyChart"]:hover {
+    border-color: var(--line);
+    box-shadow: var(--shadow-2);
+}
+/* El SVG del plot adopta el radio interior del tile (esquinas limpias). */
+[data-testid="stPlotlyChart"] .js-plotly-plot,
+[data-testid="stPlotlyChart"] .plot-container {
+    border-radius: var(--r-sm);
+    overflow: hidden;
+}
+/* Plot dentro de un contenedor ya elevado: sin doble borde/sombra. El plot
+   sigue blanco (template) pero el wrapper no aporta chrome propio. */
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stPlotlyChart"],
+[data-testid="stExpander"] [data-testid="stPlotlyChart"] {
+    border-color: transparent !important;
+    background: transparent !important;
+    padding: 0 !important;
+}
+
+/* ============================================================
+  19. JSON viewer
+   ============================================================ */
+
+[data-testid="stJson"] {
+    background: var(--surface-subtle) !important;
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-md);
+    padding: .8rem 1rem;
+    font-size: .82rem;
+}
+
+/* ============================================================
+  20. SCROLLBAR
+   ============================================================ */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 999px;
+    border: 2px solid var(--surface-page);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ============================================================
+  21. CONTEXT PANEL (panel narrativo al costado de un gauge/chart)
+   ============================================================ */
+
+.ctx-panel {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--primary);
+    border-radius: var(--r-md);
+    padding: 14px 18px;
+    box-shadow: var(--shadow-1);
+}
+.ctx-panel .ctx-label {
+    font-size: .65rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    margin-bottom: .6rem;
+}
+.ctx-panel .ctx-line {
+    font-size: .84rem;
+    color: var(--text-secondary);
+    margin: 0 0 .5rem;
+    line-height: 1.55;
+}
+.ctx-panel .ctx-line:last-child { margin-bottom: 0; }
+.ctx-panel .ctx-line strong { color: var(--text); font-weight: 700; }
+.ctx-panel .ctx-line--muted {
+    font-size: .78rem;
+    color: var(--text-muted);
+}
+/* Si está dentro de un wrapper, sin shadow (anti-stacking) */
+[data-testid="stVerticalBlockBorderWrapper"] .ctx-panel,
+[data-testid="stForm"] .ctx-panel { box-shadow: none !important; }
+
+/* ============================================================
+  23. EMPTY STATE (estado vacío — superficie en HTML, no st.info)
+  ------------------------------------------------------------
+  Card sobria y centrada para "sin datos / sin selección". Más
+  ejecutiva que un st.info azul: borde punteado suave, ícono en
+  burbuja de marca, título + ayuda con jerarquía clara.
+   ============================================================ */
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: .55rem;
+    padding: 30px 28px;
+    background:
+        linear-gradient(180deg, rgba(79,70,229,0.025), rgba(255,255,255,0) 60%),
+        var(--surface-card);
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-1);
+}
+.empty-state .empty-icon {
+    width: 52px; height: 52px;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem;
+    background: var(--primary-soft);
+    border: 1px solid var(--indigo-100);
+    color: var(--primary);
+    margin-bottom: .15rem;
+}
+.empty-state .empty-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -.01em;
+    line-height: 1.3;
+}
+.empty-state .empty-help {
+    font-size: .85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    max-width: 46ch;
+}
+.empty-state .empty-help strong { color: var(--text); font-weight: 700; }
+/* Dentro de un wrapper ya elevado: sin sombra (anti-stacking) */
+[data-testid="stVerticalBlockBorderWrapper"] .empty-state,
+[data-testid="stForm"] .empty-state { box-shadow: none !important; }
+
+/* ============================================================
+  22. UTILIDADES — pequeños elementos transversales
+   ============================================================ */
+
+/* Chips de multiselect: más compactos y on-brand */
+span[data-baseweb="tag"] {
+    background: var(--primary) !important;
+    border-radius: 999px !important;
+    font-size: .72rem !important;
+    font-weight: 600 !important;
+    padding: 2px 8px !important;
+}
+span[data-baseweb="tag"] span { color: white !important; }

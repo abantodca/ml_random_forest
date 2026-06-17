@@ -1,0 +1,10 @@
+variable "project" { type = string }
+variable "vpc_id" { type = string }
+variable "private_subnet_ids" { type = list(string) }
+variable "sg_mlflow_id" { type = string } # SG con ingress :80 desde sg-alb; reports lo reusa
+variable "ecs_cluster_id" { type = string }
+variable "alb_listener_arn" { type = string }
+variable "artifacts_bucket" { type = string }
+variable "artifacts_bucket_arn" { type = string }
+variable "reports_image" { type = string }
+variable "log_retention_days" { type = number }

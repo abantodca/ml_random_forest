@@ -1,0 +1,52 @@
+# EditorConfig — https://editorconfig.org
+# Convencion compartida por todos los editores que soportan EditorConfig
+# (VS Code, JetBrains, vim/neovim, sublime, etc.).
+#
+# Por que existe: previene que un editor reformatee con tabs cuando otro
+# uso spaces, o que rompa indentacion al pegar codigo de la guia.
+
+root = true
+
+# Default para todos los archivos
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Python: PEP 8 = 4 spaces
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+# Terraform / HCL: 2 spaces (lo que produce `terraform fmt`)
+[*.{tf,tfvars,hcl}]
+indent_size = 2
+
+# YAML (Ansible playbooks, GitHub Actions workflows): 2 spaces
+[*.{yml,yaml}]
+indent_size = 2
+
+# JSON: 2 spaces
+[*.json]
+indent_size = 2
+
+# Markdown: NO trim trailing whitespace (markdown usa 2 espacios al final
+# de linea para hacer un <br>; trim los rompe).
+[*.md]
+trim_trailing_whitespace = false
+indent_size = 2
+
+# Makefiles requieren TABs reales (no spaces) por sintaxis make
+[{Makefile,*.mk}]
+indent_style = tab
+
+# Shell scripts
+[*.sh]
+indent_size = 4
+
+# Dockerfile
+[{Dockerfile,Dockerfile.*}]
+indent_size = 2
