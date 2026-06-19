@@ -23,8 +23,8 @@ version: "3"
 vars:
   TF_DIR:       '{{.TF_DIR       | default "infra/envs/prod"}}'
   SCHEDULER_FN: '{{.SCHEDULER_FN | default (printf "%s-scheduler" .PROJECT)}}'
-  QUEUE_SPOT:   '{{.QUEUE_SPOT   | default (printf "%s-job-queue-spot"     .PROJECT)}}'
-  QUEUE_OD:     '{{.QUEUE_OD     | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
+  # QUEUE_SPOT / QUEUE_OD se inyectan desde el Taskfile raiz (fuente unica de la
+  # convencion de nombres, compartida con batch:). Ver includes en Taskfile.yml.
   MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
   # Orden reverso de apply: importante para destroy con dependencias.
   VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd module.consumer_iam"
@@ -61,10 +61,11 @@ tasks:
       ABORT_IF_RUNNING: '{{.ABORT_IF_RUNNING | default "false"}}'
     cmds:
       - |
+        source tasks/lib/batch_wait.sh
         total=0
         running=0
         for q in {{.QUEUE_SPOT}} {{.QUEUE_OD}}; do
-          for s in SUBMITTED PENDING RUNNABLE STARTING RUNNING; do
+          for s in $BATCH_ACTIVE_STATES; do
             n=$(aws batch list-jobs --job-queue "$q" --job-status $s --query 'length(jobSummaryList)' --output text 2>/dev/null || echo 0)
             [ "$n" -gt 0 ] && echo "  queue=$q  status=$s  count=$n"
             total=$((total + n))

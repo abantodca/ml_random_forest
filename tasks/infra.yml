@@ -18,11 +18,11 @@ version: "3"
 
 vars:
   TF_DIR:  '{{.TF_DIR | default "infra/envs/prod"}}'
-  # Ultimos 7 chars del account ID (sufijo de buckets para evitar colisiones).
-  # Misma fuente que tasks/local.yml -> coherencia local/prod en nombres de bucket.
-  # Resuelto una vez por invocacion del include.
-  SUFFIX:
-    sh: bash scripts/aws-suffix.sh
+  # SUFFIX (ultimos 7 chars del account ID; sufijo de buckets) NO se computa como
+  # var `sh:`: Task evalua las vars de archivo de TODOS los includes al cargar, en
+  # cada invocacion (incluso `task --list` o `task up`), lo que dispararia
+  # `aws sts get-caller-identity` y romperia todo sin AWS. Se calcula en runtime
+  # dentro de `_init` (unico consumidor), via scripts/aws-suffix.sh.
 
 tasks:
 
@@ -46,12 +46,14 @@ tasks:
       # use_lockfile=true => locking nativo S3 (reemplaza el deprecado
       # `dynamodb_table`). El lock vive como `<key>.tflock` en el mismo bucket
       # de tfstate. Requiere Terraform >= 1.10.
-      - terraform -chdir={{.TF_DIR}} init
-        -backend-config=bucket={{.PROJECT}}-tfstate-{{.SUFFIX}}
-        -backend-config=key=envs/prod/terraform.tfstate
-        -backend-config=region={{.REGION}}
-        -backend-config=use_lockfile=true
-        -reconfigure
+      - |
+        SUFFIX="$(bash scripts/aws-suffix.sh)"
+        terraform -chdir={{.TF_DIR}} init \
+          -backend-config=bucket={{.PROJECT}}-tfstate-${SUFFIX} \
+          -backend-config=key=envs/prod/terraform.tfstate \
+          -backend-config=region={{.REGION}} \
+          -backend-config=use_lockfile=true \
+          -reconfigure
 
   # ═══ Plan / Apply / Destroy ═════════════════════════════════════════════════
 

@@ -13,10 +13,10 @@ includes:
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
   batch:
     taskfile: ./tasks/batch.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}' }
   ops:
     taskfile: ./tasks/ops.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}' }
   local:
     taskfile: ./tasks/local.yml
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
@@ -27,6 +27,10 @@ vars:
   PARALLEL:  '{{.PARALLEL  | default "1"}}'
   PROJECT:   '{{.PROJECT   | default "ml-training"}}'
   REGION:    '{{.AWS_DEFAULT_REGION | default "us-east-1"}}'
+  # Nombres de las colas Batch: fuente unica de la convencion, inyectada a los
+  # includes ops: y batch: (antes se definia el mismo printf en ambos archivos).
+  QUEUE_SPOT: '{{.QUEUE_SPOT | default (printf "%s-job-queue-spot"     .PROJECT)}}'
+  QUEUE_OD:   '{{.QUEUE_OD   | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
   HOST_UID:  { sh: id -u }
   HOST_GID:  { sh: id -g }
   # Patron reutilizado: correr un modulo Python en el container trainer sin
@@ -36,101 +40,59 @@ vars:
   # el PermissionError al sobrescribir DB-HISTORICA.xlsx. MPLCONFIGDIR=/tmp porque
   # con --user el $HOME de la imagen no es escribible por el uid del host (matplotlib en eda).
   DC_PY: docker compose run --rm --no-deps --user "{{.HOST_UID}}:{{.HOST_GID}}" -e MPLCONFIGDIR=/tmp --entrypoint python trainer
-  # SUFFIX (sufijo del Account ID para bucket/repo names) NO se define aqui a
-  # proposito: si fuera top-level, Task lo evaluaria al cargar y dispararia
-  # `aws sts get-caller-identity` incluso para `task` o `task --list`. Solo
-  # `destroy` y `nuke` lo necesitan -> se computa por-tarea (lazy).
+  # SUFFIX (sufijo del Account ID para bucket/repo names) NO se computa como
+  # variable `sh:` (ni top-level ni por-tarea): Task evalua TODAS las vars `sh:`
+  # al cargar el Taskfile -en cada invocacion, incluso `task --list` o tareas
+  # locales como `task up`-, lo que dispararia `aws sts get-caller-identity` y
+  # romperia todo en una maquina sin AWS. Solo `destroy`/`nuke` lo necesitan ->
+  # se calcula DENTRO de sus `cmds:` (runtime real), via scripts/aws-suffix.sh.
 
 tasks:
 
   default:
-    desc: "Lista comandos del pipeline + ejemplos TUNING/VARIETIES"
+    desc: "Quickstart del pipeline + ejemplos. Detalle por tarea: task --list"
     silent: true
     cmds:
+      # Quickstart curado (los 15-20 comandos del 90% del dia). El catalogo
+      # completo y exacto vive en `task --list`; el runbook paso-a-paso del
+      # primer stand-up AWS, en GUIA_MLOPS_AWS_V2.md. Aqui solo lo esencial,
+      # para que no derive cada vez que se agrega una tarea.
       - |
         cat <<'EOF'
 
           ml_training · forecast KG/JR_H por variedad
-          ════════════════════════════════════════════════════════════════════════
+          ════════════════════════════════════════════════════════════════════
 
-          ┌─ LOCAL ──────────────────────────────────────────────────────────────┐
+          LOCAL (docker compose)
+            task build              rebuild imagenes + levanta el stack
+            task up                 levanta el stack sin rebuild
+            task data:split         genera data/training/DB-HISTORICA.xlsx
+            task train              entrena + HTML en reports/
+            task down               apaga (preserva volumen Postgres)
+            task test · task lint   suite P0 en contenedores · ruff
+            Setup 1ª vez: task local:ensure-buckets + completar buckets en .env
+            URLs: UI :8501 · API :8000/docs · MLflow :5000 · Reports/Artifacts :8080
 
-           Setup (1ª vez, antes de build)
-             task local:ensure-buckets   crea buckets S3 (backend artifacts MLflow)
-             # completar S3_MLFLOW_BUCKET / S3_ARTIFACTS_BUCKET en .env
-             # sin esto `task build` aborta. Guia: GUIA_MLOPS_AWS_V2.md #4.8 + #4.7
+          AWS (atajos high-level · detalle en namespaces infra:/ecr:/batch:/ops:)
+            task deploy             stand-up completo (storage → 5 imagenes → resto)
+            task smoke              deploy + 1 job Batch POP smoke
+            task wake · task sleep  encender · apagar el stack
+            task status · task urls estado del cluster · URLs publicas del ALB
+            task batch:train VARIETIES=POP        entrenamiento en Batch
+            task ops:promote MODEL_NAME=... VERSION=N   promover a Production
+            task teardown · destroy · nuke   ⚠ progresivamente destructivos
+            Bootstrap 1ª vez por cuenta+region: task infra:bootstrap[-oidc]
 
-           Pipeline (correr en orden)
-             task build              rebuild imagenes + up stack completo
-             task up                 levanta db+mlflow+reports+api+ui (sin rebuild)
-             task data:split         genera data/training/DB-HISTORICA.xlsx
-             task data:upload        (opcional) sube Excel a S3 (hydrate paritario Batch)
-             task eda VARIETIES=POP  (opcional) analisis exploratorio
-             task train              entrena + genera HTML en reports/
-             task down               apaga servicios (preserva volumen Postgres)
+          Ejemplos train (TUNING × VARIETIES × PARALLEL)
+            task train VARIETIES=POP TUNING=smoke      ~1 min   sanity
+            task train VARIETIES=POP TUNING=prod       ~2 h     produccion (default)
+            task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
 
-           Ejemplos train (TUNING × VARIETIES × PARALLEL)
-             task train VARIETIES=POP TUNING=smoke      ~1 min    sanity check
-             task train VARIETIES=POP TUNING=dev        ~20 min   baseline
-             task train VARIETIES=POP TUNING=prod       ~2 h      produccion
-             task train VARIETIES=POP TUNING=prod_xl    ~6 h      overnight
-             task train VARIETIES=POP,VENTURA           multiples variedades
-             task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
+          Variables (override por CLI · VAR=valor)
+            VARIETIES POP|POP,VENTURA|all · TUNING smoke|dev|prod|prod_xl
+            PARALLEL N · SEED 42
 
-           URLs (stack up · sin :80 — eso es el ALB de prod)
-             UI Streamlit          http://localhost:8501
-             API Swagger           http://localhost:8000/docs
-             MLflow UI             http://localhost:5000
-             Reports HTML          http://localhost:8080/reports/
-             Artifacts             http://localhost:8080/artifacts/
-
-          └──────────────────────────────────────────────────────────────────────┘
-
-          ┌─ AWS ────────────────────────────────────────────────────────────────┐
-
-           Bootstrap (1ª vez por cuenta+region, antes del stand-up)
-             task infra:bootstrap         backend tfstate (lock nativo S3)
-             task infra:bootstrap-oidc    rol IAM para GitHub Actions
-             task local:ensure-buckets    (opcional) buckets data + artifacts dev
-
-           Primer stand-up (correr EN ORDEN · ~45 min · ~10 atencion activa)
-             0  source scripts/prod.env                       carga DATA_BUCKET, SUFFIX...
-             1  task infra:validate                           fmt + validate HCL   ~10s
-             2  task infra:apply TARGET=module.storage        Ola A: 2 S3 + 3 ECR  ~1m
-             3  aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx    sube Excel al bucket data
-                  s3://$DATA_BUCKET/
-             4  task ecr:build-all                            Ola B: 5 imagenes    ~12m
-             5  task infra:apply                              Ola C: net+RDS+ALB+ECS+Batch+lambda  ~18m
-             6  task batch:smoke                              1 job Batch POP smoke  ~12m
-             7  open http://$ALB/app/ + http://$ALB/docs      UI + API arriba = fin
-             atajos:  task deploy = 2+4+5   |   task smoke = deploy + 6
-
-           Operacion dia-2
-             task status                                outputs TF + cluster + URLs
-             task urls                                  URLs publicas via ALB
-             task wake  /  task sleep                   encender / apagar (idempotente)
-             task batch:train VARIETIES=POP             entrenamiento en AWS Batch
-             task batch:eda   VARIETIES=POP             EDA exploratorio on-demand
-             task ops:promote MODEL_NAME=... VERSION=N  promover a Production
-
-           Teardown / Recovery / Destroy
-             task teardown        destroy volatiles (preserva storage + network)
-             task rebuild         re-apply tras teardown + up (no destructivo)
-             task ops:state-drift detecta buckets S3 en AWS ausentes en tfstate
-                                  (causa BucketAlreadyExists en apply; corre auto en deploy)
-             task destroy      ⚠  DESTRUCTIVO: S3 + ECR + RDS + todo lo demas
-             task nuke         ⚠  IRREVERSIBLE: destroy + tfstate + OIDC provider
-
-          └──────────────────────────────────────────────────────────────────────┘
-
-          Variables (override por CLI · formato VAR=valor)
-             VARIETIES   POP (default) | POP,VENTURA,... | all
-             TUNING      smoke ~1m | dev ~20m | prod ~2h (default) | prod_xl ~6h
-             PARALLEL    1 (default) | N variedades en paralelo
-             SEED        42 (default) | reproducibilidad
-
-          Mas info:  task --list   ·   GUIA_MLOPS_AWS_V2.md
-
+          Detalle por tarea:  task --list      Runbook AWS:  GUIA_MLOPS_AWS_V2.md
         EOF
 
   build:
@@ -252,7 +214,7 @@ tasks:
         EOF
 
   lint:
-    desc: "ruff check src/ main.py scripts/ api/ ui/ (config en pyproject.toml)"
+    desc: "ruff check src/ main.py scripts/ tests/ api/ ui/ (config en pyproject.toml)"
     cmds:
       - ruff check src/ main.py scripts/ tests/ api/ ui/
 
@@ -335,17 +297,15 @@ tasks:
   destroy:
     desc: "AWS DESTRUCTIVO: drena Batch, vacia S3/ECR, terraform destroy total"
     prompt: "Destruira envs/prod (S3 + ECR + RDS + ...). Irreversible. Continuar?"
-    vars:
-      SUFFIX:
-        sh: bash scripts/aws-suffix.sh
     cmds:
       - task: ops:down
       - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
       - |
         set -e
+        SUFFIX="$(bash scripts/aws-suffix.sh)"
         source tasks/lib/nuke.sh
-        empty_bucket "{{.PROJECT}}-data-{{.SUFFIX}}"
-        empty_bucket "{{.PROJECT}}-artifacts-{{.SUFFIX}}"
+        empty_bucket "{{.PROJECT}}-data-${SUFFIX}"
+        empty_bucket "{{.PROJECT}}-artifacts-${SUFFIX}"
         purge_ecr    "{{.PROJECT}}"
         purge_ecr    "{{.PROJECT}}-mlflow"
         purge_ecr    "{{.PROJECT}}-reports"
@@ -366,18 +326,16 @@ tasks:
   nuke:
     desc: "AWS IRREVERSIBLE: destroy + tfstate bucket + OIDC provider"
     prompt: "NUKE COMPLETO: borra state remoto + OIDC. Despues necesitas re-bootstrap. Continuar?"
-    vars:
-      SUFFIX:
-        sh: bash scripts/aws-suffix.sh
     cmds:
       - task: destroy
       - 'echo ">>> Borrando bucket tfstate + OIDC..."'
       - |
         set -e
+        SUFFIX="$(bash scripts/aws-suffix.sh)"
         source tasks/lib/nuke.sh
         # use_lockfile guarda el lock como objeto en el mismo bucket -> se va
         # con `empty_bucket` (no hay tabla DynamoDB que limpiar).
-        empty_bucket "{{.PROJECT}}-tfstate-{{.SUFFIX}}" true
+        empty_bucket "{{.PROJECT}}-tfstate-${SUFFIX}" true
         delete_oidc
       - 'echo ""'
       - 'echo "NUKE COMPLETO. Para volver: task infra:bootstrap + task infra:bootstrap-oidc + task deploy"'

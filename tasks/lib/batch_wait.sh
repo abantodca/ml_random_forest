@@ -1,5 +1,9 @@
-# Helper bash compartido por tasks/batch.yml (polling de Batch jobs).
+# Helper bash compartido por tasks/batch.yml y tasks/ops.yml (Batch jobs).
 # Sourceado, no ejecutado. Requiere awscli configurado.
+
+# Estados "activos" de Batch (trabajo en vuelo). Fuente unica para
+# ops:_batch-jobs y batch:status: si AWS cambia el set, se edita aqui.
+BATCH_ACTIVE_STATES="SUBMITTED PENDING RUNNABLE STARTING RUNNING"
 
 # assert_jobdef_image <job_definition_name> [region]
 # Preflight: falla rapido si la imagen de la job-def ACTIVE no existe en ECR,
@@ -33,6 +37,29 @@ ERROR la job-def '$jobdef' apunta a una imagen que NO existe en ECR:
        y corre  task infra:apply TARGET=module.batch)
 EOF
   return 1
+}
+
+# dispatch_job <jobdef> <region> <dispatcher_fn> <payload> <label> [wait=true]
+# Flujo comun de submit via Lambda dispatcher, compartido por batch:train y
+# batch:eda: preflight de imagen -> invoke -> parseo de jobId (con fallback si el
+# Lambda envuelve el body como string JSON) -> espera opcional. Un tipo de job
+# nuevo = una linea que arma su PAYLOAD y llama aqui.
+dispatch_job() {
+  local jobdef="$1" region="$2" fn="$3" payload="$4" label="$5" wait="${6:-true}"
+  assert_jobdef_image "$jobdef" "$region"
+  aws lambda invoke \
+    --function-name "$fn" \
+    --cli-binary-format raw-in-base64-out \
+    --payload "$payload" \
+    /tmp/dispatcher-out.json \
+    --query 'StatusCode' --output text
+  cat /tmp/dispatcher-out.json
+  local job_id
+  job_id=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
+           || jq -r '.jobId' /tmp/dispatcher-out.json)
+  echo ">>> Submitted  $label  job=$job_id"
+  [ "$wait" != "true" ] && return 0
+  wait_job "$job_id" "$label"
 }
 
 # wait_job <job_id> <label>
