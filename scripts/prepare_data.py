@@ -109,7 +109,7 @@ def split_workbook(
             # Dedup estructural AGUAS ARRIBA (2026-06-15): elimina filas 100%
             # identicas una sola vez, para que DB-HISTORICA.xlsx quede canonico
             # y limpio. Antes el unico dedup vivia en data_loader._load_sheet_aligned
-            # y corria 1x por backend (gpb/lgb/xgb releen la misma hoja) -> el
+            # y corria 1x por backend (lgb/xgb releen la misma hoja) -> el
             # warning "N duplicados estructurales" se repetia 3-4x por training.
             # keep="first": orden Excel = orden temporal (mismo criterio que el
             # loader). El min_rows ya se evaluo en _split_by_variety sobre el

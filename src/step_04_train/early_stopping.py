@@ -25,9 +25,12 @@ Diseno:
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from lightgbm import LGBMRegressor
 from lightgbm import early_stopping as lgb_early_stopping
+from sklearn.metrics import mean_absolute_error
 from xgboost import XGBRegressor
 
 from src.config import (
@@ -36,6 +39,30 @@ from src.config import (
     EARLY_STOPPING_VAL_FRACTION,
     RANDOM_STATE,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _log_overfit(est, name: str, X_tr, y_tr, X_va, y_va) -> None:
+    """Observabilidad (DEBUG) del overfit por fit: corte real del boosting +
+    gap MAE train->holdout. Analogo a la instrumentacion de GPBoost. El `y`
+    esta en espacio log1p (dentro del TTR), asi que el gap es un indicador
+    RELATIVO consistente, no el MAE de negocio. try/except: nunca tumba el fit.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    try:
+        best_it = getattr(est, "best_iteration_", None)
+        if best_it is None:
+            best_it = getattr(est, "best_iteration", None)
+        mae_tr = float(mean_absolute_error(y_tr, est.predict(X_tr)))
+        mae_va = float(mean_absolute_error(y_va, est.predict(X_va)))
+        logger.debug(
+            "%s early-stop: best_iter=%s MAE_train=%.4f MAE_val=%.4f gap=%.4f",
+            name, best_it, mae_tr, mae_va, mae_va - mae_tr,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("%s early-stop: diagnostico no disponible: %s", name, exc)
 
 
 def _holdout_indices(n_rows: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
@@ -85,7 +112,7 @@ class EarlyStoppingLGBMRegressor(LGBMRegressor):
         X_tr, y_tr, sw_tr, X_va, y_va, sw_va = _split_fit_inputs(
             X, y, sample_weight, _seed_of(self),
         )
-        return super().fit(
+        fitted = super().fit(
             X_tr, y_tr,
             sample_weight=sw_tr,
             eval_set=[(X_va, y_va)],
@@ -94,6 +121,8 @@ class EarlyStoppingLGBMRegressor(LGBMRegressor):
             callbacks=[lgb_early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
             **kwargs,
         )
+        _log_overfit(fitted, "lgb", X_tr, y_tr, X_va, y_va)
+        return fitted
 
 
 class EarlyStoppingXGBRegressor(XGBRegressor):
@@ -113,7 +142,7 @@ class EarlyStoppingXGBRegressor(XGBRegressor):
         X_tr, y_tr, sw_tr, X_va, y_va, sw_va = _split_fit_inputs(
             X, y, sample_weight, _seed_of(self),
         )
-        return super().fit(
+        fitted = super().fit(
             X_tr, y_tr,
             sample_weight=sw_tr,
             eval_set=[(X_va, y_va)],
@@ -121,3 +150,5 @@ class EarlyStoppingXGBRegressor(XGBRegressor):
             verbose=False,
             **kwargs,
         )
+        _log_overfit(fitted, "xgb", X_tr, y_tr, X_va, y_va)
+        return fitted

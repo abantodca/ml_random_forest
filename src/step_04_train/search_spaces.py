@@ -81,15 +81,27 @@ def suggest_xgb_params(trial: optuna.Trial) -> dict[str, object]:
 
     Se mantiene de rev. 6.x lo que si estaba justificado: colsample_bylevel/
     bynode fuera (multiplicaban agresividad), max_delta_step fuera (marginal
-    en MAE), y `grow_policy` con max_leaves condicional (rev. 6.2).
+    en MAE).
+
+    Rev. 9 (2026-06-22): max_leaves pasa a tunearse SIEMPRE (antes solo bajo
+    grow_policy='lossguide'). Con depthwise sin tope, ~50% de los trials
+    crecian arboles a 2^depth hojas (hasta ~256 en depth 8) vs el cap 64 de
+    num_leaves en LGB — asimetria estructural que empujaba a XGB al
+    sobreajuste y lo descalificaba en el gate de gap. En XGBoost >=2.0
+    max_leaves acota el ancho tambien con depthwise (verificado en 3.2.0),
+    asi el control de ancho de XGB queda a la par del de LGB.
     """
     grow_policy = trial.suggest_categorical(
         "regressor__regressor__grow_policy", ["depthwise", "lossguide"]
     )
+    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, 8)
+    # max_leaves acoplado a depth y SIEMPRE tuneado: 8 .. min(2^depth, 64),
+    # espejando el num_leaves de suggest_lgb_params (7 .. min(2^depth-1, 64)).
+    # En depth bajos la formula acota sola; el cap absoluto 64 evita arboles
+    # degenerados en depth 7-8.
+    max_leaves_max = max(8, min(2 ** max_depth, 64))
     params = {
-        "regressor__regressor__max_depth": trial.suggest_int(
-            "regressor__regressor__max_depth", 3, 8
-        ),
+        "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__learning_rate": trial.suggest_float(
             "regressor__regressor__learning_rate", 3e-3, 0.3, log=True
         ),
@@ -112,11 +124,10 @@ def suggest_xgb_params(trial: optuna.Trial) -> dict[str, object]:
             "regressor__regressor__reg_lambda", 1e-3, 25.0, log=True
         ),
         "regressor__regressor__grow_policy": grow_policy,
+        "regressor__regressor__max_leaves": trial.suggest_int(
+            "regressor__regressor__max_leaves", 8, max_leaves_max
+        ),
     }
-    if grow_policy == "lossguide":
-        params["regressor__regressor__max_leaves"] = trial.suggest_int(
-            "regressor__regressor__max_leaves", 8, 64
-        )
     return params
 
 
@@ -183,58 +194,6 @@ def suggest_lgb_params(trial: optuna.Trial) -> dict[str, object]:
         ),
         "regressor__regressor__path_smooth": trial.suggest_float(
             "regressor__regressor__path_smooth", 0.0, 2.0
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
-# GPBoost (GBDT + efectos aleatorios cruzados FUNDO x FORMATO)
-# ---------------------------------------------------------------------------
-
-
-def suggest_gpb_params(trial: optuna.Trial) -> dict[str, object]:
-    """Search space rev. 1 (2026-06-13): misma filosofia que XGB rev.7 / LGB rev.8.
-
-    Capacidad abierta + control de overfitting FUERA de la grilla (early
-    stopping interno con neg-log-likelihood del holdout, CV outer y gate de
-    gap del campeon). Los arboles de GPBoost son LightGBM, asi que la grilla
-    espeja a `suggest_lgb_params` con dos diferencias impuestas por el
-    algoritmo (sonda 2026-06-13, gpboost 1.6.7):
-
-    - SIN bagging (`bagging_fraction`/`subsample`): GPBoost lo prohibe con
-      gp_model (el GP necesita ver todas las filas por iteracion).
-      `feature_fraction` queda como unica fuente de aleatorizacion.
-    - SIN `extra_trees`/`path_smooth`: palancas LGB-especificas no
-      verificadas en el fork; se prefiere un espacio menor y bien soportado
-      (menos dimensiones tambien rinde mas con el mismo presupuesto TPE).
-
-    Los efectos aleatorios NO se tunean: GPBoost estima las varianzas de
-    los interceptos por maxima verosimilitud dentro de cada fit.
-    """
-    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, 8)
-    num_leaves_max = max(7, min(2 ** max_depth - 1, 64))
-    return {
-        "regressor__regressor__max_depth": max_depth,
-        "regressor__regressor__num_leaves": trial.suggest_int(
-            "regressor__regressor__num_leaves", 7, num_leaves_max
-        ),
-        "regressor__regressor__learning_rate": trial.suggest_float(
-            "regressor__regressor__learning_rate", 3e-3, 0.3, log=True
-        ),
-        "regressor__regressor__min_data_in_leaf": trial.suggest_int(
-            "regressor__regressor__min_data_in_leaf", 5, 100, log=True
-        ),
-        "regressor__regressor__min_split_gain": trial.suggest_float(
-            "regressor__regressor__min_split_gain", 1e-3, 5.0, log=True
-        ),
-        "regressor__regressor__lambda_l1": trial.suggest_float(
-            "regressor__regressor__lambda_l1", 1e-3, 20.0, log=True
-        ),
-        "regressor__regressor__lambda_l2": trial.suggest_float(
-            "regressor__regressor__lambda_l2", 1e-3, 25.0, log=True
-        ),
-        "regressor__regressor__feature_fraction": trial.suggest_float(
-            "regressor__regressor__feature_fraction", 0.5, 1.0
         ),
     }
 

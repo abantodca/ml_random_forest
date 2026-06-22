@@ -1,4 +1,4 @@
-"""Entrenamiento de UN modelo (xgb|lgb|gpb) para UNA variedad.
+"""Entrenamiento de UN modelo (xgb|lgb) para UNA variedad.
 
 Devuelve un `ModelResult` listo para `select_champion`. Cada llamada:
   - Abre su propio MLflow run dentro del experimento de la variedad.
@@ -371,7 +371,7 @@ def train_model(
     settings: dict,
     logger,
 ) -> ModelResult:
-    """Entrena UN modelo (xgb|lgb|gpb) para UNA variedad. Devuelve ModelResult."""
+    """Entrena UN modelo (xgb|lgb) para UNA variedad. Devuelve ModelResult."""
     log = PrefixAdapter(logger, prefix=f"[{variety}/{model_type}]")
     logger.info("-" * 78)
     logger.info(f"# {variety} / {model_type}")
@@ -385,9 +385,9 @@ def train_model(
     variety_cfg = for_variety(variety)
 
     # Presupuesto efectivo: override POR BACKEND (config.BACKEND_BUDGET_FRACTION).
-    # gpb corre a fraccion del perfil (backend de referencia); lgb/xgb quedan al
-    # perfil completo (frac=1.0). inner_folds intacto (barato; reducirlo degrada
-    # el tuning). Escala correctamente en smoke/dev/prod/prod_xl.
+    # Por defecto el dict esta vacio -> todos los backends corren al perfil
+    # completo (frac=1.0). inner_folds intacto (barato; reducirlo degrada el
+    # tuning). Escala correctamente en smoke/dev/prod/prod_xl.
     frac = BACKEND_BUDGET_FRACTION.get(model_type, 1.0)
     eff = dict(settings)
     if frac < 1.0:

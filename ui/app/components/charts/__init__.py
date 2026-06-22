@@ -12,7 +12,6 @@ from app.components.charts.bar_table import build_table_with_bars
 from app.components.charts.gauge import build_drift_gauge, build_simple_gauge
 from app.components.charts.heatmap import build_metrics_heatmap
 from app.components.charts.histogram import build_kghora_histogram
-from app.components.charts.indicator import build_kghora_indicator
 from app.components.charts.tracking import (
     build_decomp_scatter,
     build_parity_plot,
@@ -23,7 +22,6 @@ from app.components.charts.tracking import (
 
 __all__ = [
     "build_kghora_histogram",
-    "build_kghora_indicator",
     "build_metrics_heatmap",
     "build_drift_gauge",
     "build_simple_gauge",

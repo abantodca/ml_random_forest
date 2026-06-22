@@ -25,7 +25,7 @@ SIEMPRE es Postgres + S3 — no se usa `file://mlruns` ni sqlite ni LocalStack
 (ADR-001 / ADR-003).
 
 > **Nota sobre el nombre del repo:** se llama `ml_random_forest` por razones
-> históricas. El pipeline actual entrena **XGBoost + LightGBM + GPBoost** (no Random
+> históricas. El pipeline actual entrena **XGBoost + LightGBM** (no Random
 > Forest) y selecciona el mejor por variedad.
 
 ---
@@ -154,7 +154,7 @@ python main.py --tuning prod --varieties POP --registry-stage Staging      # reg
 | `prod`    | 60  | 30 | 5 × 3 | 330  | ~1.5-2.5 h  |
 | `prod_xl` | 100 | 50 | 6 × 3 | 650  | ~5-6 h      |
 
-\* sobre 10 073 filas, **POR BACKEND**. El pipeline entrena XGB + LGB + GPB siempre,
+\* sobre 10 073 filas, **POR BACKEND**. El pipeline entrena XGB + LGB siempre,
 así que el wallclock real es ~2× los valores arriba. Con `--parallel-varieties N`
 el wallclock por job se acerca a `total / N` si hay cores suficientes.
 
@@ -227,7 +227,7 @@ ml_training/
     │   └── lag_features.py                  # add_lag_features (~35 features rolling/seasonal/ratios) — invocado desde data_loader.py
     ├── pipeline/build_pipeline.py           # missing_flags → imputer → outliers → features → variance_filter
     ├── step_04_train/
-    │   ├── registry.py                      # BACKEND_REGISTRY: lista los backends entrenables (XGB, LGB, GPB)
+    │   ├── registry.py                      # BACKEND_REGISTRY: lista los backends entrenables (XGB, LGB)
     │   ├── model_xgb.py                     # get_xgb_model() — XGBRegressor envuelto en TTR (objective=reg:absoluteerror, MAE nativo)
     │   ├── model_lgb.py                     # get_lgb_model() — LGBMRegressor envuelto en TTR (objective=regression_l1, MAE nativo)
     │   ├── search_spaces.py                 # Espacios Optuna por backend (registry extensible)

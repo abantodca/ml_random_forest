@@ -98,7 +98,19 @@ TARGET: str = "KG/JR_H"
 NUMERIC_FEATURES: list[str] = ["KG/HA", "%INDUS", "DPC", "P/BAYA", "HA", "DIA_COSECHA"]
 
 # Categoricas a one-hot
-CATEGORICAL_FEATURES: list[str] = ["FORMATO", "FUNDO"]
+# Categoricas EXTRA (opt-in via ENABLE_EXTRA_CATEGORICALS=1): CALIBRE y TIPO DE
+# COSECHA llevan senal predictiva que el schema base ignora -- ICC residual
+# ~11% / ~8% del target TRAS features+lag (A/B en POP: -1.58 pp de MAPE). Ayudan
+# a LGB y XGB por igual. OFF por defecto porque al activarlas el TRAINING_FILE
+# canonico DEBE traer esas columnas (data_loader valida RAW_FEATURE_COLUMNS y
+# falla si faltan). DESCRIPCION LAB es un tercer lever opcional (ICC residual ~6%).
+_EXTRA_CATEGORICALS: list[str] = ["CALIBRE", "TIPO DE COSECHA"]
+_ENABLE_EXTRA_CATEGORICALS: bool = os.environ.get(
+    "ENABLE_EXTRA_CATEGORICALS", ""
+).strip().lower() in ("1", "true", "yes", "on")
+CATEGORICAL_FEATURES: list[str] = ["FORMATO", "FUNDO"] + (
+    _EXTRA_CATEGORICALS if _ENABLE_EXTRA_CATEGORICALS else []
+)
 
 # Columna de fecha (se transforma a derivadas ciclicas en FeatureGenerator)
 DATE_COLUMN: str = "FECHA"
@@ -237,14 +249,14 @@ OOF_MAPE_TIE_TOLERANCE: float = 0.5
 # Tuning profiles (presupuesto de Optuna: cuantos trials, cuantos folds).
 # NO confundir con entornos (local vs aws): el tuning es ortogonal al entorno.
 #
-# Tiempo estimado por variedad (~10k filas) ENTRENANDO LOS 3 BACKENDS
-# (gpb + lgb + xgb). gpb domina ~60% del wall-time: su componente GP
-# (efectos aleatorios) no paraleliza. Medido en dev/POP 2026-06-15;
-# prod/prod_xl escalados por nº de trials (~4.7x / ~9.3x dev):
-#   smoke   : ~3-5 min    (humo; 5 trials, NO registra)
-#   dev     : ~75-80 min  (gpb ~50m + lgb ~12m + xgb ~18m)
-#   prod    : ~5-7 h      (modelo a promover; 60 trials, 5 outer folds)
-#   prod_xl : ~11-15 h    (overnight; 100 trials, 6 outer folds)
+# Tiempo estimado por variedad (~10k filas) ENTRENANDO LOS 2 BACKENDS
+# (lgb + xgb). Medido en dev/POP; prod/prod_xl escalados por nº de trials.
+# (Aproximado: los tiempos bajaron ~60% al retirar un tercer backend de
+# efectos mixtos cuyo componente no paralelizaba y dominaba el wall-time.)
+#   smoke   : ~1-2 min    (humo; 5 trials, NO registra)
+#   dev     : ~30 min     (lgb ~12m + xgb ~18m)
+#   prod    : ~2-3 h      (modelo a promover; 60 trials, 5 outer folds)
+#   prod_xl : ~4-6 h      (overnight; 100 trials, 6 outer folds)
 TUNING_PROFILES: dict[str, dict[str, int]] = {
     "smoke": {
         "n_trials": 5,
@@ -272,14 +284,11 @@ TUNING_PROFILES: dict[str, dict[str, int]] = {
     },
 }
 # Override de presupuesto POR BACKEND (fraccion del perfil de tuning, aplicado
-# a n_trials/final_trials/outer_folds; inner_folds queda intacto). gpb es el
-# backend mas lento (componente GP no paraleliza) y NUNCA gana el campeonato:
-# pierde por MAPE OOF incluso a presupuesto JUSTO (validado en
-# scripts/experiments/lgb_vs_gpb_control.py y en 2 corridas dev). Se corre como
-# backend de REFERENCIA a presupuesto reducido para no inflar el wall-time
-# (~3.5-4h gpb full en prod -> ~2h). lgb/xgb (candidatos reales) van completos.
-# Vaciar el dict ({}) para volver a paridad total entre los 3 backends.
-BACKEND_BUDGET_FRACTION: dict[str, float] = {"gpb": 0.5}
+# a n_trials/final_trials/outer_folds; inner_folds queda intacto). Mecanismo
+# generico para correr algun backend a presupuesto reducido si hiciera falta
+# (p.ej. uno mucho mas lento que se quiera como referencia). Vacio = paridad
+# total entre backends (default actual: lgb y xgb corren a perfil completo).
+BACKEND_BUDGET_FRACTION: dict[str, float] = {}
 
 DEFAULT_TUNING: str = "dev"
 
@@ -321,6 +330,20 @@ OOF_ENSEMBLE_K: int = 5
 # Valores razonables para activar: 0.5-1.0.
 OPTUNA_OBJECTIVE_STD_PENALTY: float = float(
     os.environ.get("OPTUNA_OBJECTIVE_STD_PENALTY", "0.0")
+)
+
+# Penalizacion por GAP train->val en el objective de Optuna (anti-overfit del
+# tuning): score = mean(MAE_val) + std_penalty + lambda * mean(max(0, MAE_val - MAE_train)).
+# Con lambda>0, TPE EVITA configs que memorizan el train (gap alto) aunque tengan
+# buen MAE_val — exactamente las que luego falla el gate de gap del campeon
+# (select_champion). Es el lever honesto para que un backend de capacidad abierta
+# (p.ej. XGB, que quedo descalificado con gap_rel=0.42>0.40) tune hacia
+# GENERALIZACION en vez de hacia el gate por construccion: NO relaja el gate, hace
+# que el tuning lo respete. Default 0.0 = comportamiento historico bit-identico
+# (no calcula el gap, sin costo extra). Valores razonables para activar: 0.3-1.0.
+# Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
+OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(
+    os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0")
 )
 
 # Sample weights por densidad del target (compute_sample_weights).
@@ -453,8 +476,15 @@ IMPUTER_GROUP_MEDIAN: bool = _env_bool("IMPUTER_GROUP_MEDIAN", False)
 #     actua como mejor imputacion implicita de su 39% NaN.
 ENABLE_FEATURE_LAGS: bool = _env_bool("ENABLE_FEATURE_LAGS", False)
 # ENABLE_TARGET_VOLATILITY: KG_JR_H_std_FF_30 (std rolling shift(1) del
-#     TARGET). Hoy solo existe la de KG/HA; "cuan predecible es el grupo"
-#     es la senal que falta en el quintil bajo.
+#     TARGET). Complementa KG_HA_std_FF_30 con la dispersion del target
+#     directo por grupo -- como un FUNDO/FORMATO modula su varianza (p.ej.
+#     A9/GRANEL son mas dispersos). Es el modo en que un arbol (que predice
+#     la mediana) aprovecha la heterocedasticidad por grupo. Computado
+#     shift(1) + rolling por fold -> CV-safe, sin leakage.
+#     OPT-IN (default OFF): el A/B (-0.41 pp) fue sobre un modelo proxy, NO el
+#     pipeline de produccion. Toca el feature set del CAMPEON (LGB), asi que
+#     NO se adopta como default sin validar que MEJORA el 14.36% actual.
+#     Activar con ENABLE_TARGET_VOLATILITY=1 y comparar el MAPE OOF en prod_xl.
 ENABLE_TARGET_VOLATILITY: bool = _env_bool("ENABLE_TARGET_VOLATILITY", False)
 # ENABLE_SEASONAL_2Y: lag estacional a 730d +/-15d (alternancia bienal).
 ENABLE_SEASONAL_2Y: bool = _env_bool("ENABLE_SEASONAL_2Y", False)
@@ -552,11 +582,6 @@ REGISTER_ENABLED: bool = _env_bool("REGISTER_ENABLED", True)
 # ---------------------------------------------------------------------------
 REPORT_PROJECT_NAME: str = "Pronostico de productividad de cosecha (POP)"
 REPORT_BUSINESS_UNIT: str = "Operaciones Agricolas"
-REPORT_TARGET_LABEL: str = "kg por jornal-hora"
-
-# Umbrales semaforo del reporte (sobre R2 mean del nested CV)
-REPORT_R2_GOOD: float = 0.85  # >= verde / "Excelente"
-REPORT_R2_WARN: float = 0.70  # >= amarillo / "Aceptable", < rojo / "Insuficiente"
 
 # Targets gerenciales que se renderizan como gauges en el HTML.
 # Mover la aguja por encima/debajo de estos valores cambia el color del gauge.

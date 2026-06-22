@@ -20,6 +20,14 @@ _BACKEND_SPECIFIC = dict(
     verbosity=0,
     tree_method="hist",
     objective="reg:absoluteerror",
+    # Metrica de EARLY STOPPING EXPLICITA = MAE, igual que lgb (eval_metric="l1").
+    # Con objective="reg:absoluteerror" el default de XGBoost YA es 'mae' (sonda
+    # xgboost 3.2.0: best_iteration identico con/sin este flag), pero fijarlo
+    # explicito (a) blinda ante un cambio de default en futuras versiones y
+    # (b) deja el corte del boosting alineado con la metrica de seleccion del
+    # campeon (MAE de Optuna / MAPE OOF), igual de visible que en lgb. En XGB
+    # >=2.0 eval_metric es parametro del CONSTRUCTOR (no de fit).
+    eval_metric="mae",
     # n_estimators NO se tunea (rev. 7): techo alto + early stopping interno
     # (EarlyStoppingXGBRegressor) decide el corte real por fold/trial.
     n_estimators=N_ESTIMATORS_MAX,

@@ -21,10 +21,6 @@ class ApiClient:
         self.timeout_write = cfg.timeout_write
         self.timeout_batch = cfg.timeout_batch
 
-    @property
-    def base_url(self) -> str:
-        return self._base_url
-
     # ---- Métodos de conveniencia ----------------------------------------
 
     def get(self, path: str, *, timeout: int, params: dict | None = None) -> dict:

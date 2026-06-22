@@ -163,8 +163,15 @@ def _objective(
     es el default y compensa el sesgo 'regresion a la media' de los
     arboles).
     """
+    from src.config import (
+        OPTUNA_OBJECTIVE_GAP_PENALTY,
+        OPTUNA_OBJECTIVE_STD_PENALTY,
+    )
+    track_gap = OPTUNA_OBJECTIVE_GAP_PENALTY > 0.0
+
     params = suggest_full_params(trial, model_type)
     scores: list[float] = []
+    gaps: list[float] = []
     for tr_i, te_i in inner_cv.split(X_train, strat_label_train):
         Xt = X_train.iloc[tr_i]
         Xv = X_train.iloc[te_i]
@@ -174,14 +181,24 @@ def _objective(
         pipe_local.set_params(**params)
         sw_fold = index_or_none(sample_weights_train, tr_i)
         fit_with_optional_sample_weight(pipe_local, Xt, yt, sample_weight=sw_fold)
-        pred = pipe_local.predict(Xv)
-        scores.append(float(mean_absolute_error(yv, pred)))
+        val_mae = float(mean_absolute_error(yv, pipe_local.predict(Xv)))
+        scores.append(val_mae)
+        if track_gap:
+            # Costo extra (un predict del train) SOLO si la penalizacion esta
+            # activa: gap = cuanto peor generaliza vs lo que memorizo del train.
+            train_mae = float(mean_absolute_error(yt, pipe_local.predict(Xt)))
+            gaps.append(max(0.0, val_mae - train_mae))
     # Penalizacion opcional por VARIANZA entre inner folds (robustez del
     # tuning, 2026-06-13): con lambda>0 TPE prefiere configs ESTABLES sobre
     # configs con buen promedio pero alta dispersion (que generalizan peor).
     # Default 0.0 = bit-identico al comportamiento historico (solo media).
-    from src.config import OPTUNA_OBJECTIVE_STD_PENALTY
     penalty = OPTUNA_OBJECTIVE_STD_PENALTY * float(np.std(scores))
+    # Penalizacion opcional por GAP train->val (anti-overfit; ver config). Con
+    # lambda>0 TPE evita configs que memorizan el train aunque tengan buen
+    # MAE_val — las mismas que luego falla el gate del campeon. Default 0.0
+    # (track_gap=False) -> sin costo ni cambio de comportamiento.
+    if track_gap and gaps:
+        penalty += OPTUNA_OBJECTIVE_GAP_PENALTY * float(np.mean(gaps))
     return float(np.mean(scores)) + penalty
 
 
