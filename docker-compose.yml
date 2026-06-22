@@ -38,6 +38,11 @@ services:
       AWS_PROFILE: ${AWS_PROFILE:-default}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
+      # Se valida en el `command` (runtime), NO con `${VAR:?}` en la interpolacion.
+      # `:?` falla al PARSEAR todo el compose -> rompe hasta `task build`/`eda` que
+      # ni tocan mlflow. `:-` deja pasar el parseo y el guard de abajo corta solo
+      # al arrancar mlflow, con un mensaje claro. Blindaje: missing var != build roto.
+      S3_MLFLOW_BUCKET: ${S3_MLFLOW_BUCKET:-}
     volumes:
       - ~/.aws:/aws:ro
     # Artifacts en modo PROXY (recomendado): el server es el único que toca S3.
@@ -49,11 +54,13 @@ services:
     # Requiere que el server alcance S3: revisar AWS_DEFAULT_REGION (= región
     # real del bucket) y las creds montadas en ~/.aws.
     command: >
-      sh -c "mlflow server
+      sh -c "test -n \"$${S3_MLFLOW_BUCKET}\" ||
+      { echo 'ERROR: falta S3_MLFLOW_BUCKET. Definila en .env (task local:ensure-buckets).' >&2; exit 1; };
+      mlflow server
       --host 0.0.0.0 --port 5000
       --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
       --backend-store-uri postgresql://mlflow:$${POSTGRES_PASSWORD}@postgres:5432/mlflow
-      --artifacts-destination s3://${S3_MLFLOW_BUCKET:?Set S3_MLFLOW_BUCKET in .env}/artifacts
+      --artifacts-destination s3://$${S3_MLFLOW_BUCKET}/artifacts
       --serve-artifacts"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health',timeout=3).status==200 else 1)"]
@@ -80,6 +87,38 @@ services:
       - "127.0.0.1:8080:80"
     logging: *default-logging
 
+  # ── Reconciliador S3 → backend MLflow (one-shot, idempotente) ─────────────
+  # El backend (Postgres) es la ÚNICA fuente de verdad de QUÉ runs/modelos
+  # existen; MLflow nunca escanea S3 para descubrirlos. Si `pg-data` se borra
+  # (p.ej. `docker compose down -v`), se pierde TODO el metadata aunque los
+  # artifacts sigan en S3 → cero modelos, API sin `rnd-forest-*` que cargar.
+  # Este job reconstruye una sola vez el run campeón de cada variedad desde S3
+  # y registra el modelo; si ya está registrado, no hace nada (los entrenamientos
+  # nuevos se registran como siempre). Reusa la imagen `mlflow` (cliente MLflow
+  # + boto3 + creds ~/.aws). `api` espera su salida exitosa (service_completed).
+  # Best-effort: aun si falla por variedad, exit 0 para no bloquear el arranque.
+  mlflow-init:
+    build:
+      context: .
+      dockerfile: docker/mlflow/Dockerfile
+    restart: "no"
+    depends_on:
+      mlflow: { condition: service_healthy }
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      S3_MLFLOW_BUCKET: ${S3_MLFLOW_BUCKET:-}
+      MODEL_REGISTRY_PREFIX: ${MODEL_REGISTRY_PREFIX:-rnd-forest-}
+      MLFLOW_EXPERIMENT_PREFIX: ${MLFLOW_EXPERIMENT_PREFIX:-}
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - ~/.aws:/aws:ro
+      - ./scripts:/scripts:ro
+    entrypoint: ["python", "/scripts/mlflow_reconcile.py"]
+    logging: *default-logging
+
   # ── API (FastAPI) ────────────────────────────────────────────────────────
   # Sirve los modelos rnd-forest-* registrados en MLflow y persiste pronósticos
   # en la base `forecasts`. Comparte el `src/` raíz vía contexto de build = raíz.
@@ -92,6 +131,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       mlflow:   { condition: service_healthy }
+      mlflow-init: { condition: service_completed_successfully }
     environment:
       DATABASE_URL: postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/forecasts
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -167,7 +207,10 @@ services:
       AWS_CONFIG_FILE: /aws/config
       AWS_PROFILE: ${AWS_PROFILE:-default}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-      S3_ARTIFACTS_BUCKET: ${S3_ARTIFACTS_BUCKET:?Set S3_ARTIFACTS_BUCKET in .env}
+      # Vacio = no-op: main.py hace `if S3_ARTIFACTS_BUCKET:` antes de sync_to_s3
+      # (modo local sin S3). No usar `${VAR:?}`: rompe el parseo de TODO el compose
+      # — hasta `task build`/`data:split`/`eda` que ni suben artifacts. Ver mlflow arriba.
+      S3_ARTIFACTS_BUCKET: ${S3_ARTIFACTS_BUCKET:-}
       S3_ARTIFACTS_PREFIX: artifacts
       S3_REPORTS_PREFIX: reports
       # Hydrate paritario con AWS Batch (opcional en Tramo Local).
