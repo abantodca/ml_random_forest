@@ -24,13 +24,17 @@ vars:
   JOBDEF:        '{{.JOBDEF        | default (printf "%s-trainer" .PROJECT)}}'
   # QUEUE_SPOT / QUEUE_OD se inyectan desde el Taskfile raiz (fuente unica de la
   # convencion de nombres, compartida con ops:). Ver includes en Taskfile.yml.
-  TUNING:        '{{.TUNING        | default "prod"}}'
+  # TUNING NO va aqui: los vars globales se COMPARTEN entre el Taskfile raiz y
+  # los includes, asi que un default global pisaria el del root (y viceversa).
+  # Se define a nivel-tarea en `train` (default "prod" para Batch).
   WAIT:          '{{.WAIT          | default "true"}}'
 
 tasks:
 
   train:
     desc: "Submit via Lambda dispatcher. Vars: VARIETIES=POP[,VENTURA] (REQ), TUNING, WAIT"
+    vars:
+      TUNING: '{{.TUNING | default "prod"}}'
     requires:
       vars: [VARIETIES]
     cmds:

@@ -22,9 +22,9 @@ includes:
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
 
 vars:
-  # Default prod_xl (overnight, ~4-6h/variedad): el perfil mas exhaustivo.
-  # Override con TUNING=smoke|dev|prod para corridas mas cortas.
-  TUNING:    '{{.TUNING    | default "prod_xl"}}'
+  # TUNING se define a nivel-tarea en `train` (default prod_xl), NO aqui: los
+  # vars globales se COMPARTEN con los includes (tasks/batch.yml) y un default
+  # global de un lado pisaria al del otro (batch usa default "prod").
   VARIETIES: '{{.VARIETIES | default "POP"}}'
   PARALLEL:  '{{.PARALLEL  | default "1"}}'
   PROJECT:   '{{.PROJECT   | default "ml-training"}}'
@@ -153,6 +153,9 @@ tasks:
     desc: "Paso 3: entrena + genera HTML estatico en reports/. Vars: VARIETIES TUNING PARALLEL SEED"
     deps: [_up]
     vars:
+      # Default prod_xl (overnight, el mas exhaustivo). A nivel-tarea, no global:
+      # evita el choque de vars compartidas con tasks/batch.yml (que usa "prod").
+      TUNING: '{{.TUNING | default "prod_xl"}}'
       GIT_SHA:   { sh: bash scripts/metadata.sh git-sha }
       GIT_DIRTY: { sh: bash scripts/metadata.sh git-dirty }
       DATA_SHA:  { sh: bash scripts/metadata.sh data-sha }
