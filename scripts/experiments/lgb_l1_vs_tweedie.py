@@ -4,7 +4,7 @@
 # el error absoluto escala con el target. Tweedie (1<p<2) y Gamma (p=2)
 # modelan justamente Var[y]∝mean^p, sobre el target CRUDO (sin log1p).
 #
-# Mismo harness que lgb_vs_gpb_control.py: 5 folds stratified seed42, mismo
+# Harness: 5 folds stratified seed42, mismo
 # preproc por fold, mismo presupuesto (20 trials inner en fold 0), decision
 # por business MAPE (la metrica del campeon). Brazos:
 #   A_l1_log   : LightGBM regression_l1 + log1p+cap  (config del campeon)

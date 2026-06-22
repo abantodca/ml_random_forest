@@ -188,58 +188,6 @@ def suggest_lgb_params(trial: optuna.Trial) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# GPBoost (GBDT + efectos aleatorios cruzados FUNDO x FORMATO)
-# ---------------------------------------------------------------------------
-
-
-def suggest_gpb_params(trial: optuna.Trial) -> dict[str, object]:
-    """Search space rev. 1 (2026-06-13): misma filosofia que XGB rev.7 / LGB rev.8.
-
-    Capacidad abierta + control de overfitting FUERA de la grilla (early
-    stopping interno con neg-log-likelihood del holdout, CV outer y gate de
-    gap del campeon). Los arboles de GPBoost son LightGBM, asi que la grilla
-    espeja a `suggest_lgb_params` con dos diferencias impuestas por el
-    algoritmo (sonda 2026-06-13, gpboost 1.6.7):
-
-    - SIN bagging (`bagging_fraction`/`subsample`): GPBoost lo prohibe con
-      gp_model (el GP necesita ver todas las filas por iteracion).
-      `feature_fraction` queda como unica fuente de aleatorizacion.
-    - SIN `extra_trees`/`path_smooth`: palancas LGB-especificas no
-      verificadas en el fork; se prefiere un espacio menor y bien soportado
-      (menos dimensiones tambien rinde mas con el mismo presupuesto TPE).
-
-    Los efectos aleatorios NO se tunean: GPBoost estima las varianzas de
-    los interceptos por maxima verosimilitud dentro de cada fit.
-    """
-    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, 8)
-    num_leaves_max = max(7, min(2 ** max_depth - 1, 64))
-    return {
-        "regressor__regressor__max_depth": max_depth,
-        "regressor__regressor__num_leaves": trial.suggest_int(
-            "regressor__regressor__num_leaves", 7, num_leaves_max
-        ),
-        "regressor__regressor__learning_rate": trial.suggest_float(
-            "regressor__regressor__learning_rate", 3e-3, 0.3, log=True
-        ),
-        "regressor__regressor__min_data_in_leaf": trial.suggest_int(
-            "regressor__regressor__min_data_in_leaf", 5, 100, log=True
-        ),
-        "regressor__regressor__min_split_gain": trial.suggest_float(
-            "regressor__regressor__min_split_gain", 1e-3, 5.0, log=True
-        ),
-        "regressor__regressor__lambda_l1": trial.suggest_float(
-            "regressor__regressor__lambda_l1", 1e-3, 20.0, log=True
-        ),
-        "regressor__regressor__lambda_l2": trial.suggest_float(
-            "regressor__regressor__lambda_l2", 1e-3, 25.0, log=True
-        ),
-        "regressor__regressor__feature_fraction": trial.suggest_float(
-            "regressor__regressor__feature_fraction", 0.5, 1.0
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
 # `suggest_full_params`: combina preprocesador + backend.
 #
 # El registry de backends vive en `step_04_train/registry.py` (single source

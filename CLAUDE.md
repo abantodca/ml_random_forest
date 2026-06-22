@@ -9,11 +9,13 @@ jornal-hour) per crop **variety**. Three deployables share one ML codebase (`src
 
 | Piece | Location | Role |
 |---|---|---|
-| Trainer | `src/` + `main.py` | trains XGB + LGB + GPBoost per variety, picks a champion, registers `rnd-forest-<variety>` in MLflow |
+| Trainer | `src/` + `main.py` | trains XGB + LGB per variety, picks a champion, registers `rnd-forest-<variety>` in MLflow |
 | API | `api/` (FastAPI) | serves the registered models + persists forecasts to Postgres |
 | UI | `ui/` (Streamlit) | management dashboard that consumes the API |
 
-The repo is historically named `ml_random_forest` but trains **XGBoost + LightGBM + GPBoost**, not Random Forest.
+The repo is historically named `ml_random_forest` but trains **XGBoost + LightGBM**, not Random Forest.
+(A third backend, GPBoost/mixed-effects, was evaluated and removed — see #N in README: the data
+has no group structure that random effects capture beyond the per-group lag features.)
 
 Code comments and docs are written in **Spanish** — match that when editing. In docs/comments
 reference sections as `#N`, not `§N`.

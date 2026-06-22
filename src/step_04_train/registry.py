@@ -29,11 +29,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from src.step_04_train.model_gpb import get_gpb_model
 from src.step_04_train.model_lgb import get_lgb_model
 from src.step_04_train.model_xgb import get_xgb_model
 from src.step_04_train.search_spaces import (
-    suggest_gpb_params,
     suggest_lgb_params,
     suggest_xgb_params,
 )
@@ -56,10 +54,6 @@ class ModelBackend:
 BACKEND_REGISTRY: dict[str, ModelBackend] = {
     "xgb": ModelBackend("xgb", get_xgb_model, suggest_xgb_params),
     "lgb": ModelBackend("lgb", get_lgb_model, suggest_lgb_params),
-    # GPBoost: GBDT (fork de LightGBM) + efectos aleatorios cruzados
-    # FUNDO x FORMATO. Compite bajo las mismas reglas (ADR-002): mismo
-    # nested CV, mismo presupuesto Optuna, mismo gate de gap.
-    "gpb": ModelBackend("gpb", get_gpb_model, suggest_gpb_params),
 }
 
 

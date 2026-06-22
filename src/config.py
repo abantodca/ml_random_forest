@@ -237,14 +237,14 @@ OOF_MAPE_TIE_TOLERANCE: float = 0.5
 # Tuning profiles (presupuesto de Optuna: cuantos trials, cuantos folds).
 # NO confundir con entornos (local vs aws): el tuning es ortogonal al entorno.
 #
-# Tiempo estimado por variedad (~10k filas) ENTRENANDO LOS 3 BACKENDS
-# (gpb + lgb + xgb). gpb domina ~60% del wall-time: su componente GP
-# (efectos aleatorios) no paraleliza. Medido en dev/POP 2026-06-15;
-# prod/prod_xl escalados por nº de trials (~4.7x / ~9.3x dev):
-#   smoke   : ~3-5 min    (humo; 5 trials, NO registra)
-#   dev     : ~75-80 min  (gpb ~50m + lgb ~12m + xgb ~18m)
-#   prod    : ~5-7 h      (modelo a promover; 60 trials, 5 outer folds)
-#   prod_xl : ~11-15 h    (overnight; 100 trials, 6 outer folds)
+# Tiempo estimado por variedad (~10k filas) ENTRENANDO LOS 2 BACKENDS
+# (lgb + xgb). Medido en dev/POP; prod/prod_xl escalados por nº de trials.
+# (Aproximado: los tiempos bajaron ~60% al retirar un tercer backend de
+# efectos mixtos cuyo componente no paralelizaba y dominaba el wall-time.)
+#   smoke   : ~1-2 min    (humo; 5 trials, NO registra)
+#   dev     : ~30 min     (lgb ~12m + xgb ~18m)
+#   prod    : ~2-3 h      (modelo a promover; 60 trials, 5 outer folds)
+#   prod_xl : ~4-6 h      (overnight; 100 trials, 6 outer folds)
 TUNING_PROFILES: dict[str, dict[str, int]] = {
     "smoke": {
         "n_trials": 5,
@@ -272,14 +272,11 @@ TUNING_PROFILES: dict[str, dict[str, int]] = {
     },
 }
 # Override de presupuesto POR BACKEND (fraccion del perfil de tuning, aplicado
-# a n_trials/final_trials/outer_folds; inner_folds queda intacto). gpb es el
-# backend mas lento (componente GP no paraleliza) y NUNCA gana el campeonato:
-# pierde por MAPE OOF incluso a presupuesto JUSTO (validado en
-# scripts/experiments/lgb_vs_gpb_control.py y en 2 corridas dev). Se corre como
-# backend de REFERENCIA a presupuesto reducido para no inflar el wall-time
-# (~3.5-4h gpb full en prod -> ~2h). lgb/xgb (candidatos reales) van completos.
-# Vaciar el dict ({}) para volver a paridad total entre los 3 backends.
-BACKEND_BUDGET_FRACTION: dict[str, float] = {"gpb": 0.5}
+# a n_trials/final_trials/outer_folds; inner_folds queda intacto). Mecanismo
+# generico para correr algun backend a presupuesto reducido si hiciera falta
+# (p.ej. uno mucho mas lento que se quiera como referencia). Vacio = paridad
+# total entre backends (default actual: lgb y xgb corren a perfil completo).
+BACKEND_BUDGET_FRACTION: dict[str, float] = {}
 
 DEFAULT_TUNING: str = "dev"
 
