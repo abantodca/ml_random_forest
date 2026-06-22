@@ -24,7 +24,6 @@ reference sections as `#N`, not `§N`.
   nested-CV, anti-overfitting, MLflow conventions, outputs. This is the deepest source.
 - **`GUIA_MLOPS_AWS_V2.md`** — step-by-step runbook for local + AWS stand-up, and the **ADRs**
   (ADR-001/002/003/004 referenced throughout the code).
-- **`REPORTE_COSTOS_GERENCIAL.md`** — cost analysis (scheduler on/off economics).
 
 ## Commands
 

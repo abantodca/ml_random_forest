@@ -59,13 +59,6 @@ def render_drift_panel(
         _render_feature_table(drift)
 
 
-def render_drift_summary_inline(drift: DriftReport | None) -> None:
-    """Versión compacta para listas: solo gauge + verdict (sin tabla)."""
-    if drift is None:
-        return
-    _render_summary(drift)
-
-
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------

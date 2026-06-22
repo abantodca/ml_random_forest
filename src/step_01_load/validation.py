@@ -46,11 +46,6 @@ _NUMERIC_RANGES: dict = {
 }
 
 
-class SchemaError(ValueError):
-    """Error de validacion de schema. Heredamos de ValueError para que sea
-    capturable como un input invalido del usuario, no un bug interno."""
-
-
 def _check_dtypes(df: pd.DataFrame) -> list[str]:
     """Devuelve lista de problemas de tipo detectados."""
     issues: list[str] = []

@@ -172,14 +172,6 @@ class DriftService:
             )
             return None
 
-    def invalidate(self, variety: str | None = None) -> None:
-        """Limpia el cache (todo o por variedad). MLflowService.reload_models
-        puede llamar esto para forzar recomputo tras nuevas versiones."""
-        if variety is None:
-            self._cache.clear()
-        else:
-            self._cache.pop(variety, None)
-
     # ------------------------------------------------------------------
     # Construcción de baseline (lazy, una vez por (variety, run_id))
     # ------------------------------------------------------------------
