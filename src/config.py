@@ -565,11 +565,6 @@ REGISTER_ENABLED: bool = _env_bool("REGISTER_ENABLED", True)
 # ---------------------------------------------------------------------------
 REPORT_PROJECT_NAME: str = "Pronostico de productividad de cosecha (POP)"
 REPORT_BUSINESS_UNIT: str = "Operaciones Agricolas"
-REPORT_TARGET_LABEL: str = "kg por jornal-hora"
-
-# Umbrales semaforo del reporte (sobre R2 mean del nested CV)
-REPORT_R2_GOOD: float = 0.85  # >= verde / "Excelente"
-REPORT_R2_WARN: float = 0.70  # >= amarillo / "Aceptable", < rojo / "Insuficiente"
 
 # Targets gerenciales que se renderizan como gauges en el HTML.
 # Mover la aguja por encima/debajo de estos valores cambia el color del gauge.

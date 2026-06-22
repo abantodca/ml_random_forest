@@ -110,6 +110,11 @@ tasks:
       - docker compose up -d postgres mlflow reports api ui
       - task: _print_urls
 
+  mlflow:reconcile:
+    desc: "Reconstruye en el backend MLflow los modelos huerfanos que solo viven en S3 (idempotente). Args: DRY=1 para solo reportar. Corre automatico en cada `up` via el servicio mlflow-init."
+    cmds:
+      - docker compose run --rm --no-deps mlflow-init {{if eq .DRY "1"}}--dry-run{{end}}
+
   data:split:
     desc: "Paso 1: genera data/training/DB-HISTORICA.xlsx desde el Excel historico"
     cmds:

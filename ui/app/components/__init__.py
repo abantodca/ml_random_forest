@@ -9,10 +9,8 @@ modificaciones internas de un grupo no afecten al resto.
 
 from app.components.css import inject_css
 from app.components.sidebar import render_sidebar
-from app.components.theme import THEME
 
 __all__ = [
     "render_sidebar",
     "inject_css",
-    "THEME",
 ]

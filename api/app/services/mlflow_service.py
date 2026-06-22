@@ -251,25 +251,6 @@ class MLflowService:
     # Predicciones
     # ========================================================================
 
-    async def predict(
-        self,
-        variety: str,
-        features_df: pd.DataFrame,
-    ) -> list[float]:
-        """Predice KGHORA dado el DataFrame ya enriquecido (40 columnas).
-
-        El feature engineering (lags) NO se hace aqui: el caller
-        construye el DataFrame con `FeaturePipeline.build_features` y
-        lo pasa listo. Esa separacion mantiene a `MLflowService` enfocado
-        en su responsabilidad (carga + prediccion contra MLflow) y deja
-        el feature engineering en su propio servicio testeable.
-
-        Raises:
-            ModelNotAvailableError: si el modelo no esta cargado.
-            PredictionError: si la inferencia falla.
-        """
-        return await self._predict_df(variety, features_df)
-
     async def predict_with_std(
         self,
         variety: str,
@@ -414,46 +395,6 @@ class MLflowService:
     # ========================================================================
     # Métodos Privados
     # ========================================================================
-
-    async def _predict_df(self, variety: str, df: pd.DataFrame) -> list[float]:
-        """
-        Ejecuta predicción sobre un DataFrame en un thread pool.
-
-        `_get_or_load` puede invocar `mlflow.pyfunc.load_model` (descarga de
-        red + deserialización pickle) si el modelo aún no está en cache. Esa
-        operación es bloqueante, así que se delega al threadpool junto con la
-        inferencia — ambos pasos comparten el mismo `run_in_executor` para
-        evitar un segundo round-trip de scheduling.
-
-        En el caso caliente (modelo ya cacheado) `_get_or_load` solo hace un
-        dict lookup bajo el RLock, que es insignificante.
-
-        Raises:
-            ModelNotAvailableError: Si el modelo no está disponible
-            PredictionError: Si falla la predicción
-        """
-        loop = asyncio.get_running_loop()
-        try:
-            predictions = await loop.run_in_executor(
-                None, self._get_and_predict, variety, df
-            )
-            return [float(p) for p in predictions]
-        except (ModelNotAvailableError, PredictionError):
-            raise
-        except Exception as exc:
-            raise PredictionError(variety, str(exc)) from exc
-
-    def _get_and_predict(self, variety: str, df: pd.DataFrame):
-        """Obtiene (o carga) el modelo y predice. Diseñado para correr en el
-        threadpool de `_predict_df`: combina la carga potencialmente bloqueante
-        con la inferencia en un solo `run_in_executor`, evitando que cualquiera
-        de los dos congele el event loop.
-        """
-        model = self._get_or_load(variety)
-        try:
-            return model.predict(df)
-        except Exception as exc:
-            raise PredictionError(variety, str(exc)) from exc
 
     def _get_or_load(self, variety: str) -> Any:
         """Obtiene modelo del cache o lo carga si no existe.

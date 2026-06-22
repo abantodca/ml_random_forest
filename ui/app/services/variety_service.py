@@ -36,9 +36,6 @@ class VarietyService:
         detail_map = self._fetch_details(names_with_model)
         return [detail_map[name] for name in names_with_model if name in detail_map]
 
-    def loaded_names(self) -> list[str]:
-        return [v.name for v in self.list_all() if v.model_loaded]
-
     def get_catalogs(self) -> Catalogs:
         """Trae catálogos cerrados (FORMATO, FUNDO) del backend."""
         data = self._client.get(

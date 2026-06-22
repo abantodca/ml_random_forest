@@ -3,7 +3,6 @@
 from app.components.layout.drift_panel import (
     render_batch_drift_panel,
     render_drift_panel,
-    render_drift_summary_inline,
 )
 from app.components.layout.empty_state import empty_state, empty_state_annotation
 from app.components.layout.header import page_header
@@ -19,6 +18,5 @@ __all__ = [
     "kpi_card",
     "render_batch_drift_panel",
     "render_drift_panel",
-    "render_drift_summary_inline",
     "section_title",
 ]
