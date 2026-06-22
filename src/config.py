@@ -332,6 +332,20 @@ OPTUNA_OBJECTIVE_STD_PENALTY: float = float(
     os.environ.get("OPTUNA_OBJECTIVE_STD_PENALTY", "0.0")
 )
 
+# Penalizacion por GAP train->val en el objective de Optuna (anti-overfit del
+# tuning): score = mean(MAE_val) + std_penalty + lambda * mean(max(0, MAE_val - MAE_train)).
+# Con lambda>0, TPE EVITA configs que memorizan el train (gap alto) aunque tengan
+# buen MAE_val — exactamente las que luego falla el gate de gap del campeon
+# (select_champion). Es el lever honesto para que un backend de capacidad abierta
+# (p.ej. XGB, que quedo descalificado con gap_rel=0.42>0.40) tune hacia
+# GENERALIZACION en vez de hacia el gate por construccion: NO relaja el gate, hace
+# que el tuning lo respete. Default 0.0 = comportamiento historico bit-identico
+# (no calcula el gap, sin costo extra). Valores razonables para activar: 0.3-1.0.
+# Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
+OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(
+    os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0")
+)
+
 # Sample weights por densidad del target (compute_sample_weights).
 # Centralizado aqui para tunear sin tocar codigo. n_bins=10 fija el valor
 # que el caller usaba de facto (antes hardcoded en tuning.py overrideando
