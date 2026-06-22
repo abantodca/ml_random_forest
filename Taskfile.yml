@@ -22,7 +22,9 @@ includes:
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
 
 vars:
-  TUNING:    '{{.TUNING    | default "prod"}}'
+  # Default prod_xl (overnight, ~4-6h/variedad): el perfil mas exhaustivo.
+  # Override con TUNING=smoke|dev|prod para corridas mas cortas.
+  TUNING:    '{{.TUNING    | default "prod_xl"}}'
   VARIETIES: '{{.VARIETIES | default "POP"}}'
   PARALLEL:  '{{.PARALLEL  | default "1"}}'
   PROJECT:   '{{.PROJECT   | default "ml-training"}}'
@@ -85,8 +87,10 @@ tasks:
 
           Ejemplos train (TUNING × VARIETIES × PARALLEL)
             task train VARIETIES=POP TUNING=smoke      ~1 min   sanity
-            task train VARIETIES=POP TUNING=prod       ~2 h     produccion (default)
+            task train VARIETIES=POP                   ~4-6 h   prod_xl (DEFAULT)
+            task train VARIETIES=POP TUNING=prod       ~2 h     produccion
             task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
+          >> TUNING por defecto = prod_xl (overnight, el mas exhaustivo).
 
           Variables (override por CLI · VAR=valor)
             VARIETIES POP|POP,VENTURA|all · TUNING smoke|dev|prod|prod_xl
@@ -154,6 +158,7 @@ tasks:
       DATA_SHA:  { sh: bash scripts/metadata.sh data-sha }
       SEED: '{{.SEED | default "42"}}'
     cmds:
+      - 'echo ">> train: VARIETIES={{.VARIETIES}} TUNING={{.TUNING}} (default prod_xl) SEED={{.SEED}} · backends LGB+XGB"'
       - |
         if [ "{{.DATA_SHA}}" = "missing" ]; then
           echo "ERROR: data/training/DB-HISTORICA.xlsx no existe. Correr 'task data:split' primero."

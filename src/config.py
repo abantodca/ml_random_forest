@@ -479,10 +479,13 @@ ENABLE_FEATURE_LAGS: bool = _env_bool("ENABLE_FEATURE_LAGS", False)
 #     TARGET). Complementa KG_HA_std_FF_30 con la dispersion del target
 #     directo por grupo -- como un FUNDO/FORMATO modula su varianza (p.ej.
 #     A9/GRANEL son mas dispersos). Es el modo en que un arbol (que predice
-#     la mediana) aprovecha la heterocedasticidad por grupo. Default ON tras
-#     A/B en POP (-0.41 pp de MAPE; aporte modesto por correlacion con la de
-#     KG/HA). Computado shift(1) + rolling por fold -> CV-safe, sin leakage.
-ENABLE_TARGET_VOLATILITY: bool = _env_bool("ENABLE_TARGET_VOLATILITY", True)
+#     la mediana) aprovecha la heterocedasticidad por grupo. Computado
+#     shift(1) + rolling por fold -> CV-safe, sin leakage.
+#     OPT-IN (default OFF): el A/B (-0.41 pp) fue sobre un modelo proxy, NO el
+#     pipeline de produccion. Toca el feature set del CAMPEON (LGB), asi que
+#     NO se adopta como default sin validar que MEJORA el 14.36% actual.
+#     Activar con ENABLE_TARGET_VOLATILITY=1 y comparar el MAPE OOF en prod_xl.
+ENABLE_TARGET_VOLATILITY: bool = _env_bool("ENABLE_TARGET_VOLATILITY", False)
 # ENABLE_SEASONAL_2Y: lag estacional a 730d +/-15d (alternancia bienal).
 ENABLE_SEASONAL_2Y: bool = _env_bool("ENABLE_SEASONAL_2Y", False)
 # ENABLE_CALENDAR_EXTRA: armonico 2 de SEMANA + frequency encoding de
