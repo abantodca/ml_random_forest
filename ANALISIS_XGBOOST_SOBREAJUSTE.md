@@ -118,3 +118,31 @@ bit-idéntico (ni siquiera calcula el gap). Aplica a los 3 backends.
   hacia ~14.6-15% (al renunciar a parte del ajuste fino), así que **seguiría sin
   superar a `lgb`** — confirmando, igual que con GPB, que el campeón actual es el
   correcto.
+
+## 7. Revisión 2026-06-22: causa raíz en la grilla (estudio multi-agente)
+
+Un segundo análisis código-a-código (un agente por backend, comparando contra
+LGB como referencia) matizó la conclusión de #6. Hallazgo central: **LGB es la
+plantilla de la que se clonaron las grillas de XGB (rev.7) y GPB (rev.1)** — no
+tres diseños independientes. Y apareció una asimetría estructural concreta:
+
+- **`grow_policy='depthwise'` sin tope de hojas** (`search_spaces.py`, grilla
+  rev.7-8): en ~50% de los trials del TPE el árbol crecía a `2^depth` hojas
+  (hasta ~256 en depth 8) **sin control de ancho**, mientras LGB **siempre**
+  tunea `num_leaves` acotado a `min(2^depth-1, 64)`. Es la asimetría que mejor
+  explica el síntoma (XGB: menor train MAE, mayor gap).
+- El tuning, el early stopping (mismo holdout seed 42, misma métrica MAE) y la
+  limpieza/feature-eng son **simétricos entre XGB y LGB** (verificado línea a
+  línea) → **no** son la causa. XGB no necesita feature engineering distinto.
+
+**Fix aplicado (rev.9, commit `fix(xgb): max_leaves siempre acotado`)**: tunear
+`max_leaves` SIEMPRE, acoplado a depth (`8 .. min(2^depth, 64)`), espejando a
+`suggest_lgb_params`. En XGBoost ≥2.0 `max_leaves` acota el ancho también con
+`depthwise` (sonda 3.2.0: depthwise+max_leaves=16 → 16 hojas; sin él → 72).
+
+> Matiz vs #6: esto **no es gaming del gate**. No relaja la restricción ni
+> recorta la capacidad "anti-gap" (el error de rev.6 que causó subajuste);
+> solo pone el control de ANCHO de XGB a la par del de LGB. Es el lever de
+> causa raíz; el `OPTUNA_OBJECTIVE_GAP_PENALTY` de #5 trata el síntoma. Ambos
+> son ortogonales y robustos para cualquier variedad (el cap se acopla a depth,
+> no a constantes ajustadas a POP).
