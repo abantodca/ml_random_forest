@@ -98,7 +98,19 @@ TARGET: str = "KG/JR_H"
 NUMERIC_FEATURES: list[str] = ["KG/HA", "%INDUS", "DPC", "P/BAYA", "HA", "DIA_COSECHA"]
 
 # Categoricas a one-hot
-CATEGORICAL_FEATURES: list[str] = ["FORMATO", "FUNDO"]
+# Categoricas EXTRA (opt-in via ENABLE_EXTRA_CATEGORICALS=1): CALIBRE y TIPO DE
+# COSECHA llevan senal predictiva que el schema base ignora -- ICC residual
+# ~11% / ~8% del target TRAS features+lag (A/B en POP: -1.58 pp de MAPE). Ayudan
+# a LGB y XGB por igual. OFF por defecto porque al activarlas el TRAINING_FILE
+# canonico DEBE traer esas columnas (data_loader valida RAW_FEATURE_COLUMNS y
+# falla si faltan). DESCRIPCION LAB es un tercer lever opcional (ICC residual ~6%).
+_EXTRA_CATEGORICALS: list[str] = ["CALIBRE", "TIPO DE COSECHA"]
+_ENABLE_EXTRA_CATEGORICALS: bool = os.environ.get(
+    "ENABLE_EXTRA_CATEGORICALS", ""
+).strip().lower() in ("1", "true", "yes", "on")
+CATEGORICAL_FEATURES: list[str] = ["FORMATO", "FUNDO"] + (
+    _EXTRA_CATEGORICALS if _ENABLE_EXTRA_CATEGORICALS else []
+)
 
 # Columna de fecha (se transforma a derivadas ciclicas en FeatureGenerator)
 DATE_COLUMN: str = "FECHA"
@@ -450,9 +462,13 @@ IMPUTER_GROUP_MEDIAN: bool = _env_bool("IMPUTER_GROUP_MEDIAN", False)
 #     actua como mejor imputacion implicita de su 39% NaN.
 ENABLE_FEATURE_LAGS: bool = _env_bool("ENABLE_FEATURE_LAGS", False)
 # ENABLE_TARGET_VOLATILITY: KG_JR_H_std_FF_30 (std rolling shift(1) del
-#     TARGET). Hoy solo existe la de KG/HA; "cuan predecible es el grupo"
-#     es la senal que falta en el quintil bajo.
-ENABLE_TARGET_VOLATILITY: bool = _env_bool("ENABLE_TARGET_VOLATILITY", False)
+#     TARGET). Complementa KG_HA_std_FF_30 con la dispersion del target
+#     directo por grupo -- como un FUNDO/FORMATO modula su varianza (p.ej.
+#     A9/GRANEL son mas dispersos). Es el modo en que un arbol (que predice
+#     la mediana) aprovecha la heterocedasticidad por grupo. Default ON tras
+#     A/B en POP (-0.41 pp de MAPE; aporte modesto por correlacion con la de
+#     KG/HA). Computado shift(1) + rolling por fold -> CV-safe, sin leakage.
+ENABLE_TARGET_VOLATILITY: bool = _env_bool("ENABLE_TARGET_VOLATILITY", True)
 # ENABLE_SEASONAL_2Y: lag estacional a 730d +/-15d (alternancia bienal).
 ENABLE_SEASONAL_2Y: bool = _env_bool("ENABLE_SEASONAL_2Y", False)
 # ENABLE_CALENDAR_EXTRA: armonico 2 de SEMANA + frequency encoding de
