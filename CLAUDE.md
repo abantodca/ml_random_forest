@@ -26,6 +26,10 @@ reference sections as `#N`, not `§N`.
   nested-CV, anti-overfitting, MLflow conventions, outputs. This is the deepest source.
 - **`GUIA_MLOPS_AWS_V2.md`** — step-by-step runbook for local + AWS stand-up, and the **ADRs**
   (ADR-001/002/003/004 referenced throughout the code).
+- **`ARCHITECTURE.md`** — visual layer (Mermaid C4 + sequence + deployment diagrams) of the
+  end-to-end system. Complements the README's ASCII map; does not duplicate it.
+- **`CONTRIBUTING.md`** — onboarding/how-to-work: setup, dev loop, commit convention, and the
+  invariants checklist for structural PRs.
 
 ## Commands
 
