@@ -16,10 +16,6 @@ desactualizado o que no compile contra la versión actual del proyecto.
   productividad. Conclusión histórica: cada variedad entrena su propio
   modelo (decisión actual del proyecto).
 
-- **`RFR_POP.ipynb`** — Prototipado original de Random Forest para POP
-  antes de migrar a XGBoost / LightGBM con Optuna. Mantenido como
-  referencia de la baseline.
-
 ## Cuándo borrar
 
 Si en una próxima limpieza ya no necesitás el contexto histórico,
