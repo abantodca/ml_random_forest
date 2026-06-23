@@ -103,7 +103,12 @@ def suggest_xgb_params(trial: optuna.Trial) -> dict[str, object]:
     params = {
         "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__learning_rate": trial.suggest_float(
-            "regressor__regressor__learning_rate", 3e-3, 0.3, log=True
+            # Piso subido 3e-3 -> 1e-2 (2026-06-23): un LR < 1e-2 con
+            # N_ESTIMATORS_MAX + early stopping crece cientos/miles de arboles
+            # por fit (tiempo) y ajusta ruido sin ganar MAPE. El XGB elegido en
+            # prod_xl 2026-06-22 ya uso lr=0.0179 (> 1e-2): el piso viejo solo
+            # gastaba trials del TPE en una region lenta y sobreajustada.
+            "regressor__regressor__learning_rate", 1e-2, 0.3, log=True
         ),
         "regressor__regressor__subsample": trial.suggest_float(
             "regressor__regressor__subsample", 0.5, 1.0
@@ -169,7 +174,10 @@ def suggest_lgb_params(trial: optuna.Trial) -> dict[str, object]:
             "regressor__regressor__num_leaves", 7, num_leaves_max
         ),
         "regressor__regressor__learning_rate": trial.suggest_float(
-            "regressor__regressor__learning_rate", 3e-3, 0.3, log=True
+            # Piso subido 3e-3 -> 1e-2 (2026-06-23): ver nota en suggest_xgb_params.
+            # El LGB campeon de prod_xl 2026-06-22 uso lr=0.0128 (> 1e-2), asi que
+            # el piso no excluye la zona buena, solo la lenta/sobreajustada.
+            "regressor__regressor__learning_rate", 1e-2, 0.3, log=True
         ),
         "regressor__regressor__subsample": trial.suggest_float(
             "regressor__regressor__subsample", 0.5, 1.0

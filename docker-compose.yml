@@ -203,6 +203,16 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       # Subida/bajada del pipeline (~63MB) via proxy: mas que el default 120s.
       MLFLOW_HTTP_REQUEST_TIMEOUT: ${MLFLOW_HTTP_REQUEST_TIMEOUT:-900}
+      # Reintentos del cliente HTTP de MLflow ante fallo (incl. 500 del proxy de
+      # artifacts cuando S3 esta caido o las creds AWS vencieron). Bajado del
+      # default (~7) a 2 (2026-06-23): con 7 reintentos + backoff exponencial,
+      # cada upload fallido colgaba ~minutos y el run PARECIA congelado, lo que
+      # forzaba un Ctrl+C — y el Ctrl+C MATA el run (KeyboardInterrupt NO es un
+      # Exception que _safe_artifact_call pueda absorber). Con 2 reintentos el
+      # fallo se atrapa en segundos, se loguea WARNING y el training CONTINUA
+      # (pipeline/OOF ya estan en disco local). Subir solo si la red al bucket
+      # es lenta y aparecen falsos negativos por blips transitorios.
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: ${MLFLOW_HTTP_REQUEST_MAX_RETRIES:-2}
       AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
       AWS_CONFIG_FILE: /aws/config
       AWS_PROFILE: ${AWS_PROFILE:-default}
