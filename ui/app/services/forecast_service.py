@@ -110,6 +110,11 @@ class ForecastService:
             variety=data.get("variety", variety),
             kghora=data.get("kghora_pred", 0.0),
             kgjn=data.get("kgjn_pred"),
+            # Banda de incertidumbre que el API ya calcula (antes se descartaba).
+            kghora_std=data.get("kghora_std"),
+            kghora_lo=data.get("kghora_lo"),
+            kghora_hi=data.get("kghora_hi"),
+            confidence=data.get("confidence"),
             inputs=payload,
             drift=DriftReport.model_validate(drift_raw) if drift_raw else None,
         )

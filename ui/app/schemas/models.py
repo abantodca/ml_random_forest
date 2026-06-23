@@ -71,6 +71,13 @@ class PredictionResult(_Frozen):
     variety: str
     kghora: float
     kgjn: float | None = None
+    # Banda de incertidumbre (conformal por fundo / heurística). Mirror de
+    # PredictionResponse del backend: sin estos campos la UI descartaba la
+    # banda que el API ya calcula (invariante #10).
+    kghora_std: float | None = None
+    kghora_lo: float | None = None
+    kghora_hi: float | None = None
+    confidence: Literal["alta", "media", "baja"] | None = None
     inputs: dict = Field(default_factory=dict)
     # Drift report copiado del ForecastRecord subyacente. None cuando el
     # backend no expuso baseline para esa variedad.
@@ -140,6 +147,13 @@ class ForecastRecord(_Frozen):
     horas_efectivas: float | None = None
     kghora_pred: float = 0.0
     kgjn_pred: float | None = None
+    # Banda de incertidumbre (mirror de ForecastResponse del backend). El
+    # API las emite (conformal por fundo); sin estos campos la UI las
+    # descartaba en silencio vía _Frozen (invariante #10).
+    kghora_std: float | None = None
+    kghora_lo: float | None = None
+    kghora_hi: float | None = None
+    confidence: Literal["alta", "media", "baja"] | None = None
     created_at: str = ""
     updated_at: str = ""
     drift: DriftReport | None = None
