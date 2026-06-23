@@ -5,6 +5,7 @@ Centraliza el calculo de las entradas ejecutivas para que renderizadores
 construccion del kit. Si manana cambia la metrica que define
 'precision', se cambia aqui y los dos canales se actualizan a la vez.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -123,11 +124,18 @@ def build_winner_kit(
     verdict = compute_verdict(full_mape_pct=oof_mape, abs_gap=abs_gap)
     context = build_context(variety, X_raw)
     actions = recommended_actions(
-        abs_errors=abs_err, real=real, X_aligned=X_aligned,
-        global_mape=oof_mape, abs_gap=abs_gap, full_mape=oof_mape,
+        abs_errors=abs_err,
+        real=real,
+        X_aligned=X_aligned,
+        global_mape=oof_mape,
+        abs_gap=abs_gap,
+        full_mape=oof_mape,
     )
     fundo_bias = residual_bias_by_group(
-        real=real, pred=pred, X_aligned=X_aligned, col="FUNDO",
+        real=real,
+        pred=pred,
+        X_aligned=X_aligned,
+        col="FUNDO",
     )
 
     # Diagnostico estadistico (defensivo: si la muestra es chica o algo falla,
@@ -149,10 +157,20 @@ def build_winner_kit(
             pass
 
     return WinnerKit(
-        real=real, pred=pred, abs_err=abs_err, X_aligned=X_aligned,
-        oof_mape=oof_mape, oof_r2=oof_r2, abs_gap=abs_gap,
-        verdict=verdict, context=context, actions=actions,
+        real=real,
+        pred=pred,
+        abs_err=abs_err,
+        X_aligned=X_aligned,
+        oof_mape=oof_mape,
+        oof_r2=oof_r2,
+        abs_gap=abs_gap,
+        verdict=verdict,
+        context=context,
+        actions=actions,
         fundo_bias=fundo_bias,
-        mae_oof_ci=mae_ci, mape_oof_ci=mape_ci, r2_oof_ci=r2_ci,
-        heteroscedasticity=hetero, calibration=calib,
+        mae_oof_ci=mae_ci,
+        mape_oof_ci=mape_ci,
+        r2_oof_ci=r2_ci,
+        heteroscedasticity=hetero,
+        calibration=calib,
     )

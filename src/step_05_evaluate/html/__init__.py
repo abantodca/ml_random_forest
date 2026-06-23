@@ -10,6 +10,7 @@ Estructura interna:
 API publica:
     render_winner_dashboard - genera reports/Winner_{variety}.html
 """
+
 from src.step_05_evaluate.html.winner_dashboard import render_winner_dashboard
 
 __all__ = ["render_winner_dashboard"]

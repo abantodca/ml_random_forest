@@ -9,6 +9,7 @@ Genera, por cada columna numerica + target:
 Devuelve `VariableProfile` por variable, listo para que el HTML renderer
 construya tarjetas visuales.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -121,13 +122,24 @@ def profile_variable(name: str, x: pd.Series) -> VariableProfile:
 
     if len(x_clean) == 0:
         return VariableProfile(
-            name=name, n=0, n_missing=int(x.isna().sum()), miss_ratio=1.0,
-            mean=float("nan"), median=float("nan"), std=float("nan"),
-            skew=float("nan"), kurtosis=float("nan"),
-            p01=float("nan"), p99=float("nan"),
-            min=float("nan"), max=float("nan"),
-            n_outliers_iqr=0, n_outliers_zscore=0, n_outliers_mad=0,
-            boxcox_lambda=None, boxcox_recommendation="todo NaN",
+            name=name,
+            n=0,
+            n_missing=int(x.isna().sum()),
+            miss_ratio=1.0,
+            mean=float("nan"),
+            median=float("nan"),
+            std=float("nan"),
+            skew=float("nan"),
+            kurtosis=float("nan"),
+            p01=float("nan"),
+            p99=float("nan"),
+            min=float("nan"),
+            max=float("nan"),
+            n_outliers_iqr=0,
+            n_outliers_zscore=0,
+            n_outliers_mad=0,
+            boxcox_lambda=None,
+            boxcox_recommendation="todo NaN",
             normality_tests=[],
         )
 

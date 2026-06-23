@@ -46,7 +46,7 @@ class LiveDataVM:
     has_points: bool
     mape_variant: str
     bias_variant: str
-    verdict_status: str | None = None   # ok / warning / alert
+    verdict_status: str | None = None  # ok / warning / alert
     verdict_msg: str | None = None
     top_variety: str | None = None
     n_top: int = 0
@@ -117,9 +117,7 @@ def build_live_data_vm() -> LiveDataVM:
         bias=bias,
         has_points=has_points,
         mape_variant="warning" if mape > 15 else "success",
-        bias_variant=(
-            "warning" if has_points and abs(bias) > max(mae * 0.5, 1e-9) else "success"
-        ),
+        bias_variant=("warning" if has_points and abs(bias) > max(mae * 0.5, 1e-9) else "success"),
     )
     if not has_points:
         return LiveDataVM(**base)

@@ -8,6 +8,7 @@ trivial), pero usa ~N veces la memoria pico. En t3.large (8 GB) con 4
 variedades en paralelo se ajusta `inner_cv_n_jobs` para evitar
 oversubscription de CPU.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -73,8 +74,7 @@ def run_parallel(
     failed: list[str] = []
 
     logger.info(
-        f"PARALELO | {n_workers} workers | "
-        f"inner_cv_n_jobs={settings.get('inner_cv_n_jobs')}"
+        f"PARALELO | {n_workers} workers | inner_cv_n_jobs={settings.get('inner_cv_n_jobs')}"
     )
     logger.info(
         "Cada variedad corre en un PROCESO independiente. Logs van a "
@@ -83,8 +83,7 @@ def run_parallel(
 
     with ProcessPoolExecutor(max_workers=n_workers) as ex:
         futures = {
-            ex.submit(_train_variety_worker, v, models, args_dict, settings): v
-            for v in varieties
+            ex.submit(_train_variety_worker, v, models, args_dict, settings): v for v in varieties
         }
         logger.info(f"==> Lanzadas {len(futures)} variedades en paralelo")
         for fut in as_completed(futures):

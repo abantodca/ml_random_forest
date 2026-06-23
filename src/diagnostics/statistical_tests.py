@@ -22,6 +22,7 @@ Convención de p-value:
     El campo `is_finding` lo declara cada wrapper para que el renderer
     pinte el badge correcto sin tener que conocer cada test.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -62,8 +63,12 @@ class TestResult:
 
 def _safe_test(name: str, h0: str, is_finding: bool) -> TestResult:
     """Constructor de fallback para tests fallidos."""
-    return TestResult(name=name, h0_meaning=h0, is_finding=is_finding,
-                      notes="test no aplicable o fallo (n insuficiente / singular)")
+    return TestResult(
+        name=name,
+        h0_meaning=h0,
+        is_finding=is_finding,
+        notes="test no aplicable o fallo (n insuficiente / singular)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +93,12 @@ def shapiro_wilk(x: pd.Series, alpha: float = 0.05) -> TestResult:
     try:
         stat, p = shapiro(x_clean)
         return TestResult(
-            name=name, statistic=float(stat), p_value=float(p),
-            rejects_h0=p < alpha, h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=float(stat),
+            p_value=float(p),
+            rejects_h0=p < alpha,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"n={n}",
         )
     except Exception as e:
@@ -120,8 +129,12 @@ def anderson_darling(x: pd.Series, alpha: float = 0.05) -> TestResult:
             p = float(result.pvalue) if hasattr(result, "pvalue") else None
             if p is not None:
                 return TestResult(
-                    name=name, statistic=stat, p_value=p,
-                    rejects_h0=p < alpha, h0_meaning=h0, is_finding=True,
+                    name=name,
+                    statistic=stat,
+                    p_value=p,
+                    rejects_h0=p < alpha,
+                    h0_meaning=h0,
+                    is_finding=True,
                     notes=f"n={len(x_clean)}",
                 )
         except TypeError:
@@ -134,11 +147,17 @@ def anderson_darling(x: pd.Series, alpha: float = 0.05) -> TestResult:
         crit_at_alpha = result.critical_values[sig_levels.index(alpha * 100)]
         rejects = result.statistic > crit_at_alpha
         return TestResult(
-            name=name, statistic=float(result.statistic), p_value=None,
-            rejects_h0=bool(rejects), h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=float(result.statistic),
+            p_value=None,
+            rejects_h0=bool(rejects),
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"critical(α={alpha})={crit_at_alpha:.3f}",
-            extra={"critical_values": list(result.critical_values),
-                   "significance_level": sig_levels},
+            extra={
+                "critical_values": list(result.critical_values),
+                "significance_level": sig_levels,
+            },
         )
     except Exception as e:
         out = _safe_test(name, h0, is_finding=True)
@@ -158,8 +177,12 @@ def jarque_bera(x: pd.Series, alpha: float = 0.05) -> TestResult:
     try:
         stat, p = jb(x_clean)
         return TestResult(
-            name=name, statistic=float(stat), p_value=float(p),
-            rejects_h0=p < alpha, h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=float(stat),
+            p_value=float(p),
+            rejects_h0=p < alpha,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"n={len(x_clean)} | skew={x_clean.skew():.3f} kurt={x_clean.kurtosis():.3f}",
         )
     except Exception as e:
@@ -191,11 +214,19 @@ def breusch_pagan(y: pd.Series, X: pd.DataFrame, alpha: float = 0.05) -> TestRes
         ols = OLS(y_clean.values, X_clean.values).fit()
         lm, lm_p, f, f_p = het_breuschpagan(ols.resid, X_clean.values)
         return TestResult(
-            name=name, statistic=float(lm), p_value=float(lm_p),
-            rejects_h0=lm_p < alpha, h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=float(lm),
+            p_value=float(lm_p),
+            rejects_h0=lm_p < alpha,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"n={len(df)}, F={f:.2f}, F_p={f_p:.4f}",
-            extra={"lm_statistic": float(lm), "lm_pvalue": float(lm_p),
-                   "f_statistic": float(f), "f_pvalue": float(f_p)},
+            extra={
+                "lm_statistic": float(lm),
+                "lm_pvalue": float(lm_p),
+                "f_statistic": float(f),
+                "f_pvalue": float(f_p),
+            },
         )
     except Exception as e:
         out = _safe_test(name, h0, is_finding=True)
@@ -306,8 +337,12 @@ def white_test(y: pd.Series, X: pd.DataFrame, alpha: float = 0.05) -> TestResult
         ols = OLS(y_clean.values, X_clean.values).fit()
         lm, lm_p, f, f_p = het_white(ols.resid, X_clean.values)
         return TestResult(
-            name=name, statistic=float(lm), p_value=float(lm_p),
-            rejects_h0=lm_p < alpha, h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=float(lm),
+            p_value=float(lm_p),
+            rejects_h0=lm_p < alpha,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"n={len(df)}",
             extra={"lm_statistic": float(lm), "lm_pvalue": float(lm_p)},
         )
@@ -346,8 +381,12 @@ def durbin_watson(residuals: pd.Series) -> TestResult:
             verdict = "no concluyente / OK"
             rejects = False
         return TestResult(
-            name=name, statistic=d, p_value=None, rejects_h0=rejects,
-            h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=d,
+            p_value=None,
+            rejects_h0=rejects,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"DW={d:.3f} → {verdict}",
         )
     except Exception as e:
@@ -370,8 +409,12 @@ def ljung_box(residuals: pd.Series, lags: int = 10, alpha: float = 0.05) -> Test
         stat = float(result["lb_stat"].iloc[-1])
         p = float(result["lb_pvalue"].iloc[-1])
         return TestResult(
-            name=name, statistic=stat, p_value=p,
-            rejects_h0=p < alpha, h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=stat,
+            p_value=p,
+            rejects_h0=p < alpha,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"n={len(r)}, lags={lags}",
         )
     except Exception as e:
@@ -399,8 +442,12 @@ def adf_test(x: pd.Series, alpha: float = 0.05) -> TestResult:
         result = adfuller(x_clean.values, autolag="AIC")
         stat, p = float(result[0]), float(result[1])
         return TestResult(
-            name=name, statistic=stat, p_value=p,
-            rejects_h0=p < alpha, h0_meaning=h0, is_finding=False,
+            name=name,
+            statistic=stat,
+            p_value=p,
+            rejects_h0=p < alpha,
+            h0_meaning=h0,
+            is_finding=False,
             notes=f"n={len(x_clean)}, lag_used={result[2]}",
             extra={"critical_values": dict(result[4])},
         )
@@ -422,12 +469,17 @@ def kpss_test(x: pd.Series, alpha: float = 0.05) -> TestResult:
     try:
         # warning suppression: KPSS ruidoso si p fuera de tabla
         import warnings
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             stat, p, lag, crit = kpss(x_clean.values, regression="c", nlags="auto")
         return TestResult(
-            name=name, statistic=float(stat), p_value=float(p),
-            rejects_h0=p < alpha, h0_meaning=h0, is_finding=True,
+            name=name,
+            statistic=float(stat),
+            p_value=float(p),
+            rejects_h0=p < alpha,
+            h0_meaning=h0,
+            is_finding=True,
             notes=f"n={len(x_clean)}, lag={lag}",
             extra={"critical_values": dict(crit)},
         )

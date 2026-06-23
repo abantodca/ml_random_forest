@@ -46,9 +46,7 @@ business = load_business_columns(sheet="POP")
 h_ef = business["H-EF"].to_numpy(dtype=float)
 kg_jr = business["KG/JR"].to_numpy(dtype=float)
 
-outer_cv, inner_cv, strat_label, _ = _build_cv_splitters(
-    X, OUTER_FOLDS, INNER_FOLDS, RANDOM_STATE
-)
+outer_cv, inner_cv, strat_label, _ = _build_cv_splitters(X, OUTER_FOLDS, INNER_FOLDS, RANDOM_STATE)
 folds = list(outer_cv.split(X, strat_label))
 
 fold_data = []
@@ -56,13 +54,15 @@ for _k, (tr_i, te_i) in enumerate(folds):
     pre = create_preprocessing_pipeline()
     Xt_tr = pre.fit_transform(X.iloc[tr_i], y.iloc[tr_i])
     Xt_te = pre.transform(X.iloc[te_i])
-    fold_data.append({
-        "te_i": te_i,
-        "tr_i": tr_i,
-        "Xtr": Xt_tr.to_numpy(dtype=np.float64),
-        "Xte": Xt_te.to_numpy(dtype=np.float64),
-        "y_tr": y.iloc[tr_i].to_numpy(dtype=float),
-    })
+    fold_data.append(
+        {
+            "te_i": te_i,
+            "tr_i": tr_i,
+            "Xtr": Xt_tr.to_numpy(dtype=np.float64),
+            "Xte": Xt_te.to_numpy(dtype=np.float64),
+            "y_tr": y.iloc[tr_i].to_numpy(dtype=float),
+        }
+    )
 print(f"folds OK | {fold_data[0]['Xtr'].shape[1]} cols | n={len(X)}")
 
 fd0 = fold_data[0]
@@ -101,7 +101,8 @@ def make_objective(objective_name, use_log, tweedie=False, weighted=False):
         params = {**COMMON, "objective": objective_name, **_grid(trial)}
         if tweedie:
             params["tweedie_variance_power"] = trial.suggest_float(
-                "tweedie_variance_power", 1.1, 1.9)
+                "tweedie_variance_power", 1.1, 1.9
+            )
         maes, iters = [], []
         for itr, iva in inner_splits:
             ytr = _log1p_cap(y0[itr]) if use_log else y0[itr]
@@ -109,7 +110,9 @@ def make_objective(objective_name, use_log, tweedie=False, weighted=False):
             ds = lgbm.Dataset(fd0["Xtr"][itr], ytr, weight=w)
             yva = _log1p_cap(y0[iva]) if use_log else y0[iva]
             bst = lgbm.train(
-                params, ds, num_boost_round=MAX_ROUNDS,
+                params,
+                ds,
+                num_boost_round=MAX_ROUNDS,
                 valid_sets=[lgbm.Dataset(fd0["Xtr"][iva], yva, reference=ds)],
                 callbacks=[lgbm.early_stopping(EARLY_STOP, verbose=False)],
             )
@@ -119,6 +122,7 @@ def make_objective(objective_name, use_log, tweedie=False, weighted=False):
             iters.append(bst.best_iteration or MAX_ROUNDS)
         trial.set_user_attr("nbr", int(np.median(iters)))
         return float(np.mean(maes))
+
     return obj
 
 
@@ -129,9 +133,14 @@ def _evaluate(oof, train_maes):
     biz = calculate_regression_metrics(br, bp)
     mae_train = float(np.mean(train_maes))
     gap = tgt["mae"] - mae_train
-    return {"target_mape": tgt["mape"], "target_mae_oof": tgt["mae"],
-            "mae_train": mae_train, "gap_rel": gap / tgt["mae"] if tgt["mae"] else None,
-            "business_mape": biz["mape"], "business_r2": biz["r2"]}
+    return {
+        "target_mape": tgt["mape"],
+        "target_mae_oof": tgt["mae"],
+        "mae_train": mae_train,
+        "gap_rel": gap / tgt["mae"] if tgt["mae"] else None,
+        "business_mape": biz["mape"],
+        "business_r2": biz["r2"],
+    }
 
 
 def run_arm(name, objective_name, use_log, tweedie=False, weighted=False):
@@ -139,19 +148,20 @@ def run_arm(name, objective_name, use_log, tweedie=False, weighted=False):
         direction="minimize",
         sampler=optuna.samplers.TPESampler(seed=RANDOM_STATE, multivariate=True),
     )
-    study.optimize(make_objective(objective_name, use_log, tweedie, weighted),
-                   n_trials=N_TRIALS, show_progress_bar=False)
+    study.optimize(
+        make_objective(objective_name, use_log, tweedie, weighted),
+        n_trials=N_TRIALS,
+        show_progress_bar=False,
+    )
     bp = study.best_trial.params
     nbr = max(50, study.best_trial.user_attrs["nbr"])
-    params = {**COMMON, "objective": objective_name,
-              **{k: v for k, v in bp.items()}}
+    params = {**COMMON, "objective": objective_name, **{k: v for k, v in bp.items()}}
     oof = np.full(len(X), np.nan)
     tmaes = []
     for fd in fold_data:
         ytr = _log1p_cap(fd["y_tr"]) if use_log else fd["y_tr"]
         w = fin_weight(kg_jr[fd["tr_i"]]) if weighted else None
-        bst = lgbm.train(params, lgbm.Dataset(fd["Xtr"], ytr, weight=w),
-                         num_boost_round=nbr)
+        bst = lgbm.train(params, lgbm.Dataset(fd["Xtr"], ytr, weight=w), num_boost_round=nbr)
         raw_te = bst.predict(fd["Xte"])
         oof[fd["te_i"]] = np.clip(_expm1(raw_te) if use_log else raw_te, 0.0, None)
         raw_tr = bst.predict(fd["Xtr"])
@@ -160,8 +170,10 @@ def run_arm(name, objective_name, use_log, tweedie=False, weighted=False):
     res = _evaluate(oof, tmaes)
     res["best_params"] = bp
     res["nbr"] = nbr
-    print(f"{name:<12}: biz MAPE {res['business_mape']:.2f}% | R2 {res['business_r2']:.3f} "
-          f"| gap_rel {res['gap_rel']:.3f} | tgt MAPE {res['target_mape']:.2f}%")
+    print(
+        f"{name:<12}: biz MAPE {res['business_mape']:.2f}% | R2 {res['business_r2']:.3f} "
+        f"| gap_rel {res['gap_rel']:.3f} | tgt MAPE {res['target_mape']:.2f}%"
+    )
     return res, oof
 
 
@@ -197,17 +209,23 @@ try:
 
     print("\n=== Desglose por segmento (business MAPE %) + error abs total (kg) ===")
     print(f"{'arm':<12}{'GLOBAL':>8}{'GRANEL':>9}{'A9/GRAN':>9}{'absERRkg':>11}")
-    for k, key in [("A_l1_log", "A"), ("B_tweedie", "B"),
-                   ("C_gamma", "C"), ("D_l1_finw", "D")]:
+    for k, key in [("A_l1_log", "A"), ("B_tweedie", "B"), ("C_gamma", "C"), ("D_l1_finw", "D")]:
         o = oofs[key]
-        print(f"{k:<12}{results[k]['business_mape']:>8.2f}{seg_mape(o, m_gran):>9.2f}"
-              f"{seg_mape(o, m_a9g):>9.2f}{abs_err_kg(o):>11.0f}")
+        print(
+            f"{k:<12}{results[k]['business_mape']:>8.2f}{seg_mape(o, m_gran):>9.2f}"
+            f"{seg_mape(o, m_a9g):>9.2f}{abs_err_kg(o):>11.0f}"
+        )
 except Exception as exc:  # noqa: BLE001 - desglose es informativo, no debe abortar
     print(f"(desglose por segmento omitido: {exc})")
 
-np.savez("artifacts/oof_ab_tweedie.npz",
-         oof_A=oofs["A"], oof_B=oofs["B"], oof_C=oofs["C"], oof_D=oofs["D"],
-         y=y.to_numpy())
+np.savez(
+    "artifacts/oof_ab_tweedie.npz",
+    oof_A=oofs["A"],
+    oof_B=oofs["B"],
+    oof_C=oofs["C"],
+    oof_D=oofs["D"],
+    y=y.to_numpy(),
+)
 with open("artifacts/AB_TWEEDIE_2026-06-15.json", "w") as f:
     json.dump(results, f, indent=2, default=float)
 print("\nguardado: artifacts/AB_TWEEDIE_2026-06-15.json")

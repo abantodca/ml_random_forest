@@ -129,17 +129,23 @@ def _render_edit_form(item: ForecastRecord) -> None:
                 # semántica "campo vacío = no enviar al PATCH". Sólo se manda
                 # si el usuario explícitamente escribe un número aquí.
                 new_ind = st.number_input(
-                    "%INDUS", 0.0, 100.0,
+                    "%INDUS",
+                    0.0,
+                    100.0,
                     value=float(item.indus_pct) if item.indus_pct is not None else None,
                     placeholder="Opcional",
                 )
                 new_baya = st.number_input(
-                    "P/BAYA (g)", 0.0, 100.0,
+                    "P/BAYA (g)",
+                    0.0,
+                    100.0,
                     value=float(item.p_baya) if item.p_baya is not None else None,
                     placeholder="Opcional",
                 )
                 new_horas = st.number_input(
-                    "Horas Efectivas", 0.0, 24.0,
+                    "Horas Efectivas",
+                    0.0,
+                    24.0,
                     value=float(item.horas_efectivas) if item.horas_efectivas is not None else None,
                     placeholder="Opcional",
                 )
@@ -149,9 +155,16 @@ def _render_edit_form(item: ForecastRecord) -> None:
             return
 
         payload = build_forecast_payload(
-            fecha=new_fecha, kg_ha=new_kgha, dpc=new_dpc, ha=new_ha,
-            dia_cosecha=int(new_dia), formato=new_fmt, fundo=new_fundo,
-            indus_pct=new_ind, p_baya=new_baya, horas=new_horas,
+            fecha=new_fecha,
+            kg_ha=new_kgha,
+            dpc=new_dpc,
+            ha=new_ha,
+            dia_cosecha=int(new_dia),
+            formato=new_fmt,
+            fundo=new_fundo,
+            indus_pct=new_ind,
+            p_baya=new_baya,
+            horas=new_horas,
             external_id=new_ext,
         )
         try:
@@ -161,8 +174,7 @@ def _render_edit_form(item: ForecastRecord) -> None:
             return
 
         st.success(
-            f"✅ Pronóstico #{updated.id} actualizado — "
-            f"KGHORA: **{updated.kghora_pred:.2f}**"
+            f"✅ Pronóstico #{updated.id} actualizado — KGHORA: **{updated.kghora_pred:.2f}**"
         )
         _set_action(None)
         _reload_last()
@@ -170,9 +182,7 @@ def _render_edit_form(item: ForecastRecord) -> None:
 
 
 def _render_delete_confirmation(item: ForecastRecord) -> None:
-    st.warning(
-        f"¿Eliminar pronóstico **#{item.id}** ({item.variety} — {item.fecha})?"
-    )
+    st.warning(f"¿Eliminar pronóstico **#{item.id}** ({item.variety} — {item.fecha})?")
     cc1, cc2, _ = st.columns([1, 1, 5])
     if cc1.button("✅ Sí, eliminar", key=f"yes_del_{item.id}", type="primary"):
         try:

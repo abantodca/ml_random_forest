@@ -23,6 +23,7 @@ localizados, sin tocar el orchestrator ni el champion:
   3. Importar ambos aqui y agregar al `BACKEND_REGISTRY`.
   4. CLI los recoge via `valid_backends()` automaticamente.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -60,10 +61,7 @@ BACKEND_REGISTRY: dict[str, ModelBackend] = {
 def get_backend(name: str) -> ModelBackend:
     """Devuelve el ModelBackend o levanta ValueError con la lista valida."""
     if name not in BACKEND_REGISTRY:
-        raise ValueError(
-            f"Backend '{name}' no soportado. Disponibles: "
-            f"{sorted(BACKEND_REGISTRY)}"
-        )
+        raise ValueError(f"Backend '{name}' no soportado. Disponibles: {sorted(BACKEND_REGISTRY)}")
     return BACKEND_REGISTRY[name]
 
 

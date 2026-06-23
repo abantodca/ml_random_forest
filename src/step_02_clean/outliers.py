@@ -23,6 +23,7 @@ Granularidad por GRUPO (cascade):
     Grupos con n < `min_group_size` caen al siguiente nivel del cascade
     (insuficiente data para IQR confiable).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -115,9 +116,7 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
 
     def fit(self, X: pd.DataFrame, y=None) -> OutlierCapper:
         if self.method not in _VALID_METHODS:
-            raise ValueError(
-                f"method debe ser uno de {_VALID_METHODS}, dado '{self.method}'"
-            )
+            raise ValueError(f"method debe ser uno de {_VALID_METHODS}, dado '{self.method}'")
 
         cols = self._resolve_cols(X)
         self.numeric_cols_ = cols
@@ -131,8 +130,9 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
         # Para group_col=['FUNDO','FORMATO']: niveles = [['FUNDO','FORMATO'],
         # ['FUNDO']]. Cada nivel guarda bounds por su key composite.
         self.group_cols_ = self._normalize_group_col(X)
-        self.cascade_: list[tuple[list[str], dict[str, dict[str, float]],
-                                  dict[str, dict[str, float]]]] = []
+        self.cascade_: list[
+            tuple[list[str], dict[str, dict[str, float]], dict[str, dict[str, float]]]
+        ] = []
         self.small_groups_: dict[str, list[str]] = {}  # informativo, debug
 
         if self.group_cols_:
@@ -172,12 +172,8 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
         # .loc / index alignment cuando el dataset es grande.
         n = len(X)
         # Inicializar bounds posicionales con los GLOBALES (fallback).
-        pos_lower = {
-            c: np.full(n, self.lower_[c], dtype=float) for c in self.numeric_cols_
-        }
-        pos_upper = {
-            c: np.full(n, self.upper_[c], dtype=float) for c in self.numeric_cols_
-        }
+        pos_lower = {c: np.full(n, self.lower_[c], dtype=float) for c in self.numeric_cols_}
+        pos_upper = {c: np.full(n, self.upper_[c], dtype=float) for c in self.numeric_cols_}
         matched = np.zeros(n, dtype=bool)
 
         # Recorre cascade del mas especifico al menos. Filas ya 'matched' en

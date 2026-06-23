@@ -13,9 +13,7 @@ _health = get_cached_health()
 
 section_title("💡 Estado del backend")
 if not _health:
-    st.error(
-        "No se puede conectar al backend. Verifica que el servicio esté corriendo."
-    )
+    st.error("No se puede conectar al backend. Verifica que el servicio esté corriendo.")
     st.stop()
 
 _c1, _c2, _c3, _c4 = st.columns(4)

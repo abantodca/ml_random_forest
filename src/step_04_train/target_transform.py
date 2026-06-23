@@ -13,6 +13,7 @@ aplastados) que mejoro deciles 1-3 pero acentuo subestimacion del decil
 10 (-7.34 -> -8.64). Aflojamos a p99.5 (0.5% mas alto) para recuperar
 predicciones extremas sin perder estabilidad.
 """
+
 from __future__ import annotations
 
 import os

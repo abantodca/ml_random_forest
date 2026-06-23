@@ -12,6 +12,7 @@ Estructura:
 El HTML es self-contained: plotly.js inline (UNA sola vez), CSS embebido,
 sin imagenes externas. Tamaño objetivo < 5MB por variedad.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -160,8 +161,7 @@ def render_test_row(test) -> str:
     )
 
 
-def _eda_history_links(variety: str, current_path: Path | None = None,
-                        max_links: int = 5) -> str:
+def _eda_history_links(variety: str, current_path: Path | None = None, max_links: int = 5) -> str:
     """Lista los EDAs anteriores de la misma variedad (excluye el actual).
 
     Util para comparar drift entre EDAs sin abrir el directorio. Devuelve
@@ -169,6 +169,7 @@ def _eda_history_links(variety: str, current_path: Path | None = None,
     historicos (o solo el actual), devuelve cadena vacia.
     """
     from src.config import REPORTS_DIR
+
     if not REPORTS_DIR.exists():
         return ""
     candidates = sorted(
@@ -191,14 +192,11 @@ def _eda_history_links(variety: str, current_path: Path | None = None,
         )
     return (
         '<div style="margin-top:10px;font-size:11px;opacity:.85;">'
-        '<span style="opacity:.7;">EDAs anteriores:</span> '
-        + "".join(items) +
-        '</div>'
+        '<span style="opacity:.7;">EDAs anteriores:</span> ' + "".join(items) + "</div>"
     )
 
 
-def _hero(variety: str, n_rows: int, n_cols: int,
-          current_path: Path | None = None) -> str:
+def _hero(variety: str, n_rows: int, n_cols: int, current_path: Path | None = None) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     history_html = _eda_history_links(variety, current_path)
     return f"""
@@ -220,14 +218,15 @@ def _data_quality_section(quality: dict) -> str:
       <h2>1. Calidad de datos</h2>
       <table class="summary">
         <thead><tr><th>Metrica</th><th class='num'>Valor</th></tr></thead>
-        <tbody>{''.join(rows)}</tbody>
+        <tbody>{"".join(rows)}</tbody>
       </table>
     </section>
     """
 
 
-def _variable_card(profile, fig_hist: go.Figure, fig_qq: go.Figure,
-                   fig_box: go.Figure, idx: int) -> str:
+def _variable_card(
+    profile, fig_hist: go.Figure, fig_qq: go.Figure, fig_box: go.Figure, idx: int
+) -> str:
     """Tarjeta por variable: hist + qq + box + tests."""
     stats = (
         f"<span><b>n</b>={profile.n:,}</span>"
@@ -239,14 +238,14 @@ def _variable_card(profile, fig_hist: go.Figure, fig_qq: go.Figure,
         f"<span><b>kurt</b>={profile.kurtosis:+.2f}</span>"
     )
     bc = (
-        f'{render_badge("Box-Cox: " + profile.boxcox_recommendation, "info")}'
-        if profile.boxcox_lambda is not None else
-        f'{render_badge("Box-Cox: " + profile.boxcox_recommendation, "warn")}'
+        f"{render_badge('Box-Cox: ' + profile.boxcox_recommendation, 'info')}"
+        if profile.boxcox_lambda is not None
+        else f"{render_badge('Box-Cox: ' + profile.boxcox_recommendation, 'warn')}"
     )
     outliers = (
-        f'<span><b>outliers</b> IQR={profile.n_outliers_iqr} '
-        f'· Z={profile.n_outliers_zscore} '
-        f'· MAD={profile.n_outliers_mad}</span>'
+        f"<span><b>outliers</b> IQR={profile.n_outliers_iqr} "
+        f"· Z={profile.n_outliers_zscore} "
+        f"· MAD={profile.n_outliers_mad}</span>"
     )
     test_rows = "".join(render_test_row(t) for t in profile.normality_tests)
     return f"""
@@ -255,9 +254,9 @@ def _variable_card(profile, fig_hist: go.Figure, fig_qq: go.Figure,
       <div class="var-stats">{stats}{outliers}</div>
       <div>{bc}</div>
       <div class="grid-3">
-        {fig_to_html_div(fig_hist, f'hist_{idx}')}
-        {fig_to_html_div(fig_qq, f'qq_{idx}')}
-        {fig_to_html_div(fig_box, f'box_{idx}')}
+        {fig_to_html_div(fig_hist, f"hist_{idx}")}
+        {fig_to_html_div(fig_qq, f"qq_{idx}")}
+        {fig_to_html_div(fig_box, f"box_{idx}")}
       </div>
       <h3>Tests de normalidad</h3>
       <table class="summary">
@@ -269,24 +268,23 @@ def _variable_card(profile, fig_hist: go.Figure, fig_qq: go.Figure,
 
 
 def _temporal_card(profile, fig_acf: go.Figure, idx: int) -> str:
-    tests = [profile.durbin_watson, profile.ljung_box_10,
-             profile.adf, profile.kpss]
+    tests = [profile.durbin_watson, profile.ljung_box_10, profile.adf, profile.kpss]
     test_rows = "".join(render_test_row(t) for t in tests)
     stl = ""
     if profile.stl_trend_strength is not None:
         stl = (
             f'<div class="var-stats">'
-            f'<span><b>STL trend</b>={profile.stl_trend_strength:.2f}</span>'
-            f'<span><b>STL seasonal</b>={profile.stl_seasonal_strength:.2f}</span>'
-            f'<span><b>significant lags</b>={profile.significant_lags[:5]}'
-            f'{"..." if len(profile.significant_lags) > 5 else ""}</span>'
-            f'</div>'
+            f"<span><b>STL trend</b>={profile.stl_trend_strength:.2f}</span>"
+            f"<span><b>STL seasonal</b>={profile.stl_seasonal_strength:.2f}</span>"
+            f"<span><b>significant lags</b>={profile.significant_lags[:5]}"
+            f"{'...' if len(profile.significant_lags) > 5 else ''}</span>"
+            f"</div>"
         )
     return f"""
     <div class="var-card">
       <div class="var-name">{escape(profile.name)} — temporal</div>
       {stl}
-      {fig_to_html_div(fig_acf, f'acf_{idx}')}
+      {fig_to_html_div(fig_acf, f"acf_{idx}")}
       <table class="summary">
         <thead><tr><th>Test</th><th class='num'>Statistic</th><th class='num'>p-value</th><th>Notas</th></tr></thead>
         <tbody>{test_rows}</tbody>
@@ -305,12 +303,8 @@ def _categorical_section(report) -> str:
         # Top categorias table
         rows = []
         for tc in p.top_categories:
-            tmean = (
-                f"{tc.target_mean:.2f}" if tc.target_mean is not None else "—"
-            )
-            tstd = (
-                f"{tc.target_std:.2f}" if tc.target_std is not None else "—"
-            )
+            tmean = f"{tc.target_mean:.2f}" if tc.target_mean is not None else "—"
+            tstd = f"{tc.target_std:.2f}" if tc.target_std is not None else "—"
             rows.append(
                 f"<tr><td>{escape(tc.value)}</td>"
                 f"<td class='num'>{tc.count:,}</td>"
@@ -330,13 +324,11 @@ def _categorical_section(report) -> str:
         )
 
         # Stats line
-        v_str = (
-            f"V={p.cramers_v_target:.2f}" if p.cramers_v_target is not None
-            else "V=—"
-        )
+        v_str = f"V={p.cramers_v_target:.2f}" if p.cramers_v_target is not None else "V=—"
         chi2_str = (
             f"χ²={p.chi2_statistic:.1f}, p={format_pvalue(p.chi2_p_value)}"
-            if p.chi2_statistic is not None else "χ²=—"
+            if p.chi2_statistic is not None
+            else "χ²=—"
         )
         stats_line = (
             f"<span><b>n</b>={p.n:,}</span>"
@@ -349,22 +341,27 @@ def _categorical_section(report) -> str:
         )
 
         # Recomendacion badge
-        rec_kind = "warn" if (
-            "agrupar" in p.target_encoding_recommendation
-            or "drop" in p.target_encoding_recommendation
-        ) else "info"
+        rec_kind = (
+            "warn"
+            if (
+                "agrupar" in p.target_encoding_recommendation
+                or "drop" in p.target_encoding_recommendation
+            )
+            else "info"
+        )
         rec_badge = render_badge(
-            "FE: " + p.target_encoding_recommendation, rec_kind,
+            "FE: " + p.target_encoding_recommendation,
+            rec_kind,
         )
 
         cards.append(
             f'<div class="var-card">'
             f'<div class="var-name">{escape(p.name)}</div>'
             f'<div class="var-stats">{stats_line}</div>'
-            f'<div>{rec_badge}</div>'
-            f'<h3>Top {len(p.top_categories)} categorias (vs target)</h3>'
-            f'{top_table}'
-            f'</div>'
+            f"<div>{rec_badge}</div>"
+            f"<h3>Top {len(p.top_categories)} categorias (vs target)</h3>"
+            f"{top_table}"
+            f"</div>"
         )
 
     # Asociaciones entre categoricas
@@ -374,7 +371,7 @@ def _categorical_section(report) -> str:
             f"<tr><td>{escape(a.feature_a)}</td><td>{escape(a.feature_b)}</td>"
             f"<td class='num'>{a.cramers_v:.3f}</td>"
             f"<td class='num'>{format_pvalue(a.chi2_p_value)}</td>"
-            f"<td>{render_badge(a.severity, 'danger' if a.severity=='high' else 'warn' if a.severity=='watch' else 'ok')}</td></tr>"
+            f"<td>{render_badge(a.severity, 'danger' if a.severity == 'high' else 'warn' if a.severity == 'watch' else 'ok')}</td></tr>"
             for a in report.associations
         )
         assoc_html = f"""
@@ -393,7 +390,7 @@ def _categorical_section(report) -> str:
     return f"""
     <section class="card">
       <h2>3-bis. Variables categoricas (frecuencia + asociacion con target)</h2>
-      {''.join(cards)}
+      {"".join(cards)}
       {assoc_html}
     </section>
     """
@@ -403,10 +400,7 @@ def _findings_section(findings: list[tuple]) -> str:
     """Lista de hallazgos top. `findings` = [(severity, message), ...]"""
     if not findings:
         return ""
-    items = "".join(
-        f'<li class="severity-{sev}">{escape(msg)}</li>'
-        for sev, msg in findings
-    )
+    items = "".join(f'<li class="severity-{sev}">{escape(msg)}</li>' for sev, msg in findings)
     return f"""
     <section class="card">
       <h2>Resumen ejecutivo — top hallazgos</h2>
@@ -422,7 +416,7 @@ def render_eda_html(
     n_cols: int,
     quality_metrics: dict,
     findings: list[tuple],
-    var_profiles_with_figs: Iterable[tuple],   # [(profile, hist, qq, box), ...]
+    var_profiles_with_figs: Iterable[tuple],  # [(profile, hist, qq, box), ...]
     temporal_profiles_with_figs: Iterable[tuple],  # [(profile, acf_fig), ...]
     corr_fig: go.Figure,
     vif_fig: go.Figure,
@@ -445,8 +439,7 @@ def render_eda_html(
     high_pairs_table = ""
     if high_corr_pairs:
         rows = "".join(
-            f"<tr><td>{escape(a)}</td><td>{escape(b)}</td>"
-            f"<td class='num'>{r:+.3f}</td></tr>"
+            f"<tr><td>{escape(a)}</td><td>{escape(b)}</td><td class='num'>{r:+.3f}</td></tr>"
             for a, b, r in high_corr_pairs[:30]
         )
         high_pairs_table = f"""
@@ -468,12 +461,12 @@ def render_eda_html(
 
       <section class="card">
         <h2>2. Distribuciones univariadas</h2>
-        {''.join(var_cards) or '<p>sin variables numericas</p>'}
+        {"".join(var_cards) or "<p>sin variables numericas</p>"}
       </section>
 
       <section class="card">
         <h2>3. Analisis temporal (autocorrelacion + estacionariedad + STL)</h2>
-        {''.join(temporal_cards) or '<p>sin perfil temporal disponible</p>'}
+        {"".join(temporal_cards) or "<p>sin perfil temporal disponible</p>"}
       </section>
 
       {_categorical_section(categorical_report)}
@@ -481,16 +474,16 @@ def render_eda_html(
       <section class="card">
         <h2>4. Multivariado</h2>
         <div class="grid-2">
-          {fig_to_html_div(corr_fig, 'corr_heatmap')}
-          {fig_to_html_div(vif_fig, 'vif_bars')}
+          {fig_to_html_div(corr_fig, "corr_heatmap")}
+          {fig_to_html_div(vif_fig, "vif_bars")}
         </div>
-        {fig_to_html_div(mi_fig, 'mi_bars')}
+        {fig_to_html_div(mi_fig, "mi_bars")}
         {high_pairs_table}
       </section>
 
       <section class="card">
         <h2>5. Drift entre anios (Population Stability Index)</h2>
-        {fig_to_html_div(psi_fig, 'psi_heatmap')}
+        {fig_to_html_div(psi_fig, "psi_heatmap")}
         <p style="font-size:11px; color:var(--gray-500); margin-top:8px;">
           PSI &lt; 0.10 sin drift · 0.10-0.25 moderado · &gt; 0.25 severo.
         </p>
@@ -498,7 +491,7 @@ def render_eda_html(
 
       <footer class="fineprint">
         ml_training EDA · variedad {escape(variety)} ·
-        generado {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        generado {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
       </footer>
     </div>
     """

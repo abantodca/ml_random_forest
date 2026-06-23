@@ -27,9 +27,7 @@ class Forecast(Base):
     # Identificadores
     variety: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     fecha: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    external_id: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, index=True
-    )
+    external_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
     # Datos de entrada (features RAW que el pipeline MLflow espera)
     kg_ha: Mapped[float] = mapped_column(Float, nullable=False)

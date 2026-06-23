@@ -38,18 +38,14 @@ DriftStatus = Literal["ok", "warning", "alert"]
 class ForecastCreate(BaseModel):
     """Schema para crear un pronostico individual."""
 
-    fecha: date = Field(
-        ..., alias="FECHA", description="Fecha del pronostico (YYYY-MM-DD)"
-    )
+    fecha: date = Field(..., alias="FECHA", description="Fecha del pronostico (YYYY-MM-DD)")
     external_id: str | None = Field(
         default=None,
         alias="EXTERNAL_ID",
         max_length=100,
         description="ID externo opcional para identificar pronosticos",
     )
-    kg_ha: float = Field(
-        ..., alias="KG/HA", gt=0.0, description="Kilogramos por hectarea"
-    )
+    kg_ha: float = Field(..., alias="KG/HA", gt=0.0, description="Kilogramos por hectarea")
     indus_pct: float | None = Field(
         default=None,
         alias="%INDUS",
@@ -57,9 +53,7 @@ class ForecastCreate(BaseModel):
         le=100.0,
         description="Porcentaje industrial (opcional)",
     )
-    dpc: float = Field(
-        ..., alias="DPC", description="Dias post cuaja"
-    )
+    dpc: float = Field(..., alias="DPC", description="Dias post cuaja")
     p_baya: float | None = Field(
         default=None,
         alias="P/BAYA",
@@ -158,18 +152,14 @@ class ForecastUpdate(BaseModel):
     fecha: date | None = Field(default=None, alias="FECHA")
     external_id: str | None = Field(default=None, alias="EXTERNAL_ID")
     kg_ha: float | None = Field(default=None, alias="KG/HA", gt=0.0)
-    indus_pct: float | None = Field(
-        default=None, alias="%INDUS", ge=0.0, le=100.0
-    )
+    indus_pct: float | None = Field(default=None, alias="%INDUS", ge=0.0, le=100.0)
     dpc: float | None = Field(default=None, alias="DPC")
     p_baya: float | None = Field(default=None, alias="P/BAYA", gt=0.0)
     ha: float | None = Field(default=None, alias="HA", gt=0.0)
     dia_cosecha: int | None = Field(default=None, alias="DIA_COSECHA", ge=0)
     formato: Formato | None = Field(default=None, alias="FORMATO")
     fundo: Fundo | None = Field(default=None, alias="FUNDO")
-    horas_efectivas: float | None = Field(
-        default=None, alias="HORAS_EFECTIVAS", ge=0
-    )
+    horas_efectivas: float | None = Field(default=None, alias="HORAS_EFECTIVAS", ge=0)
 
     @field_validator("formato", mode="before")
     @classmethod
@@ -189,11 +179,7 @@ class ForecastUpdate(BaseModel):
 
     model_config = ConfigDict(
         populate_by_name=True,
-        json_schema_extra={
-            "examples": [
-                {"EXTERNAL_ID": "FECV-UPDATED", "HORAS_EFECTIVAS": 9.0}
-            ]
-        },
+        json_schema_extra={"examples": [{"EXTERNAL_ID": "FECV-UPDATED", "HORAS_EFECTIVAS": 9.0}]},
     )
 
 
@@ -371,7 +357,5 @@ class DeletedCountResponse(BaseModel):
     message: str
 
     model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [{"deleted": 5, "message": "5 pronosticos eliminados"}]
-        }
+        json_schema_extra={"examples": [{"deleted": 5, "message": "5 pronosticos eliminados"}]}
     )

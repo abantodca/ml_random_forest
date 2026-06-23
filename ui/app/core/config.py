@@ -25,9 +25,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError as exc:
-        raise ValueError(
-            f"La variable {name} debe ser entera, recibido {raw!r}"
-        ) from exc
+        raise ValueError(f"La variable {name} debe ser entera, recibido {raw!r}") from exc
 
 
 @dataclass(frozen=True)
@@ -51,11 +49,7 @@ class Configuracion:
             timeout_write=_env_int("TIMEOUT_WRITE", DEFAULT_TIMEOUT_WRITE),
             timeout_batch=_env_int("TIMEOUT_BATCH", DEFAULT_TIMEOUT_BATCH),
             cache_ttl_health=_env_int("CACHE_TTL_HEALTH", DEFAULT_CACHE_TTL_HEALTH),
-            cache_ttl_varieties=_env_int(
-                "CACHE_TTL_VARIETIES", DEFAULT_CACHE_TTL_VARIETIES
-            ),
-            cache_ttl_forecasts=_env_int(
-                "CACHE_TTL_FORECASTS", DEFAULT_CACHE_TTL_FORECASTS
-            ),
+            cache_ttl_varieties=_env_int("CACHE_TTL_VARIETIES", DEFAULT_CACHE_TTL_VARIETIES),
+            cache_ttl_forecasts=_env_int("CACHE_TTL_FORECASTS", DEFAULT_CACHE_TTL_FORECASTS),
             log_level=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
         )

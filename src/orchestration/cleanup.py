@@ -4,6 +4,7 @@ Tambien centraliza la limpieza de archivos residuales en `reports/` que
 sobreviven a re-corridas de la misma variedad (HTMLs/Excels viejos sin el
 campeon actual).
 """
+
 from __future__ import annotations
 
 import gc
@@ -36,7 +37,10 @@ def cleanup_state(logger, label: str) -> None:
 
 
 def cleanup_residual_reports(
-    *, variety: str, keep: Iterable[Path | str], reports_dir: Path | None = None,
+    *,
+    variety: str,
+    keep: Iterable[Path | str],
+    reports_dir: Path | None = None,
 ) -> list[Path]:
     """Borra artefactos OBSOLETOS de la variedad que no esten en `keep`.
 

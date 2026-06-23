@@ -29,19 +29,17 @@ async def list_history(
     limit: int = 500,
     offset: int = 0,
 ) -> tuple[list[HistoricalObservation], int]:
-    base = select(HistoricalObservation).where(
-        HistoricalObservation.variety == variety.upper()
-    )
-    total = (
-        await db.execute(select(func.count()).select_from(base.subquery()))
-    ).scalar_one()
+    base = select(HistoricalObservation).where(HistoricalObservation.variety == variety.upper())
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     rows = (
-        await db.execute(
-            base.order_by(HistoricalObservation.fecha.desc())
-            .offset(offset)
-            .limit(limit)
+        (
+            await db.execute(
+                base.order_by(HistoricalObservation.fecha.desc()).offset(offset).limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows), total
 
 
@@ -89,9 +87,7 @@ async def bulk_insert(
 async def delete_by_variety(db: AsyncSession, variety: str) -> int:
     """Borra todas las observaciones de una variedad. Util para re-seed."""
     result = await db.execute(
-        delete(HistoricalObservation).where(
-            HistoricalObservation.variety == variety.upper()
-        )
+        delete(HistoricalObservation).where(HistoricalObservation.variety == variety.upper())
     )
     await db.commit()
     return result.rowcount

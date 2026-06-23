@@ -15,9 +15,7 @@ class HealthService:
 
     def get(self) -> ServiceHealth | None:
         try:
-            data = self._client.get(
-                endpoints.HEALTH, timeout=self._client.timeout_health
-            )
+            data = self._client.get(endpoints.HEALTH, timeout=self._client.timeout_health)
         except (ApiConnectionError, ApiResponseError) as exc:
             logger.warning("Health check fallido: %s", exc)
             return None
@@ -25,8 +23,6 @@ class HealthService:
 
     def reload_models(self) -> dict:
         try:
-            return self._client.post(
-                endpoints.RELOAD_MODELS, timeout=self._client.timeout_batch
-            )
+            return self._client.post(endpoints.RELOAD_MODELS, timeout=self._client.timeout_batch)
         except (ApiResponseError, ApiConnectionError) as exc:
             return {"error": str(exc)}

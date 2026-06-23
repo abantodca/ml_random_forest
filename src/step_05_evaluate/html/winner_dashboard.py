@@ -15,6 +15,7 @@ CSS / plotly bundle viven en `styles.py`; helpers de presentacion en
 ejecutivo vive en `step_05_evaluate.explainability.build_winner_kit`
 para que el Excel ejecutivo lo reuse sin duplicar logica.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -75,21 +76,33 @@ def render_winner_dashboard(
     kit = build_winner_kit(variety=variety, champion=champion, X_raw=X_raw)
 
     hero = build_hero(
-        variety=variety, champion=champion, verdict=kit.verdict,
-        excel_path=excel_path, timestamp=ts,
-        oof_mape=kit.oof_mape, oof_r2=kit.oof_r2,
+        variety=variety,
+        champion=champion,
+        verdict=kit.verdict,
+        excel_path=excel_path,
+        timestamp=ts,
+        oof_mape=kit.oof_mape,
+        oof_r2=kit.oof_r2,
     )
     context_html = build_context_section(kit.context, champion)
     mega_kpis = build_mega_kpis(
-        kit.abs_err, kit.real, kit.pred, kit.oof_mape, kit.oof_r2,
+        kit.abs_err,
+        kit.real,
+        kit.pred,
+        kit.oof_mape,
+        kit.oof_r2,
     )
     fundo_formato_html = build_fundo_formato_section(
-        kit.X_aligned, kit.abs_err, kit.real,
+        kit.X_aligned,
+        kit.abs_err,
+        kit.real,
     )
     guide = build_guide_section()
     backends_compare = build_backends_comparison_section(results, champion)
     stat_diag = build_statistical_diagnostic_section(
-        mae_ci=kit.mae_oof_ci, mape_ci=kit.mape_oof_ci, r2_ci=kit.r2_oof_ci,
+        mae_ci=kit.mae_oof_ci,
+        mape_ci=kit.mape_oof_ci,
+        r2_ci=kit.r2_oof_ci,
         heteroscedasticity=kit.heteroscedasticity,
         calibration_df=kit.calibration,
     )
@@ -107,6 +120,7 @@ def render_winner_dashboard(
     if X_raw is not None and champion.pipeline_path:
         try:
             import joblib
+
             ensemble = joblib.load(champion.pipeline_path)
             # Tomamos el primer pipeline del ensemble para preprocessor + features
             inner_pipe = ensemble.models_[0] if hasattr(ensemble, "models_") else ensemble
@@ -124,8 +138,10 @@ def render_winner_dashboard(
                 except AttributeError:
                     feature_names = [f"f{i}" for i in range(X_transformed.shape[1])]
             from src.step_05_evaluate.diagnostics import plot_partial_dependence_plotly
+
             pdp_html = plot_partial_dependence_plotly(
-                ensemble, X_transformed,
+                ensemble,
+                X_transformed,
                 feature_names=feature_names,
                 top_k=5,
             )
@@ -134,8 +150,12 @@ def render_winner_dashboard(
     pdp_section = build_pdp_section(pdp_html)
     diagnostic_links = build_diagnostic_links_section(variety, out_dir)
     technical = build_technical_section(
-        results=results, champion=champion, decision=decision,
-        X_aligned=kit.X_aligned, abs_errors=kit.abs_err, real=kit.real,
+        results=results,
+        champion=champion,
+        decision=decision,
+        X_aligned=kit.X_aligned,
+        abs_errors=kit.abs_err,
+        real=kit.real,
     )
 
     # Run identification para trazabilidad: run_id MLflow truncado + link al
@@ -143,11 +163,15 @@ def render_winner_dashboard(
     run_id = champion.mlflow_run_id or ""
     run_id_short = run_id[:12] if run_id else ""
     mlflow_link = (
-        f'<a href="http://localhost:5000/#/experiments/0/runs/{escape(run_id)}" '
-        f'style="color:#93c5fd;text-decoration:none;font-family:monospace;" '
-        f'target="_blank" title="Abrir en MLflow UI">'
-        f'run {escape(run_id_short)} &#x2197;</a>'
-    ) if run_id else '<span style="opacity:.4;">run sin id</span>'
+        (
+            f'<a href="http://localhost:5000/#/experiments/0/runs/{escape(run_id)}" '
+            f'style="color:#93c5fd;text-decoration:none;font-family:monospace;" '
+            f'target="_blank" title="Abrir en MLflow UI">'
+            f"run {escape(run_id_short)} &#x2197;</a>"
+        )
+        if run_id
+        else '<span style="opacity:.4;">run sin id</span>'
+    )
 
     nav_back = f"""
         <nav style="background:#0f172a;color:#e2e8f0;padding:8px 16px;

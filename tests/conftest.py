@@ -8,6 +8,7 @@ La suite corre DENTRO del contenedor (mismas versiones que produccion):
 El test de la API (`test_api_conformal.py`) ademas corre en el contenedor
 api (necesita fastapi); en el trainer se salta solo via importorskip.
 """
+
 from __future__ import annotations
 
 import sys
@@ -37,16 +38,18 @@ def df_raw_minimo() -> tuple[pd.DataFrame, pd.Series]:
         pd.Timestamp(2024, 1, 6),
     ]
     n = len(fechas)
-    X = pd.DataFrame({
-        "FECHA": fechas,
-        "FUNDO": ["A"] * n,
-        "FORMATO": ["G"] * n,
-        "KG/HA": [1.0, 2.0, 3.0, 4.0, 5.0, 100.0, 0.0],
-        "%INDUS": [0.1] * n,
-        "DPC": [10.0] * n,
-        "P/BAYA": [3.0] * n,
-        "HA": [2.0] * n,
-        "DIA_COSECHA": list(range(1, n + 1)),
-    })
+    X = pd.DataFrame(
+        {
+            "FECHA": fechas,
+            "FUNDO": ["A"] * n,
+            "FORMATO": ["G"] * n,
+            "KG/HA": [1.0, 2.0, 3.0, 4.0, 5.0, 100.0, 0.0],
+            "%INDUS": [0.1] * n,
+            "DPC": [10.0] * n,
+            "P/BAYA": [3.0] * n,
+            "HA": [2.0] * n,
+            "DIA_COSECHA": list(range(1, n + 1)),
+        }
+    )
     y = pd.Series(np.linspace(4.0, 6.0, n), name="KG/JR_H")
     return X, y

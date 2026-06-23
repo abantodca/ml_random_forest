@@ -22,6 +22,7 @@ y NO usan target ni H-EF, asi que no hay riesgo de leakage. Las divisiones
 usan np.where(den > 0, num/den, NaN) y dejan que XGB/LGB redirijan los NaN
 a su rama default por loss (tratamiento nativo de NaN en gradient boosting).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -86,11 +87,7 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
     # Helpers
     # ------------------------------------------------------------------
     def _resolve_categorical(self, X: pd.DataFrame) -> list[str]:
-        cols = (
-            self.categorical_cols
-            if self.categorical_cols is not None
-            else CATEGORICAL_FEATURES
-        )
+        cols = self.categorical_cols if self.categorical_cols is not None else CATEGORICAL_FEATURES
         missing = [c for c in cols if c not in X.columns]
         if missing:
             raise ValueError(f"FeatureGenerator: categoricas inexistentes: {missing}")
@@ -192,9 +189,9 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
     def _structural_ratios(X: pd.DataFrame, names: list[str]) -> pd.DataFrame:
         out = pd.DataFrame(index=X.index)
         if "KG_TOTAL" in names:
-            out["KG_TOTAL"] = (X["KG/HA"].astype(float) * X["HA"].astype(float))
+            out["KG_TOTAL"] = X["KG/HA"].astype(float) * X["HA"].astype(float)
         if "INDUS_KG_HA" in names:
-            out["INDUS_KG_HA"] = (X["%INDUS"].astype(float) * X["KG/HA"].astype(float))
+            out["INDUS_KG_HA"] = X["%INDUS"].astype(float) * X["KG/HA"].astype(float)
         if "KG_PER_BAYA" in names:
             num = X["KG/HA"].astype(float).to_numpy()
             den = X["P/BAYA"].astype(float).to_numpy()
@@ -206,11 +203,14 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         return out
 
     @staticmethod
-    def _date_features(series: pd.Series, add_year: bool,
-                       trend_anchor: pd.Timestamp | None = None,
-                       calendar_extra: bool = False,
-                       high_season_months: tuple | None = None,
-                       low_season_months: tuple | None = None) -> pd.DataFrame:
+    def _date_features(
+        series: pd.Series,
+        add_year: bool,
+        trend_anchor: pd.Timestamp | None = None,
+        calendar_extra: bool = False,
+        high_season_months: tuple | None = None,
+        low_season_months: tuple | None = None,
+    ) -> pd.DataFrame:
         """Features derivadas de FECHA: ciclicas (Fourier) + tendencia.
 
         `trend_anchor` (memorized en fit): timestamp inicial del dataset
@@ -297,28 +297,19 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         self.date_col_ = date_col
 
         # Categorias memorizadas
-        self.categories_ = {
-            c: sorted(map(str, X[c].dropna().unique().tolist())) for c in cat_cols
-        }
+        self.categories_ = {c: sorted(map(str, X[c].dropna().unique().tolist())) for c in cat_cols}
 
         # Interaccion FUNDO_FORMATO: solo si ambos estan presentes y la flag
         # esta activa. Memorizamos las combinaciones VISTAS en train (no el
         # producto cartesiano) para evitar dummies constantes. Combinaciones
         # nuevas en transform caen a la dummy "OTROS" (todas en 0).
         self.ff_categories_: list[str] = []
-        if (
-            self.add_fundo_formato_interaction
-            and "FUNDO" in cat_cols and "FORMATO" in cat_cols
-        ):
-            ff = (
-                X["FUNDO"].astype(str) + "__" + X["FORMATO"].astype(str)
-            ).dropna()
+        if self.add_fundo_formato_interaction and "FUNDO" in cat_cols and "FORMATO" in cat_cols:
+            ff = (X["FUNDO"].astype(str) + "__" + X["FORMATO"].astype(str)).dropna()
             self.ff_categories_ = sorted(ff.unique().tolist())
 
         # Columnas que pasan tal cual: numericas (todo lo demas)
-        passthrough = [
-            c for c in X.columns if c not in cat_cols and c != date_col
-        ]
+        passthrough = [c for c in X.columns if c not in cat_cols and c != date_col]
         self.passthrough_cols_ = passthrough
 
         # Ratios estructurales: cuales se pueden calcular dadas las columnas
@@ -349,9 +340,7 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         # calculan aparte); solo deja de salir como feature directa.
         if SKEW_DROP_RAW and self.skew_shifts_:
             dropped = set(self.skew_shifts_.keys())
-            self.passthrough_cols_ = [
-                c for c in self.passthrough_cols_ if c not in dropped
-            ]
+            self.passthrough_cols_ = [c for c in self.passthrough_cols_ if c not in dropped]
             passthrough = self.passthrough_cols_
 
         # Trend anchor: primer dia visto durante el fit. Se usa en transform
@@ -368,14 +357,19 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         if date_col is not None:
             self.date_feature_names_ = (
                 [
-                    "MES_SIN", "MES_COS",
-                    "MES_SIN2", "MES_COS2",
-                    "MES_SIN3", "MES_COS3",
-                    "SEMANA_SIN", "SEMANA_COS",
+                    "MES_SIN",
+                    "MES_COS",
+                    "MES_SIN2",
+                    "MES_COS2",
+                    "MES_SIN3",
+                    "MES_COS3",
+                    "SEMANA_SIN",
+                    "SEMANA_COS",
                 ]
                 + (["SEMANA_SIN2", "SEMANA_COS2"] if self.calendar_extra_ else [])
                 + [
-                    "TEMPORADA_ALTA", "TEMPORADA_BAJA",
+                    "TEMPORADA_ALTA",
+                    "TEMPORADA_BAJA",
                 ]
                 + (["t_index_days", "t_index_years"] if self.trend_anchor_ is not None else [])
                 + (["ANIO"] if self.add_year else [])
@@ -397,12 +391,8 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
                     self.freq_feature_names_.append(f"{c}_FREQ")
 
         # Dummies finales
-        dummy_cols = [
-            f"{c}__{cat}" for c in cat_cols for cat in self.categories_[c]
-        ]
-        ff_dummy_cols = [
-            f"FUNDO_FORMATO__{cat}" for cat in self.ff_categories_
-        ]
+        dummy_cols = [f"{c}__{cat}" for c in cat_cols for cat in self.categories_[c]]
+        ff_dummy_cols = [f"FUNDO_FORMATO__{cat}" for cat in self.ff_categories_]
         self.feature_names_out_ = (
             passthrough
             + self.structural_feature_names_
@@ -427,7 +417,8 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
 
         if self.date_col_ is not None:
             date_part = self._date_features(
-                X[self.date_col_], self.add_year,
+                X[self.date_col_],
+                self.add_year,
                 trend_anchor=getattr(self, "trend_anchor_", None),
                 # getattr: pickles legacy (pre-fix) no tienen el atributo ->
                 # False/None, que era el comportamiento default de entonces.
@@ -456,7 +447,9 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         if ff_categories and "FUNDO" in X.columns and "FORMATO" in X.columns:
             ff_series = X["FUNDO"].astype(str) + "__" + X["FORMATO"].astype(str)
             ff_dummies = pd.get_dummies(
-                ff_series, prefix="FUNDO_FORMATO", prefix_sep="__",
+                ff_series,
+                prefix="FUNDO_FORMATO",
+                prefix_sep="__",
             )
             for cat in ff_categories:
                 col_name = f"FUNDO_FORMATO__{cat}"
@@ -467,13 +460,10 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
 
         freq_part = pd.DataFrame(index=X.index)
         for c, fmap in getattr(self, "freq_maps_", {}).items():
-            freq_part[f"{c}_FREQ"] = (
-                X[c].astype(str).map(fmap).fillna(0.0).astype(float)
-            )
+            freq_part[f"{c}_FREQ"] = X[c].astype(str).map(fmap).fillna(0.0).astype(float)
 
         out = pd.concat(
-            [passthrough_part, structural_part, skew_part, date_part,
-             freq_part, *dummy_frames],
+            [passthrough_part, structural_part, skew_part, date_part, freq_part, *dummy_frames],
             axis=1,
         )
         return out.loc[:, self.feature_names_out_]

@@ -28,6 +28,7 @@ para el experimento (la columna individual si se elimina).
 El flag se HORNEA en fit (self.exante_) — mismo contrato self-contained
 que LagFeatureTransformer.flags_: el pickle no relee env en transform.
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,9 +70,7 @@ class ConcurrentFeatureDropper(BaseEstimator, TransformerMixin):
 
     def fit(self, X: pd.DataFrame, y=None) -> ConcurrentFeatureDropper:
         self.exante_ = EXANTE_MODE
-        self.cols_to_drop_ = (
-            [c for c in X.columns if _es_concurrente(c)] if self.exante_ else []
-        )
+        self.cols_to_drop_ = [c for c in X.columns if _es_concurrente(c)] if self.exante_ else []
         if self.cols_to_drop_:
             # DEBUG: se dispara en cada pipeline.fit del nested CV (~4500
             # veces en prod) — mismo criterio que LagFeatureTransformer.

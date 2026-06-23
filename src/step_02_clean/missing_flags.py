@@ -6,6 +6,7 @@ informativa: en el dataset POP, las filas con P/BAYA NaN tenian MAPE
 17.3% vs 15.6% en filas observadas, asi que esa senal vale la pena
 exponerla al modelo.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -36,7 +37,11 @@ class MissingFlagger(BaseEstimator, TransformerMixin):
 
     def _resolve(self, X: pd.DataFrame) -> list[str]:
         return resolve_cols(
-            X, self.cols, MISSING_FLAG_COLS, "MissingFlagger", require_all=False,
+            X,
+            self.cols,
+            MISSING_FLAG_COLS,
+            "MissingFlagger",
+            require_all=False,
         )
 
     def fit(self, X: pd.DataFrame, y=None) -> MissingFlagger:

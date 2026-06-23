@@ -3,6 +3,7 @@
 Se renderiza tanto en el HTML (tooltips + tabla) como en el Excel
 (hoja "Glosario"). Mantener corto y claro.
 """
+
 from __future__ import annotations
 
 GLOSSARY: dict[str, str] = {

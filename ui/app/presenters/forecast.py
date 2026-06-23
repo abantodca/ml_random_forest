@@ -25,17 +25,35 @@ DRIFT_BADGE = {"ok": "🟢 OK", "warning": "🟡 Atención", "alert": "🔴 Aler
 
 # Orden de columnas = requeridas + opcionales del validador de lotes.
 COLS = [
-    "VARIEDAD", "FECHA", "FUNDO", "FORMATO", "KG/HA", "DPC", "HA",
-    "DIA_COSECHA", "%INDUS", "P/BAYA", "HORAS_EFECTIVAS", "EXTERNAL_ID",
+    "VARIEDAD",
+    "FECHA",
+    "FUNDO",
+    "FORMATO",
+    "KG/HA",
+    "DPC",
+    "HA",
+    "DIA_COSECHA",
+    "%INDUS",
+    "P/BAYA",
+    "HORAS_EFECTIVAS",
+    "EXTERNAL_ID",
 ]
 
 
 def seed_row(variety: str, fundo: str, formato: str) -> dict:
     return {
-        "VARIEDAD": variety, "FECHA": date.today(), "FUNDO": fundo,
-        "FORMATO": formato, "KG/HA": 5000.0, "DPC": 120.0, "HA": 10.0,
-        "DIA_COSECHA": 30, "%INDUS": None, "P/BAYA": None,
-        "HORAS_EFECTIVAS": None, "EXTERNAL_ID": "",
+        "VARIEDAD": variety,
+        "FECHA": date.today(),
+        "FUNDO": fundo,
+        "FORMATO": formato,
+        "KG/HA": 5000.0,
+        "DPC": 120.0,
+        "HA": 10.0,
+        "DIA_COSECHA": 30,
+        "%INDUS": None,
+        "P/BAYA": None,
+        "HORAS_EFECTIVAS": None,
+        "EXTERNAL_ID": "",
     }
 
 
@@ -96,15 +114,13 @@ def pre_summary_text(df: pd.DataFrame) -> str | None:
     var_list = ", ".join(f"`{v}`" for v in varieties_in[:5])
     suffix = f" ... (+{n_var - 5} más)" if n_var > 5 else ""
     return (
-        f"**{n_rows}** fila(s) listas para predecir · "
-        f"**{n_var}** variedad(es): {var_list}{suffix}"
+        f"**{n_rows}** fila(s) listas para predecir · **{n_var}** variedad(es): {var_list}{suffix}"
     )
 
 
 def issue_rows(issues: list[ValidationIssue]) -> list[dict]:
     return [
-        {"Fila": i.fila, "Columna": i.columna, "Valor": i.valor, "Motivo": i.motivo}
-        for i in issues
+        {"Fila": i.fila, "Columna": i.columna, "Valor": i.valor, "Motivo": i.motivo} for i in issues
     ]
 
 
@@ -146,13 +162,19 @@ def execute_batch(
             out.batch_drifts.append((str(variety), result.batch_drift))
         for it in result.items:
             badge = DRIFT_BADGE.get(it.drift.status, "—") if it.drift else "—"
-            out.preds.append({
-                "ID": it.id, "Variedad": it.variety, "Fecha": it.fecha,
-                "Fundo": it.fundo, "Formato": it.formato, "KG/HA": it.kg_ha,
-                "KGHORA pred": round(it.kghora_pred, 3),
-                "KGJN pred": round(it.kgjn_pred, 3) if it.kgjn_pred else None,
-                "Confiabilidad": badge,
-            })
+            out.preds.append(
+                {
+                    "ID": it.id,
+                    "Variedad": it.variety,
+                    "Fecha": it.fecha,
+                    "Fundo": it.fundo,
+                    "Formato": it.formato,
+                    "KG/HA": it.kg_ha,
+                    "KGHORA pred": round(it.kghora_pred, 3),
+                    "KGJN pred": round(it.kgjn_pred, 3) if it.kgjn_pred else None,
+                    "Confiabilidad": badge,
+                }
+            )
             out.records.append(it)
     return out
 
@@ -174,8 +196,15 @@ class ResultsVM:
 
 # Prioridad de columnas en la tabla de resultados (Confiabilidad primero).
 _RESULT_PRIORITY = [
-    "Confiabilidad", "Variedad", "Fecha", "KGHORA pred", "KGJN pred",
-    "Fundo", "Formato", "KG/HA", "ID",
+    "Confiabilidad",
+    "Variedad",
+    "Fecha",
+    "KGHORA pred",
+    "KGJN pred",
+    "Fundo",
+    "Formato",
+    "KG/HA",
+    "ID",
 ]
 
 
@@ -201,13 +230,12 @@ def build_results_vm(preds: list[dict], records: list[ForecastRecord]) -> Result
         )
 
     results_df = pd.DataFrame(preds)
-    ordered = [c for c in _RESULT_PRIORITY if c in results_df.columns] + \
-              [c for c in results_df.columns if c not in _RESULT_PRIORITY]
+    ordered = [c for c in _RESULT_PRIORITY if c in results_df.columns] + [
+        c for c in results_df.columns if c not in _RESULT_PRIORITY
+    ]
     results_df = results_df[ordered] if ordered else results_df
 
-    hist_df = pd.DataFrame(
-        [{"variedad": r.variety, "kghora_pred": r.kghora_pred} for r in records]
-    )
+    hist_df = pd.DataFrame([{"variedad": r.variety, "kghora_pred": r.kghora_pred} for r in records])
 
     return ResultsVM(
         n_preds=len(preds),

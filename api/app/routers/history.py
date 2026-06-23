@@ -148,9 +148,7 @@ async def upload_history(
         logger.info("History replaced: variety=%s deleted=%d", variety, deleted)
 
     inserted = await crud.historical_observation.bulk_insert(db, variety, rows)
-    logger.info(
-        "History upload: variety=%s inserted=%d skipped=%d", variety, inserted, skipped
-    )
+    logger.info("History upload: variety=%s inserted=%d skipped=%d", variety, inserted, skipped)
 
     return HistoryImportResponse(
         variety=variety,
@@ -173,11 +171,17 @@ async def list_history(
 ) -> HistoricalObservationListResponse:
     """Lista paginada del historial cargado para una variedad."""
     rows, total = await crud.historical_observation.list_history(
-        db, variety, limit=limit, offset=offset,
+        db,
+        variety,
+        limit=limit,
+        offset=offset,
     )
     items = [HistoricalObservationResponse.model_validate(r) for r in rows]
     return HistoricalObservationListResponse(
-        items=items, total=total, limit=limit, offset=offset,
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

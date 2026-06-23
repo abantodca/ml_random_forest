@@ -49,9 +49,7 @@ class ForecastService:
         )
         return to_forecast(data)
 
-    def create_batch(
-        self, variety: str, records: list[dict]
-    ) -> ForecastListResult:
+    def create_batch(self, variety: str, records: list[dict]) -> ForecastListResult:
         data = self._client.post(
             endpoints.forecast_batch(variety),
             timeout=self._client.timeout_batch,
@@ -81,9 +79,7 @@ class ForecastService:
         )
         return data.get("deleted", 0)
 
-    def upload_excel(
-        self, variety: str, file_bytes: bytes, filename: str
-    ) -> ForecastListResult:
+    def upload_excel(self, variety: str, file_bytes: bytes, filename: str) -> ForecastListResult:
         files = {
             "file": (
                 filename,

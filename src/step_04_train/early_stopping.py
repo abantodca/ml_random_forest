@@ -23,6 +23,7 @@ Diseno:
   - Tras el corte, `predict` de ambos backends usa automaticamente la mejor
     iteracion (best_iteration), no los N_ESTIMATORS_MAX arboles.
 """
+
 from __future__ import annotations
 
 import logging
@@ -59,7 +60,11 @@ def _log_overfit(est, name: str, X_tr, y_tr, X_va, y_va) -> None:
         mae_va = float(mean_absolute_error(y_va, est.predict(X_va)))
         logger.debug(
             "%s early-stop: best_iter=%s MAE_train=%.4f MAE_val=%.4f gap=%.4f",
-            name, best_it, mae_tr, mae_va, mae_va - mae_tr,
+            name,
+            best_it,
+            mae_tr,
+            mae_va,
+            mae_va - mae_tr,
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("%s early-stop: diagnostico no disponible: %s", name, exc)
@@ -92,8 +97,12 @@ def _split_fit_inputs(
     sw_tr = _take(sample_weight, tr) if sample_weight is not None else None
     sw_va = _take(sample_weight, va) if sample_weight is not None else None
     return (
-        _take(X, tr), _take(y, tr), sw_tr,
-        _take(X, va), _take(y, va), sw_va,
+        _take(X, tr),
+        _take(y, tr),
+        sw_tr,
+        _take(X, va),
+        _take(y, va),
+        sw_va,
     )
 
 
@@ -110,10 +119,14 @@ class EarlyStoppingLGBMRegressor(LGBMRegressor):
         if n_rows < EARLY_STOPPING_MIN_ROWS:
             return super().fit(X, y, sample_weight=sample_weight, **kwargs)
         X_tr, y_tr, sw_tr, X_va, y_va, sw_va = _split_fit_inputs(
-            X, y, sample_weight, _seed_of(self),
+            X,
+            y,
+            sample_weight,
+            _seed_of(self),
         )
         fitted = super().fit(
-            X_tr, y_tr,
+            X_tr,
+            y_tr,
             sample_weight=sw_tr,
             eval_set=[(X_va, y_va)],
             eval_sample_weight=[sw_va] if sw_va is not None else None,
@@ -140,10 +153,14 @@ class EarlyStoppingXGBRegressor(XGBRegressor):
             return super().fit(X, y, sample_weight=sample_weight, **kwargs)
         self.early_stopping_rounds = EARLY_STOPPING_ROUNDS
         X_tr, y_tr, sw_tr, X_va, y_va, sw_va = _split_fit_inputs(
-            X, y, sample_weight, _seed_of(self),
+            X,
+            y,
+            sample_weight,
+            _seed_of(self),
         )
         fitted = super().fit(
-            X_tr, y_tr,
+            X_tr,
+            y_tr,
             sample_weight=sw_tr,
             eval_set=[(X_va, y_va)],
             sample_weight_eval_set=[sw_va] if sw_va is not None else None,

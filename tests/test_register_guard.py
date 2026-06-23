@@ -5,6 +5,7 @@
   - REGISTER_ENABLED=0 (guard explicito),
   - EXANTE_MODE=1 (flag experimental: su campeon no va al Registry).
 """
+
 from __future__ import annotations
 
 from argparse import Namespace
@@ -41,20 +42,14 @@ def test_campeon_sano_en_dev_si_registra():
 
 
 def test_smoke_nunca_registra():
-    assert not _apply_quality_gate(
-        _champion_sano(), _args(tuning="smoke"), "POP", _LoggerNulo()
-    )
+    assert not _apply_quality_gate(_champion_sano(), _args(tuning="smoke"), "POP", _LoggerNulo())
 
 
 def test_register_enabled_0_bloquea(monkeypatch):
     monkeypatch.setattr(config, "REGISTER_ENABLED", False)
-    assert not _apply_quality_gate(
-        _champion_sano(), _args(), "POP", _LoggerNulo()
-    )
+    assert not _apply_quality_gate(_champion_sano(), _args(), "POP", _LoggerNulo())
 
 
 def test_exante_mode_bloquea_aunque_pase_el_gate(monkeypatch):
     monkeypatch.setattr(config, "EXANTE_MODE", True)
-    assert not _apply_quality_gate(
-        _champion_sano(), _args(), "POP", _LoggerNulo()
-    )
+    assert not _apply_quality_gate(_champion_sano(), _args(), "POP", _LoggerNulo())

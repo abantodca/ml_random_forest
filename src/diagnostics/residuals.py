@@ -15,6 +15,7 @@ Este reporte responde a:
 Se invoca al final de single_run.train_model y se sube como artifact MLflow
 en `residuals/` del run.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -46,11 +47,15 @@ from src.diagnostics.statistical_tests import (
 def _residuals_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
     res = y_true - y_pred
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=y_pred, y=res, mode="markers",
-        marker=dict(color="#3b82f6", size=4, opacity=0.5),
-        hovertemplate="pred=%{x:.3f}<br>residual=%{y:.3f}<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=y_pred,
+            y=res,
+            mode="markers",
+            marker=dict(color="#3b82f6", size=4, opacity=0.5),
+            hovertemplate="pred=%{x:.3f}<br>residual=%{y:.3f}<extra></extra>",
+        )
+    )
     fig.add_hline(y=0, line=dict(color="#dc2626", dash="dash", width=1))
     fig.update_xaxes(title="prediccion (y_pred)")
     fig.update_yaxes(title="residual (y_true - y_pred)")
@@ -60,20 +65,29 @@ def _residuals_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
 def _abs_res_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
     res = np.abs(y_true - y_pred)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=y_pred, y=res, mode="markers",
-        marker=dict(color="#7c3aed", size=4, opacity=0.5),
-        hovertemplate="pred=%{x:.3f}<br>|residual|=%{y:.3f}<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=y_pred,
+            y=res,
+            mode="markers",
+            marker=dict(color="#7c3aed", size=4, opacity=0.5),
+            hovertemplate="pred=%{x:.3f}<br>|residual|=%{y:.3f}<extra></extra>",
+        )
+    )
     # Suavizado lowess para visualizar tendencia
     try:
         from statsmodels.nonparametric.smoothers_lowess import lowess
+
         smoothed = lowess(res, y_pred, frac=0.3, return_sorted=True)
-        fig.add_trace(go.Scatter(
-            x=smoothed[:, 0], y=smoothed[:, 1],
-            mode="lines", line=dict(color="#dc2626", width=2),
-            hoverinfo="skip",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=smoothed[:, 0],
+                y=smoothed[:, 1],
+                mode="lines",
+                line=dict(color="#dc2626", width=2),
+                hoverinfo="skip",
+            )
+        )
     except Exception:
         pass
     fig.update_xaxes(title="prediccion (y_pred)")
@@ -83,11 +97,15 @@ def _abs_res_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
 
 def _residuals_hist_fig(residuals: np.ndarray) -> go.Figure:
     fig = go.Figure()
-    fig.add_trace(go.Histogram(
-        x=residuals, nbinsx=40,
-        marker_color="#3b82f6", opacity=0.7,
-        hovertemplate="bin=%{x:.3f}<br>n=%{y}<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Histogram(
+            x=residuals,
+            nbinsx=40,
+            marker_color="#3b82f6",
+            opacity=0.7,
+            hovertemplate="bin=%{x:.3f}<br>n=%{y}<extra></extra>",
+        )
+    )
     fig.add_vline(x=0, line=dict(color="#dc2626", dash="dash"))
     fig.update_xaxes(title="residual")
     fig.update_yaxes(title="frecuencia")
@@ -96,22 +114,31 @@ def _residuals_hist_fig(residuals: np.ndarray) -> go.Figure:
 
 def _residuals_qq_fig(residuals: np.ndarray) -> go.Figure:
     from scipy.stats import probplot
+
     fig = go.Figure()
     if len(residuals) < 10:
         fig.add_annotation(text="n insuficiente", showarrow=False, x=0.5, y=0.5)
         return style_fig(fig, title="Q-Q plot residuos")
     (osm, osr), _ = probplot(residuals, dist="norm")
-    fig.add_trace(go.Scatter(
-        x=osm, y=osr, mode="markers",
-        marker=dict(color="#3b82f6", size=4, opacity=0.6),
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=osm,
+            y=osr,
+            mode="markers",
+            marker=dict(color="#3b82f6", size=4, opacity=0.6),
+        )
+    )
     sigma = float(np.std(residuals))
     mu = float(np.mean(residuals))
     lo, hi = float(osm.min()), float(osm.max())
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], y=[lo * sigma + mu, hi * sigma + mu],
-        mode="lines", line=dict(color="#dc2626", dash="dash"),
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[lo, hi],
+            y=[lo * sigma + mu, hi * sigma + mu],
+            mode="lines",
+            line=dict(color="#dc2626", dash="dash"),
+        )
+    )
     fig.update_xaxes(title="cuantiles teoricos (normal)")
     fig.update_yaxes(title="cuantiles residuos")
     return style_fig(fig, title="Q-Q plot residuos vs normal")
@@ -134,7 +161,7 @@ def _run_residual_tests(residuals: np.ndarray, y_pred: np.ndarray) -> dict:
 
     # Heteroscedasticidad: regresion residuals² ~ y_pred
     pred_series = pd.Series(y_pred, name="y_pred")
-    resid_sq = pd.Series(residuals ** 2, name="resid_sq")
+    resid_sq = pd.Series(residuals**2, name="resid_sq")
     bp = breusch_pagan(resid_sq, pd.DataFrame({"y_pred": pred_series}))
     wt = white_test(resid_sq, pd.DataFrame({"y_pred": pred_series}))
 
@@ -151,24 +178,44 @@ def _build_residual_findings(test_results: dict) -> list[tuple[str, str]]:
 
     summary_findings: list[tuple[str, str]] = []
     if dw.rejects_h0:
-        summary_findings.append(("severity-high",
-            f"Autocorrelacion residual detectada (DW={dw.statistic:.2f}). "
-            "Modelo dejo patron temporal sin capturar — considerar mas lags o STL features."))
+        summary_findings.append(
+            (
+                "severity-high",
+                f"Autocorrelacion residual detectada (DW={dw.statistic:.2f}). "
+                "Modelo dejo patron temporal sin capturar — considerar mas lags o STL features.",
+            )
+        )
     if lb.rejects_h0:
-        summary_findings.append(("severity-high",
-            f"Ljung-Box rechaza no-autocorrelacion (p={format_pvalue(lb.p_value)})."))
+        summary_findings.append(
+            (
+                "severity-high",
+                f"Ljung-Box rechaza no-autocorrelacion (p={format_pvalue(lb.p_value)}).",
+            )
+        )
     if bp.rejects_h0 or wt.rejects_h0:
-        summary_findings.append(("severity-medium",
-            "Heteroscedasticidad residual: varianza no constante con la prediccion. "
-            "Considerar log-target o regresion Gamma."))
+        summary_findings.append(
+            (
+                "severity-medium",
+                "Heteroscedasticidad residual: varianza no constante con la prediccion. "
+                "Considerar log-target o regresion Gamma.",
+            )
+        )
     if jb.rejects_h0:
-        summary_findings.append(("severity-low",
-            "Residuos no-normales (skew/kurt). Aceptable para boosted trees, pero los "
-            "intervalos asintoticos no son validos — usar conformal prediction."))
+        summary_findings.append(
+            (
+                "severity-low",
+                "Residuos no-normales (skew/kurt). Aceptable para boosted trees, pero los "
+                "intervalos asintoticos no son validos — usar conformal prediction.",
+            )
+        )
     if not summary_findings:
-        summary_findings.append(("severity-good",
-            "Sin hallazgos diagnosticos sobre residuos: autocorrelacion ausente, "
-            "varianza homogenea, distribucion razonablemente normal."))
+        summary_findings.append(
+            (
+                "severity-good",
+                "Sin hallazgos diagnosticos sobre residuos: autocorrelacion ausente, "
+                "varianza homogenea, distribucion razonablemente normal.",
+            )
+        )
     return summary_findings
 
 
@@ -225,12 +272,11 @@ def render_residual_report(
     # Findings / verdict
     summary_findings = _build_residual_findings(test_results)
     findings_html = "".join(
-        f'<li class="{cls}">{escape(msg)}</li>'
-        for cls, msg in summary_findings
+        f'<li class="{cls}">{escape(msg)}</li>' for cls, msg in summary_findings
     )
 
     n = len(residuals)
-    rmse = float(np.sqrt(np.mean(residuals ** 2)))
+    rmse = float(np.sqrt(np.mean(residuals**2)))
     mae = float(np.mean(np.abs(residuals)))
     bias = float(np.mean(residuals))
 
@@ -263,10 +309,10 @@ def render_residual_report(
       <section class="card">
         <h2>Plots diagnosticos</h2>
         <div class="grid-2">
-          {fig_to_html_div(fig_rvp, 'rvp')}
-          {fig_to_html_div(fig_arvp, 'arvp')}
-          {fig_to_html_div(fig_hist, 'hist')}
-          {fig_to_html_div(fig_qq, 'qq')}
+          {fig_to_html_div(fig_rvp, "rvp")}
+          {fig_to_html_div(fig_arvp, "arvp")}
+          {fig_to_html_div(fig_hist, "hist")}
+          {fig_to_html_div(fig_qq, "qq")}
         </div>
       </section>
 
@@ -277,7 +323,7 @@ def render_residual_report(
 
       <footer class="fineprint">
         residual diagnostics · {escape(variety)} / {escape(model_type)} ·
-        generado {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        generado {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
       </footer>
     </div>
     """
@@ -314,8 +360,11 @@ def write_residual_report(
     y_pred = np.asarray(y_pred, dtype=float)
     finite = np.isfinite(y_true) & np.isfinite(y_pred)
     html = render_residual_report(
-        variety=variety, model_type=model_type,
-        y_true=y_true[finite], y_pred=y_pred[finite], run_id=run_id,
+        variety=variety,
+        model_type=model_type,
+        y_true=y_true[finite],
+        y_pred=y_pred[finite],
+        run_id=run_id,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")

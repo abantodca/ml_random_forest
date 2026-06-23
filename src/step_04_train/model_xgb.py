@@ -4,6 +4,7 @@ Devuelve un `TransformedTargetRegressor` que aplica log1p+cap-p99.5 a y
 durante el fit (CV-safe: cap calculado en cada fold). El predict ya
 invierte al espacio original (KG/JR_H).
 """
+
 from __future__ import annotations
 
 from sklearn.compose import TransformedTargetRegressor

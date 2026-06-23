@@ -47,16 +47,21 @@ def forecast_verdict(mape: float, bias: float) -> tuple[str, str]:
     """
     sesgo = "sobreestima" if bias > 0 else "subestima"
     if mape < 10:
-        return ("ok",
-                f"✅ Pronóstico CONFIABLE (error típico {mape:.1f}%). "
-                "Apto para decidir con el modelo.")
+        return (
+            "ok",
+            f"✅ Pronóstico CONFIABLE (error típico {mape:.1f}%). Apto para decidir con el modelo.",
+        )
     if mape < 20:
-        return ("warning",
-                f"🟡 Confianza MODERADA (error {mape:.1f}%, {sesgo} ~{abs(bias):.2f}). "
-                "Validar con criterio agronómico antes de decisiones grandes.")
-    return ("alert",
-            f"🔴 Precisión BAJA (error {mape:.1f}%). Revisar datos / reentrenar "
-            "antes de decidir solo con el pronóstico.")
+        return (
+            "warning",
+            f"🟡 Confianza MODERADA (error {mape:.1f}%, {sesgo} ~{abs(bias):.2f}). "
+            "Validar con criterio agronómico antes de decisiones grandes.",
+        )
+    return (
+        "alert",
+        f"🔴 Precisión BAJA (error {mape:.1f}%). Revisar datos / reentrenar "
+        "antes de decidir solo con el pronóstico.",
+    )
 
 
 class TrackingService:
@@ -66,18 +71,13 @@ class TrackingService:
 
     # ---- lectura de reales ----------------------------------------------
 
-    def list_history(
-        self, variety: str, *, limit: int = 5000
-    ) -> list[HistoricalObservation]:
+    def list_history(self, variety: str, *, limit: int = 5000) -> list[HistoricalObservation]:
         data = self._client.get(
             endpoints.history_list(variety),
             timeout=self._client.timeout_read,
             params={"limit": limit},
         )
-        return [
-            HistoricalObservation.model_validate(it)
-            for it in data.get("items", [])
-        ]
+        return [HistoricalObservation.model_validate(it) for it in data.get("items", [])]
 
     def upload_real_excel(
         self,
@@ -102,13 +102,16 @@ class TrackingService:
         }
         path = f"{endpoints.history_upload(variety)}?replace={str(replace).lower()}"
         return self._client.post(
-            path, timeout=self._client.timeout_batch, files=files,
+            path,
+            timeout=self._client.timeout_batch,
+            files=files,
         )
 
     def delete_history(self, variety: str) -> int:
         """Borra TODOS los datos reales de la variedad. Devuelve cuántos borró."""
         data = self._client.delete(
-            endpoints.history_list(variety), timeout=self._client.timeout_write,
+            endpoints.history_list(variety),
+            timeout=self._client.timeout_write,
         )
         return int(data.get("deleted", 0))
 
@@ -123,7 +126,10 @@ class TrackingService:
             df.to_excel(w, index=False, sheet_name="reales")
         buf.seek(0)
         return self.upload_real_excel(
-            variety, buf.getvalue(), "reales_editado.xlsx", replace=True,
+            variety,
+            buf.getvalue(),
+            "reales_editado.xlsx",
+            replace=True,
         )
 
     # ---- emparejamiento proyectado ↔ real --------------------------------
@@ -145,12 +151,12 @@ class TrackingService:
         dry-run por punto para separar error de datos vs error de modelo.
         """
         forecasts = self._forecasts.list(
-            variety=variety, date_from=date_from, date_to=date_to, limit=limit,
+            variety=variety,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
         ).items
-        real_map = {
-            (h.fundo, h.formato, h.fecha[:10]): h
-            for h in self.list_history(variety)
-        }
+        real_map = {(h.fundo, h.formato, h.fecha[:10]): h for h in self.list_history(variety)}
 
         # Dedupe de pronósticos por clave, conservando el más reciente.
         latest: dict[tuple[str, str, str], ForecastRecord] = {}
@@ -165,11 +171,7 @@ class TrackingService:
             hist = real_map.get(key)
             if hist is None:
                 continue
-            pred_on_real = (
-                self._predict_on_real(variety, fc, hist)
-                if with_decomposition
-                else None
-            )
+            pred_on_real = self._predict_on_real(variety, fc, hist) if with_decomposition else None
             points.append(
                 AccuracyPoint(
                     variety=variety,
@@ -199,9 +201,7 @@ class TrackingService:
             kg_ha=hist.kg_ha,
             dpc=hist.dpc if hist.dpc is not None else fc.dpc,
             ha=hist.ha if hist.ha is not None else fc.ha,
-            dia_cosecha=(
-                hist.dia_cosecha if hist.dia_cosecha is not None else fc.dia_cosecha
-            ),
+            dia_cosecha=(hist.dia_cosecha if hist.dia_cosecha is not None else fc.dia_cosecha),
             fundo=fc.fundo,
             formato=fc.formato,
             indus_pct=hist.indus_pct if hist.indus_pct is not None else fc.indus_pct,
@@ -229,7 +229,10 @@ class TrackingService:
             acc[2] += 1
         return [
             WeekAggregate(
-                week=wk, proj_sum=acc[0], real_sum=acc[1], n=int(acc[2]),
+                week=wk,
+                proj_sum=acc[0],
+                real_sum=acc[1],
+                n=int(acc[2]),
             )
             for wk, acc in sorted(buckets.items())
         ]

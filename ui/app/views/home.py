@@ -36,17 +36,22 @@ def _render_live_data() -> None:
     with c2:
         kpi_card("Pares real↔proy", str(vm.n_points), icon="🔗", variant="accent")
     with c3:
-        kpi_card("MAPE real", f"{vm.mape:.1f}%" if vm.has_points else "—", icon="📐",
-                 variant=vm.mape_variant)
+        kpi_card(
+            "MAPE real",
+            f"{vm.mape:.1f}%" if vm.has_points else "—",
+            icon="📐",
+            variant=vm.mape_variant,
+        )
     with c4:
-        kpi_card("Sesgo", f"{vm.bias:+.2f}" if vm.has_points else "—", icon="🎯",
-                 variant=vm.bias_variant)
+        kpi_card(
+            "Sesgo", f"{vm.bias:+.2f}" if vm.has_points else "—", icon="🎯", variant=vm.bias_variant
+        )
 
     if not vm.has_points:
         empty_state(
             "Sin datos reales para medir precisión",
             help="Cargá la cosecha real en <strong>Seguimiento</strong> "
-                 "y el veredicto se activa solo.",
+            "y el veredicto se activa solo.",
             icon="📭",
         )
         return
@@ -66,9 +71,11 @@ def _render_live_data() -> None:
             build_residual_bars(vm.top_fechas, vm.top_err),
             use_container_width=True,
         )
-    st.page_link("views/tracking.py",
-                 label="Ver análisis completo (paridad, cierre semanal, diagnóstico) →",
-                 icon=":material/monitoring:")
+    st.page_link(
+        "views/tracking.py",
+        label="Ver análisis completo (paridad, cierre semanal, diagnóstico) →",
+        icon=":material/monitoring:",
+    )
 
 
 page_header("Dashboard", "Resumen ejecutivo del sistema de pronósticos", "📊")
@@ -77,8 +84,7 @@ _overview = build_overview_vm()
 
 if not _overview.is_online:
     st.warning(
-        "⚠️ Backend desconectado — los indicadores pueden estar incompletos. "
-        "Verifica la conexión."
+        "⚠️ Backend desconectado — los indicadores pueden estar incompletos. Verifica la conexión."
     )
 
 # ── Estado general ──────────────────────────────────────────────────────
@@ -94,8 +100,12 @@ with _k1:
 with _k2:
     kpi_card("Variedades", str(_overview.total), icon="🍇", variant="primary")
 with _k3:
-    kpi_card("Modelos", f"{_overview.n_loaded}/{_overview.total}", icon="🤖",
-             variant=_overview.models_variant)
+    kpi_card(
+        "Modelos",
+        f"{_overview.n_loaded}/{_overview.total}",
+        icon="🤖",
+        variant=_overview.models_variant,
+    )
 with _k4:
     kpi_card(
         "MLflow",
@@ -113,22 +123,36 @@ if _quality.has_models:
     section_title("🏅 Calidad de modelos")
     _c1, _c2, _c3, _c4 = st.columns(4)
     with _c1:
-        insight_card("Mejor R²", f"{_quality.best_r2_val:.3f}",
-                     f"Variedad <strong>{_quality.best_r2_name}</strong>", "success")
+        insight_card(
+            "Mejor R²",
+            f"{_quality.best_r2_val:.3f}",
+            f"Variedad <strong>{_quality.best_r2_name}</strong>",
+            "success",
+        )
     with _c2:
-        insight_card("R² promedio", f"{_quality.avg_r2:.3f}",
-                     f"Sobre {_quality.n_loaded} modelo(s) cargado(s)", "primary")
+        insight_card(
+            "R² promedio",
+            f"{_quality.avg_r2:.3f}",
+            f"Sobre {_quality.n_loaded} modelo(s) cargado(s)",
+            "primary",
+        )
     with _c3:
         insight_card("MAE promedio", f"{_quality.avg_mae:.2f}", "Menor es mejor — kg/h", "accent")
     with _c4:
-        insight_card("Mayor MAE", f"{_quality.worst_mae_val:.2f}",
-                     f"Variedad <strong>{_quality.worst_mae_name}</strong> — revisar", "warning")
+        insight_card(
+            "Mayor MAE",
+            f"{_quality.worst_mae_val:.2f}",
+            f"Variedad <strong>{_quality.worst_mae_name}</strong> — revisar",
+            "warning",
+        )
 
     # Un solo gráfico: ranking por R² (el detalle comparativo va en "Modelos").
     section_title("📋 Ranking de variedades")
     st.plotly_chart(
         build_table_with_bars(
-            _quality.ranking_names, _quality.ranking_mae, _quality.ranking_r2,
+            _quality.ranking_names,
+            _quality.ranking_mae,
+            _quality.ranking_r2,
             {
                 "names": _quality.ranking_names,
                 "status": ["✅" for _ in _quality.ranking_names],
@@ -142,7 +166,7 @@ else:
     empty_state(
         "Aún no hay modelos cargados",
         help="Se cargan bajo demanda al predecir, "
-             "o con <strong>Recargar Modelos</strong> en el menú lateral.",
+        "o con <strong>Recargar Modelos</strong> en el menú lateral.",
         icon="🤖",
     )
 
@@ -150,11 +174,23 @@ else:
 section_title("🚀 Accesos directos")
 _n1, _n2, _n3 = st.columns(3)
 with _n1:
-    st.page_link("views/forecast.py", label="Pronosticar (individual / lote)",
-                 icon=":material/edit_note:", use_container_width=True)
+    st.page_link(
+        "views/forecast.py",
+        label="Pronosticar (individual / lote)",
+        icon=":material/edit_note:",
+        use_container_width=True,
+    )
 with _n2:
-    st.page_link("views/tracking.py", label="Seguimiento de precisión",
-                 icon=":material/monitoring:", use_container_width=True)
+    st.page_link(
+        "views/tracking.py",
+        label="Seguimiento de precisión",
+        icon=":material/monitoring:",
+        use_container_width=True,
+    )
 with _n3:
-    st.page_link("views/models.py", label="Detalle de modelos",
-                 icon=":material/model_training:", use_container_width=True)
+    st.page_link(
+        "views/models.py",
+        label="Detalle de modelos",
+        icon=":material/model_training:",
+        use_container_width=True,
+    )

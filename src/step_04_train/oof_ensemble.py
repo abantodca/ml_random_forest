@@ -12,6 +12,7 @@ La clase es sklearn-compatible (BaseEstimator + RegressorMixin) para
 que joblib la serialice y `mlflow.sklearn.log_model` la trate como un
 modelo opaco mas, sin necesidad de un flavor custom.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -65,9 +66,7 @@ class OOFEnsembleRegressor(BaseEstimator, RegressorMixin):
         sample_weight: np.ndarray | None = None,
     ) -> OOFEnsembleRegressor:
         if self.n_models < 1:
-            raise ValueError(
-                f"n_models debe ser >=1, recibido {self.n_models}"
-            )
+            raise ValueError(f"n_models debe ser >=1, recibido {self.n_models}")
 
         if self.n_models == 1:
             pipe = clone(self.base_pipeline)

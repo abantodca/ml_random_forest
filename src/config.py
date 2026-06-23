@@ -147,7 +147,7 @@ MISSING_FLAG_COLS: list[str] = ["%INDUS", "P/BAYA"]
 # SKEW_AUTO_DETECT permite desactivar para comparar contra baseline sin
 # transformaciones (A/B test informativo).
 SKEW_AUTO_DETECT: bool = True
-SKEW_THRESHOLD: float = 1.5      # |skew| above this -> log1p
+SKEW_THRESHOLD: float = 1.5  # |skew| above this -> log1p
 SKEW_KURT_THRESHOLD: float = 50.0  # kurtosis above this -> sqrt (mas agresivo)
 
 # ---------------------------------------------------------------------------
@@ -156,9 +156,9 @@ SKEW_KURT_THRESHOLD: float = 50.0  # kurtosis above this -> sqrt (mas agresivo)
 # Reportar findings de skew/kurt en EDA. Independientes de SKEW_THRESHOLD
 # y SKEW_KURT_THRESHOLD (que rigen transformacion en FeatureGenerator):
 # aqui solo se trata de avisar al humano en el reporte de auditoria.
-EDA_KURT_WARN: float = 5.0          # kurt > 5 -> finding "medium"
-EDA_KURT_HIGH: float = 10.0         # kurt > 10 -> escala el finding a "high"
-EDA_SKEW_HIGH: float = 3.0          # |skew| > 3 -> escala el finding a "high"
+EDA_KURT_WARN: float = 5.0  # kurt > 5 -> finding "medium"
+EDA_KURT_HIGH: float = 10.0  # kurt > 10 -> escala el finding a "high"
+EDA_SKEW_HIGH: float = 3.0  # |skew| > 3 -> escala el finding a "high"
 
 # Fraccion de outliers IQR sobre n_total que dispara warning en EDA.
 OUTLIER_FRACTION_WARN: float = 0.05
@@ -342,9 +342,7 @@ OOF_ENSEMBLE_K: int = 5
 # promedio pero alta dispersion entre folds (que generalizan peor).
 # Default 0.0 = comportamiento historico bit-identico (solo media).
 # Valores razonables para activar: 0.5-1.0.
-OPTUNA_OBJECTIVE_STD_PENALTY: float = float(
-    os.environ.get("OPTUNA_OBJECTIVE_STD_PENALTY", "0.0")
-)
+OPTUNA_OBJECTIVE_STD_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_STD_PENALTY", "0.0"))
 
 # Penalizacion por GAP train->val en el objective de Optuna (anti-overfit del
 # tuning): score = mean(MAE_val) + std_penalty + lambda * mean(max(0, MAE_val - MAE_train)).
@@ -356,9 +354,7 @@ OPTUNA_OBJECTIVE_STD_PENALTY: float = float(
 # que el tuning lo respete. Default 0.0 = comportamiento historico bit-identico
 # (no calcula el gap, sin costo extra). Valores razonables para activar: 0.3-1.0.
 # Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
-OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(
-    os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0")
-)
+OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0"))
 
 # Sample weights por densidad del target (compute_sample_weights).
 # Centralizado aqui para tunear sin tocar codigo. n_bins=10 fija el valor
@@ -378,9 +374,7 @@ SAMPLE_WEIGHT_HIGH_SEASON: bool = bool(int(os.environ.get("SAMPLE_WEIGHT_HIGH_SE
 # SAMPLE_WEIGHT_HIGH_SEASON_MONTHS="11,12,1". Al escalar a multi-variedad
 # en un mismo run, esto necesitara un override por variedad (no global).
 SAMPLE_WEIGHT_HIGH_SEASON_MONTHS: tuple = tuple(
-    int(m) for m in os.environ.get(
-        "SAMPLE_WEIGHT_HIGH_SEASON_MONTHS", "8,9,10"
-    ).split(",")
+    int(m) for m in os.environ.get("SAMPLE_WEIGHT_HIGH_SEASON_MONTHS", "8,9,10").split(",")
 )
 SAMPLE_WEIGHT_HIGH_SEASON_BOOST: float = float(
     os.environ.get("SAMPLE_WEIGHT_HIGH_SEASON_BOOST", "1.5")
@@ -442,7 +436,8 @@ ENABLE_SIMPLE_LAGS: bool = _env_bool("ENABLE_SIMPLE_LAGS", False)
 #     legitima (V=0.26 vs target). Se mantiene como flag por si alguna
 #     variedad futura no se beneficie (V<0.10 -> override con env=0).
 ENABLE_FUNDO_FORMATO_INTERACTION: bool = _env_bool(
-    "ENABLE_FUNDO_FORMATO_INTERACTION", True,
+    "ENABLE_FUNDO_FORMATO_INTERACTION",
+    True,
 )
 
 # H — LOF ANTES del OutlierCapper (Fase B.5 del plan 2026-06-11).
@@ -600,9 +595,7 @@ REPORT_BUSINESS_UNIT: str = "Operaciones Agricolas"
 # Targets gerenciales que se renderizan como gauges en el HTML.
 # Mover la aguja por encima/debajo de estos valores cambia el color del gauge.
 REPORT_R2_TARGET: float = 0.90  # R2 gerencial (KG/JR OOF) que el negocio quiere superar
-REPORT_MAE_TARGET: float = (
-    0.20  # MAE del modelo (KG/JR_H Test CV) que el negocio quiere NO superar
-)
+REPORT_MAE_TARGET: float = 0.20  # MAE del modelo (KG/JR_H Test CV) que el negocio quiere NO superar
 
 # Descripcion en lenguaje natural del modelo. Aparece en el hero del
 # dashboard ejecutivo para que un lector no-tecnico entienda en 1 frase

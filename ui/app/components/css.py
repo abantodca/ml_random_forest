@@ -6,9 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-_CSS_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "assets" / "css" / "style.css"
-)
+_CSS_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "css" / "style.css"
 
 _FALLBACK_CSS = (
     "html,body,[class*='css']{font-family:Inter,system-ui,-apple-system,"
@@ -53,9 +51,6 @@ def inject_css() -> None:
     # cada cambio del archivo como una hoja distinta — ningún cache viejo
     # persiste tras un edit.
     st.markdown(
-        f"<style data-rnd-css='{version}'>"
-        f"/* rnd-forest css v{version} */"
-        f"{_PREPAINT}{css}"
-        f"</style>",
+        f"<style data-rnd-css='{version}'>/* rnd-forest css v{version} */{_PREPAINT}{css}</style>",
         unsafe_allow_html=True,
     )

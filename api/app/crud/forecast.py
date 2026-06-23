@@ -131,9 +131,7 @@ async def create_forecasts_batch(
             kgjn_pred=calc_kgjn(kghora_pred, forecast_data.horas_efectivas),
             **_to_orm_kwargs(forecast_data),
         )
-        for forecast_data, kghora_pred in zip(
-            forecasts_data, kghora_preds, strict=True
-        )
+        for forecast_data, kghora_pred in zip(forecasts_data, kghora_preds, strict=True)
     ]
 
     db.add_all(db_forecasts)
@@ -147,9 +145,7 @@ async def create_forecasts_batch(
     # empareja por índice) podría adjuntarse al pronóstico equivocado.
     # El re-fetch ocurre ANTES del commit para que todo el batch sea una sola
     # transacción: si algo falla, no quedan filas persistidas a medias.
-    result = await db.execute(
-        select(Forecast).where(Forecast.id.in_(ids)).order_by(Forecast.id)
-    )
+    result = await db.execute(select(Forecast).where(Forecast.id.in_(ids)).order_by(Forecast.id))
     forecasts = list(result.scalars().all())
     await db.commit()
     return forecasts

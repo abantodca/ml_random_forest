@@ -1,4 +1,5 @@
 """Veredicto ejecutivo del modelo (4 niveles + thresholds)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

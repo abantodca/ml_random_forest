@@ -9,6 +9,7 @@ Cubre los dos bugs por los que "ya nos quemamos":
   3. Modo ex-ante: el lag same-day-safe NO debe ver filas hermanas del
      mismo dia (leakage del evento en forecast).
 """
+
 from __future__ import annotations
 
 import pickle

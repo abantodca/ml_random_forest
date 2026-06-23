@@ -29,9 +29,7 @@ def _make_table(values: dict[str, list[str]]) -> go.Table:
         ),
         cells=dict(
             values=cells,
-            fill_color=[
-                [TEMA["bg"] if i % 2 == 0 else TEMA["card"] for i in range(n)]
-            ],
+            fill_color=[[TEMA["bg"] if i % 2 == 0 else TEMA["card"] for i in range(n)]],
             font=dict(size=11, color=TEMA["text_body"]),
             align="center",
             height=30,
@@ -77,16 +75,22 @@ def build_table_with_bars(
     fig.add_trace(_make_table(table_values), row=1, col=1)
     fig.add_trace(
         _make_bar(
-            names, mae_vals, "MAE",
-            "rgba(79,70,229,0.85)", TEMA["primary_dark"],
+            names,
+            mae_vals,
+            "MAE",
+            "rgba(79,70,229,0.85)",
+            TEMA["primary_dark"],
         ),
         row=2,
         col=1,
     )
     fig.add_trace(
         _make_bar(
-            names, r2_vals, "R²",
-            "rgba(124,58,237,0.85)", "#5B21B6",
+            names,
+            r2_vals,
+            "R²",
+            "rgba(124,58,237,0.85)",
+            "#5B21B6",
         ),
         row=2,
         col=1,

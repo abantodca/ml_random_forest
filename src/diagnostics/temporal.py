@@ -17,6 +17,7 @@ Drift entre anios:
     distribucion de cada variable en anio_t vs anio_t+1. Si PSI > 0.25 o
     KS rechaza, hay drift estructural -> features pueden ser inestables.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -36,8 +37,8 @@ from src.diagnostics.statistical_tests import (
 @dataclass
 class TemporalProfile:
     name: str
-    acf: list[float]      # autocorrelaciones lag 0..k
-    pacf: list[float]     # parciales
+    acf: list[float]  # autocorrelaciones lag 0..k
+    pacf: list[float]  # parciales
     significant_lags: list[int]  # lags donde |corr| > 1.96/sqrt(n)
     durbin_watson: TestResult
     ljung_box_10: TestResult

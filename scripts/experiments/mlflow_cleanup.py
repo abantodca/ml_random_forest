@@ -36,7 +36,9 @@ for exp in client.search_experiments():
     if exp.name == "Default":
         continue
     runs = client.search_runs(
-        [exp.experiment_id], max_results=1000, run_view_type=1  # ACTIVE_ONLY
+        [exp.experiment_id],
+        max_results=1000,
+        run_view_type=1,  # ACTIVE_ONLY
     )
     for r in runs:
         if r.info.run_id in KEEP_RUNS:
@@ -47,5 +49,7 @@ for exp in client.search_experiments():
         print(f"eliminado: {r.info.run_id[:12]} ({r.info.run_name})")
 
 print(f"\nTotal runs eliminados (soft): {borrados}")
-print("Siguiente paso: mlflow gc en el contenedor mlflow para purgar "
-      "filas de Postgres y artifacts de S3.")
+print(
+    "Siguiente paso: mlflow gc en el contenedor mlflow para purgar "
+    "filas de Postgres y artifacts de S3."
+)

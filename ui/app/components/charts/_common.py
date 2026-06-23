@@ -13,9 +13,9 @@ import plotly.io as pio
 from app.core import TEMA
 
 # Colores derivados de TEMA para garantizar contraste AA.
-GRID_COLOR = "rgba(15,23,42,0.06)"     # casi imperceptible pero visible
-AXIS_TEXT = TEMA["text_tertiary"]      # #475569 — slate-600
-TITLE_TEXT = TEMA["text"]              # #0F172A — slate-900
+GRID_COLOR = "rgba(15,23,42,0.06)"  # casi imperceptible pero visible
+AXIS_TEXT = TEMA["text_tertiary"]  # #475569 — slate-600
+TITLE_TEXT = TEMA["text"]  # #0F172A — slate-900
 
 
 pio.templates["rnd_forest"] = go.layout.Template(

@@ -29,9 +29,7 @@ class HealthCache:
     _KEY = "current"
 
     def __init__(self, ttl_seconds: int = settings.health_cache_ttl_seconds) -> None:
-        self._cache: TTLCache[str, tuple[bool, bool, int]] = TTLCache(
-            maxsize=1, ttl=ttl_seconds
-        )
+        self._cache: TTLCache[str, tuple[bool, bool, int]] = TTLCache(maxsize=1, ttl=ttl_seconds)
 
     def get(self) -> tuple[bool, bool, int] | None:
         """Retorna la tripleta cacheada o None si no hay valor vigente."""

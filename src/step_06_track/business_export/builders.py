@@ -7,6 +7,7 @@ un DataFrame listo para `to_excel`.
 El renombrado tecnico -> lenguaje natural (`_PRETTY_COLUMNS`) vive aqui
 porque es decision de presentacion (no de calculo).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -89,17 +90,14 @@ def build_predictions_df(
     df["KG/JR_real"] = kg_jr_real
     df["KG/JR_estimado"] = kg_jr_pred
 
-    finite_mask = (
-        np.isfinite(y_h_pred)
-        & np.isfinite(h_ef)
-        & np.isfinite(kg_jr_real)
-    )
+    finite_mask = np.isfinite(y_h_pred) & np.isfinite(h_ef) & np.isfinite(kg_jr_real)
 
     # Bandas: prefiere Conformal (con sustento estadistico) sobre heuristica.
     # Se calculan en KG/JR_H (espacio del modelo) y luego se multiplican por
     # H-EF para llevar a KG/JR (transformacion lineal -> linealidad).
     if conformal_residuals is not None:
         from src.step_05_evaluate.statistical_tests import conformal_intervals
+
         y_h_lo, y_h_hi = conformal_intervals(
             oof_residuals=np.asarray(conformal_residuals, dtype=float),
             predictions=y_h_pred,
@@ -134,14 +132,16 @@ def build_subgroup_summary(df: pd.DataFrame, group_col: str) -> pd.DataFrame | N
     real_col = "Cosecha real (kg/jornal)"
     pred_col = "Cosecha estimada (kg/jornal)"
     g = df.groupby(group_col, dropna=False)
-    out = pd.DataFrame({
-        "n cosechas": g.size(),
-        "Real promedio (kg/jornal)": g[real_col].mean(),
-        "Estimado promedio (kg/jornal)": g[pred_col].mean(),
-        "MAE (kg/jornal)": g[err_abs_col].mean(),
-        "Error % promedio": g[err_pct_col].mean(),
-        "Error máximo (kg/jornal)": g[err_abs_col].max(),
-    })
+    out = pd.DataFrame(
+        {
+            "n cosechas": g.size(),
+            "Real promedio (kg/jornal)": g[real_col].mean(),
+            "Estimado promedio (kg/jornal)": g[pred_col].mean(),
+            "MAE (kg/jornal)": g[err_abs_col].mean(),
+            "Error % promedio": g[err_pct_col].mean(),
+            "Error máximo (kg/jornal)": g[err_abs_col].max(),
+        }
+    )
     out = out.sort_values("Error % promedio", ascending=False).round(3)
     out.insert(0, "Ranking (peor → mejor)", np.arange(1, len(out) + 1))
     return out
@@ -167,7 +167,8 @@ def build_resumen_df(
         if v != v:
             return "—"
         return (
-            "VERDE" if v >= REPORT_R2_TARGET
+            "VERDE"
+            if v >= REPORT_R2_TARGET
             else ("AMARILLO" if v >= REPORT_R2_AMBER_THRESHOLD else "ROJO")
         )
 
@@ -175,11 +176,9 @@ def build_resumen_df(
         if v != v:
             return "—"
         return (
-            "VERDE" if v <= REPORT_MAE_TARGET
-            else (
-                "AMARILLO" if v <= REPORT_MAE_AMBER_RATIO * REPORT_MAE_TARGET
-                else "ROJO"
-            )
+            "VERDE"
+            if v <= REPORT_MAE_TARGET
+            else ("AMARILLO" if v <= REPORT_MAE_AMBER_RATIO * REPORT_MAE_TARGET else "ROJO")
         )
 
     rows = [
@@ -195,10 +194,18 @@ def build_resumen_df(
         ("Target MAE (KG/JR_H, Test CV) <=", f"{REPORT_MAE_TARGET:.2f}", ""),
         ("", "", ""),
         ("## METRICAS DEL MODELO (KG/JR_H) ##", "", ""),
-        ("MAE Test CV", f"{nested_metrics.get('nested_cv_mae_mean', float('nan')):.4f}", _state_mae(mae_kgh)),
+        (
+            "MAE Test CV",
+            f"{nested_metrics.get('nested_cv_mae_mean', float('nan')):.4f}",
+            _state_mae(mae_kgh),
+        ),
         ("MAE std Test CV", f"{nested_metrics.get('nested_cv_mae_std', float('nan')):.4f}", ""),
         ("MAE Train CV", f"{nested_metrics.get('nested_cv_mae_train_mean', float('nan')):.4f}", ""),
-        ("Brecha (Test - Train)", f"{nested_metrics.get('nested_cv_gap_mean', float('nan')):+.4f}", ""),
+        (
+            "Brecha (Test - Train)",
+            f"{nested_metrics.get('nested_cv_gap_mean', float('nan')):+.4f}",
+            "",
+        ),
         ("R² Test CV", f"{nested_metrics.get('nested_cv_r2_mean', float('nan')):.4f}", ""),
         ("", "", ""),
         ("## METRICAS EN UNIDAD DE NEGOCIO (KG/JR) ##", "", ""),
@@ -240,8 +247,10 @@ def build_inicio_df(
     verdict = compute_verdict(full_mape_pct=oof_mape, abs_gap=abs_gap)
     k1 = kpi_precision(abs_err, oof_mape)
     k2 = kpi_explanatory_power(oof_r2)
-    k3 = kpi_vs_baseline(real_oof if real_oof is not None else np.array([]),
-                         pred_oof if pred_oof is not None else np.array([]))
+    k3 = kpi_vs_baseline(
+        real_oof if real_oof is not None else np.array([]),
+        pred_oof if pred_oof is not None else np.array([]),
+    )
 
     rows = [
         ("◆◆◆ DASHBOARD EJECUTIVO ◆◆◆", "", ""),
@@ -300,17 +309,24 @@ def build_acciones_df(
     abs_errs = np.abs(pred - real) if real.size > 0 else np.array([])
     global_mape = (
         float(business_validation.metrics_oof.get("mape", float("nan")))
-        if business_validation else float("nan")
+        if business_validation
+        else float("nan")
     )
 
     actions = recommended_actions(
-        abs_errors=abs_errs, real=real, X_aligned=X_aligned,
-        global_mape=global_mape, abs_gap=abs_gap, full_mape=full_mape,
+        abs_errors=abs_errs,
+        real=real,
+        X_aligned=X_aligned,
+        global_mape=global_mape,
+        abs_gap=abs_gap,
+        full_mape=full_mape,
     )
     rows = []
     for i, a in enumerate(actions, 1):
         sev_label = {
-            "critical": "CRÍTICO", "warning": "ATENCIÓN", "info": "OK",
+            "critical": "CRÍTICO",
+            "warning": "ATENCIÓN",
+            "info": "OK",
         }.get(a.severity, a.severity.upper())
         rows.append((f"#{i}", f"{a.icon} {sev_label}", a.title, a.body))
     if not rows:

@@ -14,6 +14,7 @@ Prioridad (ver `predict_with_halfwidths`):
                            cobertura << nominal; solo modelos sin conformal_.
   3. (None)              : pickles pre-ensemble; el caller decide qué hacer.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -29,14 +30,8 @@ def conformal_halfwidths(conformal: dict, df: pd.DataFrame, n: int) -> np.ndarra
     known_ff = set(conformal.get("known_ff", []) or [])
     cold_factor = float(conformal.get("cold_factor", 2.0))
 
-    fundos = (
-        df["FUNDO"].astype(str)
-        if "FUNDO" in df.columns else pd.Series([""] * n)
-    )
-    formatos = (
-        df["FORMATO"].astype(str)
-        if "FORMATO" in df.columns else pd.Series([""] * n)
-    )
+    fundos = df["FUNDO"].astype(str) if "FUNDO" in df.columns else pd.Series([""] * n)
+    formatos = df["FORMATO"].astype(str) if "FORMATO" in df.columns else pd.Series([""] * n)
     out = np.empty(n, dtype=float)
     for i, (f, fmt) in enumerate(zip(fundos, formatos, strict=True)):
         q = q_by_fundo.get(f, q_global)

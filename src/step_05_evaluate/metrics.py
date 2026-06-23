@@ -1,4 +1,5 @@
 """Calculo de metricas de regresion."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -36,9 +37,7 @@ def calculate_regression_metrics(y_true, y_pred) -> dict[str, float]:
 
     nonzero = y_true != 0
     if nonzero.any():
-        mape = float(
-            np.mean(np.abs((y_true[nonzero] - y_pred[nonzero]) / y_true[nonzero])) * 100.0
-        )
+        mape = float(np.mean(np.abs((y_true[nonzero] - y_pred[nonzero]) / y_true[nonzero])) * 100.0)
     else:
         mape = float("nan")
 

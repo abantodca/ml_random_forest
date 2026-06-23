@@ -19,6 +19,7 @@ Diferencia conceptual con OutlierCapper:
 
 Ambos coexisten sin conflicto.
 """
+
 from __future__ import annotations
 
 import numpy as np

@@ -51,6 +51,7 @@ LAG_FF_COLD/LAG_FF_SEASONAL_COLD existian aqui pero se eliminaron tras
 permutation_importance (mayo 2026): el sentinel -1 ya comunica el
 cold-start a los arboles, la flag binaria era redundante.
 """
+
 from __future__ import annotations
 
 import logging
@@ -109,22 +110,21 @@ SEASONAL_TOLERANCE_DAYS: int = 15
 # Grupos a calcular: nombre_corto -> columnas de groupby
 GROUP_DEFS: list[tuple[str, list[str]]] = [
     ("FF", ["FUNDO", "FORMATO"]),  # combinacion (mas especifica, menos densidad)
-    ("F",  ["FUNDO"]),               # solo fundo (mas densidad)
-    ("FMT", ["FORMATO"]),            # solo formato
+    ("F", ["FUNDO"]),  # solo fundo (mas densidad)
+    ("FMT", ["FORMATO"]),  # solo formato
 ]
 
 
-def _rolling_lag(df_sorted: pd.DataFrame, value_col: str, group_cols: list[str], window: int) -> pd.Series:
+def _rolling_lag(
+    df_sorted: pd.DataFrame, value_col: str, group_cols: list[str], window: int
+) -> pd.Series:
     """Mediana rolling EXCLUYENDO la fila actual (shift(1) + rolling)."""
-    return (
-        df_sorted.groupby(group_cols, sort=False)[value_col]
-        .transform(lambda s: s.shift(1).rolling(window, min_periods=MIN_PERIODS).median())
+    return df_sorted.groupby(group_cols, sort=False)[value_col].transform(
+        lambda s: s.shift(1).rolling(window, min_periods=MIN_PERIODS).median()
     )
 
 
-def _daily_series(
-    df_sorted: pd.DataFrame, value_col: str, group_cols: list[str]
-) -> pd.DataFrame:
+def _daily_series(df_sorted: pd.DataFrame, value_col: str, group_cols: list[str]) -> pd.DataFrame:
     """Serie DIARIA por grupo: 1 punto (mediana) por (grupo, dia).
 
     Base del modo ex-ante: el shift(1) posicional de `_rolling_lag` incluye
@@ -211,9 +211,7 @@ def _compute_rolling_lags(df_work: pd.DataFrame, exante: bool = False) -> list[s
         for value_col, vname in [(TARGET, "KG_JR_H"), (KG_HA_COL, "KG_HA")]:
             for w in WINDOWS:
                 name = f"{vname}_lag_{alias}_{w}"
-                df_work.loc[df_sorted.index, name] = lag_fn(
-                    df_sorted, value_col, group_cols, w
-                )
+                df_work.loc[df_sorted.index, name] = lag_fn(df_sorted, value_col, group_cols, w)
                 new_cols.append(name)
     # NOTA: las flags LAG_FF_COLD y LAG_FF_SEASONAL_COLD existian aqui para
     # marcar filas sin historia. Se eliminaron tras permutation_importance
@@ -222,9 +220,7 @@ def _compute_rolling_lags(df_work: pd.DataFrame, exante: bool = False) -> list[s
     return new_cols
 
 
-def _compute_volatility_and_momentum_lags(
-    df_work: pd.DataFrame, exante: bool = False
-) -> list[str]:
+def _compute_volatility_and_momentum_lags(df_work: pd.DataFrame, exante: bool = False) -> list[str]:
     """Volatilidad + momentum + cadencia por FUNDO+FORMATO (no usa target).
 
     Anade 3 features con senal unica verificada (corr <0.85 con cualquier
@@ -285,9 +281,7 @@ def _compute_volatility_and_momentum_lags(
             lambda s: s.shift(1).rolling(STD_WINDOW, min_periods=MIN_PERIODS).std()
         )
         # 2) slope rolling 30: pendiente OLS sobre KG/HA(t) en ventana de 30
-        df_work.loc[df_sorted.index, slope_name] = grouped_kgha.transform(
-            _rolling_slope
-        )
+        df_work.loc[df_sorted.index, slope_name] = grouped_kgha.transform(_rolling_slope)
 
     new_cols.append(std_name)
     new_cols.append(slope_name)
@@ -298,9 +292,7 @@ def _compute_volatility_and_momentum_lags(
     days_name = "days_since_last_FF"
     fechas_sorted = pd.to_datetime(df_sorted[DATE_COLUMN])
     diffs = (
-        fechas_sorted.groupby(
-            [df_sorted["FUNDO"], df_sorted["FORMATO"]], sort=False
-        )
+        fechas_sorted.groupby([df_sorted["FUNDO"], df_sorted["FORMATO"]], sort=False)
         .diff()
         .dt.days.astype(float)
     )
@@ -347,7 +339,7 @@ def _slope_of_window(arr: np.ndarray) -> float:
     y = arr[mask]
     x = np.arange(n, dtype=float)[mask]
     x_centered = x - x.mean()
-    denom = (x_centered ** 2).sum()
+    denom = (x_centered**2).sum()
     if denom <= 0.0:
         return np.nan
     return float((x_centered * (y - y.mean())).sum() / denom)
@@ -453,10 +445,9 @@ def _compute_target_volatility(df_work: pd.DataFrame) -> list[str]:
     """
     df_sorted = df_work.sort_values(["FUNDO", "FORMATO", DATE_COLUMN])
     name = f"KG_JR_H_std_FF_{STD_WINDOW}"
-    df_work.loc[df_sorted.index, name] = (
-        df_sorted.groupby(["FUNDO", "FORMATO"], sort=False)[TARGET]
-        .transform(lambda s: s.shift(1).rolling(STD_WINDOW, min_periods=MIN_PERIODS).std())
-    )
+    df_work.loc[df_sorted.index, name] = df_sorted.groupby(["FUNDO", "FORMATO"], sort=False)[
+        TARGET
+    ].transform(lambda s: s.shift(1).rolling(STD_WINDOW, min_periods=MIN_PERIODS).std())
     return [name]
 
 
@@ -466,11 +457,15 @@ def _compute_target_volatility(df_work: pd.DataFrame) -> list[str]:
 # log1p es monotona y estateless (misma fila -> mismo valor train/inference)
 # y el sentinel -1 (cold-start) queda fuera del rango de log1p(x>=0).
 _LOG_RATIO_COLS = [
-    "KG_HA_ratio_FF_30", "KG_HA_ratio_FF_90",
-    "KG_HA_REL_GLOBAL_30", "KG_HA_REL_FORMATO_30",
+    "KG_HA_ratio_FF_30",
+    "KG_HA_ratio_FF_90",
+    "KG_HA_REL_GLOBAL_30",
+    "KG_HA_REL_FORMATO_30",
 ]
 _LOG_POSITIVE_COLS = [
-    "days_since_last_FF", f"KG_HA_std_FF_{STD_WINDOW}", f"KG_JR_H_std_FF_{STD_WINDOW}",
+    "days_since_last_FF",
+    f"KG_HA_std_FF_{STD_WINDOW}",
+    f"KG_JR_H_std_FF_{STD_WINDOW}",
 ]
 _SIGNED_LOG_COLS = [f"KG_HA_slope_FF_{SLOPE_WINDOW}"]
 
@@ -520,26 +515,17 @@ def _compute_ratios(df_work: pd.DataFrame) -> list[str]:
     new_cols: list[str] = []
 
     # Locales (KG_HA actual vs su lag FF)
-    df_work["KG_HA_ratio_FF_30"] = safe_ratio(
-        df_work[KG_HA_COL], df_work["KG_HA_lag_FF_30"]
-    )
-    df_work["KG_HA_ratio_FF_90"] = safe_ratio(
-        df_work[KG_HA_COL], df_work["KG_HA_lag_FF_90"]
-    )
+    df_work["KG_HA_ratio_FF_30"] = safe_ratio(df_work[KG_HA_COL], df_work["KG_HA_lag_FF_30"])
+    df_work["KG_HA_ratio_FF_90"] = safe_ratio(df_work[KG_HA_COL], df_work["KG_HA_lag_FF_90"])
     new_cols += ["KG_HA_ratio_FF_30", "KG_HA_ratio_FF_90"]
 
     # Global pool (KG_HA actual vs mediana cross-fundos rolling 30 obs)
     df_sorted_date = df_work.sort_values(DATE_COLUMN)
     rolling_global_30 = (
-        df_sorted_date[KG_HA_COL]
-        .shift(1)
-        .rolling(30, min_periods=MIN_PERIODS)
-        .median()
+        df_sorted_date[KG_HA_COL].shift(1).rolling(30, min_periods=MIN_PERIODS).median()
     )
     df_work.loc[df_sorted_date.index, "_KG_HA_lag_GLOBAL_30"] = rolling_global_30
-    df_work["KG_HA_REL_GLOBAL_30"] = safe_ratio(
-        df_work[KG_HA_COL], df_work["_KG_HA_lag_GLOBAL_30"]
-    )
+    df_work["KG_HA_REL_GLOBAL_30"] = safe_ratio(df_work[KG_HA_COL], df_work["_KG_HA_lag_GLOBAL_30"])
     df_work.drop(columns=["_KG_HA_lag_GLOBAL_30"], inplace=True)
     new_cols.append("KG_HA_REL_GLOBAL_30")
 
@@ -629,9 +615,7 @@ def add_lag_features(df: pd.DataFrame, flags: dict | None = None) -> pd.DataFram
         _apply_log_derived(df_work, new_cols)
 
     # Conteo de filas con cold-start (solo informativo para el log).
-    n_cold_pre = int(
-        df_work[[c for c in new_cols if "_lag_FF_" in c]].isna().all(axis=1).sum()
-    )
+    n_cold_pre = int(df_work[[c for c in new_cols if "_lag_FF_" in c]].isna().all(axis=1).sum())
     n_cold_seasonal_pre = int(df_work[seasonal_cols].isna().all(axis=1).sum())
 
     # Sentinel en todas las features nuevas (incluyendo ratios). El -1 ya
@@ -644,18 +628,15 @@ def add_lag_features(df: pd.DataFrame, flags: dict | None = None) -> pd.DataFram
     # cualquier rango fisico. El resto (ratios, lags, std, days) son >= 0
     # por construccion y -1 sigue siendo seguro.
     for c in new_cols:
-        fill = (
-            SLOPE_COLD_FILL_VALUE
-            if c.startswith("KG_HA_slope") else COLD_START_FILL_VALUE
-        )
+        fill = SLOPE_COLD_FILL_VALUE if c.startswith("KG_HA_slope") else COLD_START_FILL_VALUE
         df_work[c] = df_work[c].fillna(fill)
 
     # DEBUG porque se llama por cada pipeline.fit dentro de Optuna nested CV
     # (~4500 veces en TUNING=prod). Subir a INFO temporal solo para diagnostico.
     logger.debug(
         f"Lag features agregadas | grupos={[g[0] for g in GROUP_DEFS]} | "
-        f"cold_start_FF={n_cold_pre} ({n_cold_pre/len(df_work)*100:.1f}%) | "
-        f"cold_seasonal={n_cold_seasonal_pre} ({n_cold_seasonal_pre/len(df_work)*100:.1f}%) | "
+        f"cold_start_FF={n_cold_pre} ({n_cold_pre / len(df_work) * 100:.1f}%) | "
+        f"cold_seasonal={n_cold_seasonal_pre} ({n_cold_seasonal_pre / len(df_work) * 100:.1f}%) | "
         f"n_nuevas_cols={len(new_cols)}"
     )
     return df_work
@@ -679,7 +660,8 @@ def lag_output_columns(flags: dict | None = None) -> list[str]:
             # el pipeline reproduce exactamente el output del LGB v3 baseline
             # (75 cols antes de FUNDO_FORMATO interaction).
             ["KG_JR_H_lag_FF_simple_1", "KG_JR_H_lag_FF_simple_2", "KG_JR_H_diff_1_FF"]
-            if f["simple_lags"] else []
+            if f["simple_lags"]
+            else []
         )
         + [
             "KG_JR_H_lag_FF_seasonal",
@@ -695,7 +677,8 @@ def lag_output_columns(flags: dict | None = None) -> list[str]:
         + ([f"KG_JR_H_std_FF_{STD_WINDOW}"] if f["target_volatility"] else [])
         + (
             ["PBAYA_lag_FF_7", "PBAYA_lag_FF_30", "DPC_lag_FF_7", "DPC_lag_FF_30"]
-            if f["feature_lags"] else []
+            if f["feature_lags"]
+            else []
         )
         + [
             "KG_HA_ratio_FF_30",
@@ -717,9 +700,8 @@ def _history_cols(flags: dict | None = None) -> list[str]:
     feature_lags activo tambien P/BAYA y DPC (sus lags requieren historia
     en inferencia, igual que KG/HA)."""
     f = flags if flags is not None else _current_flags()
-    return (
-        ["FUNDO", "FORMATO", DATE_COLUMN, KG_HA_COL]
-        + (["P/BAYA", "DPC"] if f["feature_lags"] else [])
+    return ["FUNDO", "FORMATO", DATE_COLUMN, KG_HA_COL] + (
+        ["P/BAYA", "DPC"] if f["feature_lags"] else []
     )
 
 
@@ -779,9 +761,7 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
     def _build_history(self, X: pd.DataFrame, y) -> pd.DataFrame:
         """Crea snapshot historico minimo (FUNDO, FORMATO, FECHA, KG/HA, TARGET)."""
         history = X[_history_cols(self._flags())].copy()
-        history[TARGET] = (
-            y.values if isinstance(y, pd.Series) else np.asarray(y, dtype=float)
-        )
+        history[TARGET] = y.values if isinstance(y, pd.Series) else np.asarray(y, dtype=float)
         # Normalizamos el index para que pd.concat en transform no produzca
         # duplicados confusos.
         return history.reset_index(drop=True)
@@ -806,9 +786,7 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
         # (backfill), `transform("min")` sobre el dataframe combinado redefine
         # el origen del fundo -> tenure de filas historicas y nuevas inconsistente.
         fechas_fit = pd.to_datetime(X[DATE_COLUMN], errors="coerce")
-        self.fundo_first_seen_: dict = (
-            fechas_fit.groupby(X["FUNDO"]).min().dropna().to_dict()
-        )
+        self.fundo_first_seen_: dict = fechas_fit.groupby(X["FUNDO"]).min().dropna().to_dict()
         return self
 
     def fit_transform(self, X: pd.DataFrame, y=None, **fit_params) -> pd.DataFrame:
@@ -817,9 +795,7 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
         # 2. Calcula lags sobre el propio train llamando a la implementacion
         #    canonica con (X + target). Devuelve X con las nuevas columnas.
         df = X.copy()
-        df[TARGET] = (
-            y.values if isinstance(y, pd.Series) else np.asarray(y, dtype=float)
-        )
+        df[TARGET] = y.values if isinstance(y, pd.Series) else np.asarray(y, dtype=float)
         df_with_lags = add_lag_features(df, self._flags()).drop(columns=[TARGET])
         # Cache de transient: permite que `final_pipeline.predict(X_train)`
         # (caso 'Aplicacion Total' en single_run.py) reutilice los lags ya

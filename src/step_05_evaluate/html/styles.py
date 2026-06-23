@@ -7,6 +7,7 @@ El tag canonico de plotly.js (offline vs CDN) vive en
 es la hoja de estilos completa del dashboard ejecutivo (hero, secciones,
 KPIs, charts, technical details).
 """
+
 from __future__ import annotations
 
 # Re-export interno del paquete html. Los consumidores externos

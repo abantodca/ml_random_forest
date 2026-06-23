@@ -24,6 +24,7 @@ Adicionalmente exponemos `composite_score` (legacy) que combina MAPE de
 negocio + penalizacion de gap. Lo dejamos como metrica auxiliar para logs y
 MLflow tags, pero el campeon NO lo usa para la decision.
 """
+
 from __future__ import annotations
 
 import logging
@@ -126,8 +127,7 @@ class ModelResult:
         # antiguos sin `full_metrics`. Logueamos un WARNING para visibilidad.
         if self.business_metrics_oof and "mape" in self.business_metrics_oof:
             logger.warning(
-                "champion: full_mape fallback to OOF for model=%s "
-                "(full_metrics missing)",
+                "champion: full_mape fallback to OOF for model=%s (full_metrics missing)",
                 self.model_type,
             )
             return float(self.business_metrics_oof["mape"])
@@ -203,9 +203,7 @@ def _decision_key(r: ModelResult) -> tuple:
     # los agrupa de forma consistente con "diferencia < tol => empate".
     # oof_mape puede ser inf (sin metricas OOF): bucket centinela enorme para
     # mandarlo al final sin OverflowError de int(inf).
-    mape_bucket = (
-        int(r.oof_mape / OOF_MAPE_TIE_TOLERANCE) if math.isfinite(r.oof_mape) else 10**9
-    )
+    mape_bucket = int(r.oof_mape / OOF_MAPE_TIE_TOLERANCE) if math.isfinite(r.oof_mape) else 10**9
     return (int(_gap_gate_failed(r)), mape_bucket, r.elapsed_seconds)
 
 
@@ -306,12 +304,10 @@ def champion_summary(
                 "gap": r.metrics.get("nested_cv_gap_mean"),
                 "r2": r.metrics.get("nested_cv_r2_mean"),
                 "business_mape_oof": (
-                    r.business_metrics_oof.get("mape")
-                    if r.business_metrics_oof else None
+                    r.business_metrics_oof.get("mape") if r.business_metrics_oof else None
                 ),
                 "business_r2_oof": (
-                    r.business_metrics_oof.get("r2")
-                    if r.business_metrics_oof else None
+                    r.business_metrics_oof.get("r2") if r.business_metrics_oof else None
                 ),
                 "full_r2": (r.full_metrics or {}).get("r2"),
                 "full_mae": (r.full_metrics or {}).get("mae"),

@@ -36,8 +36,7 @@ def get_engine() -> AsyncEngine:
     """Retorna el motor de base de datos (debe estar inicializado)"""
     if _engine is None:
         raise RuntimeError(
-            "El motor de base de datos no está inicializado. "
-            "Llama a init_db() primero."
+            "El motor de base de datos no está inicializado. Llama a init_db() primero."
         )
     return _engine
 
@@ -63,17 +62,14 @@ async def ensure_database(database_url: str) -> None:
         conn = await asyncpg.connect(dsn=maintenance_dsn, timeout=10)
     except Exception as exc:  # noqa: BLE001 — best-effort bootstrap
         logger.warning(
-            "ensure_database: no se pudo conectar a 'postgres' (%s); "
-            "se asume que '%s' ya existe.",
+            "ensure_database: no se pudo conectar a 'postgres' (%s); se asume que '%s' ya existe.",
             exc,
             target_db,
         )
         return
 
     try:
-        exists = await conn.fetchval(
-            "SELECT 1 FROM pg_database WHERE datname = $1", target_db
-        )
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", target_db)
         if not exists:
             # CREATE DATABASE no admite parámetros y no puede ir en transacción;
             # el nombre proviene de nuestra config, no de input externo.
@@ -101,9 +97,7 @@ async def init_db(database_url: str) -> None:
 
         # Convertir postgresql:// a postgresql+asyncpg://
         if database_url.startswith("postgresql://"):
-            database_url = database_url.replace(
-                "postgresql://", "postgresql+asyncpg://", 1
-            )
+            database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
         # Crear motor async
         _engine = create_async_engine(

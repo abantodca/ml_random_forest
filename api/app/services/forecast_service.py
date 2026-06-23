@@ -70,26 +70,20 @@ class ForecastService:
            respuesta sin persistirlo.
         4. Persiste el pronóstico (incluye KGJN_PRED si hay HORAS_EFECTIVAS).
         """
-        preds, stds, drift_reports, _ = await self._predict(
-            variety, [forecast_data]
-        )
+        preds, stds, drift_reports, _ = await self._predict(variety, [forecast_data])
         kghora_pred = preds[0]
 
-        forecast = await crud.forecast.create_forecast(
-            db, variety, forecast_data, kghora_pred
-        )
+        forecast = await crud.forecast.create_forecast(db, variety, forecast_data, kghora_pred)
 
         logger.info(
             "Forecast created: id=%d variety=%s kghora=%.4f",
-            forecast.id, variety, kghora_pred,
+            forecast.id,
+            variety,
+            kghora_pred,
         )
         response = ForecastResponse.model_validate(forecast)
-        response = self._attach_uncertainty(
-            response, kghora_pred, stds[0] if stds else None
-        )
-        return self._attach_drift(
-            response, drift_reports[0] if drift_reports else None
-        )
+        response = self._attach_uncertainty(response, kghora_pred, stds[0] if stds else None)
+        return self._attach_drift(response, drift_reports[0] if drift_reports else None)
 
     async def create_batch(
         self,
@@ -99,7 +93,8 @@ class ForecastService:
     ) -> ForecastListResponse:
         """Predice batch + persiste + adjunta drift por fila + drift agregado."""
         kghora_preds, stds, drift_reports, batch_drift_dict = await self._predict(
-            variety, forecasts_data,
+            variety,
+            forecasts_data,
         )
         forecasts = await crud.forecast.create_forecasts_batch(
             db, variety, forecasts_data, kghora_preds
@@ -119,9 +114,7 @@ class ForecastService:
         batch_drift_report: BatchDriftReport | None = None
         if batch_drift_dict is not None:
             try:
-                batch_drift_report = BatchDriftReport.model_validate(
-                    batch_drift_dict
-                )
+                batch_drift_report = BatchDriftReport.model_validate(batch_drift_dict)
             except Exception as exc:
                 logger.warning("No se pudo serializar batch drift: %s", exc)
 
@@ -146,9 +139,7 @@ class ForecastService:
           - Re-predecir sobre inputs reales en la descomposición de error
             (`error_modelo = predict(real) − real`).
         """
-        preds, stds, drift_reports, _ = await self._predict(
-            variety, [forecast_data]
-        )
+        preds, stds, drift_reports, _ = await self._predict(variety, [forecast_data])
         kghora = preds[0]
         # KGJN en memoria (no hay fila que persistir); misma fórmula que el CRUD.
         kgjn = crud.forecast.calc_kgjn(kghora, forecast_data.horas_efectivas)
@@ -162,11 +153,12 @@ class ForecastService:
                 logger.warning("No se pudo serializar reporte de drift: %s", exc)
 
         response = PredictionResponse(
-            variety=variety, kghora_pred=kghora, kgjn_pred=kgjn, drift=drift,
+            variety=variety,
+            kghora_pred=kghora,
+            kgjn_pred=kgjn,
+            drift=drift,
         )
-        return self._attach_uncertainty(
-            response, kghora, stds[0] if stds else None
-        )
+        return self._attach_uncertainty(response, kghora, stds[0] if stds else None)
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -212,9 +204,7 @@ class ForecastService:
         # Para no congelar el event loop en ninguno de los dos casos,
         # delegamos ambos cálculos al threadpool.
         loop = asyncio.get_running_loop()
-        row_drifts = await loop.run_in_executor(
-            None, self._drift.compute, variety, features_df
-        )
+        row_drifts = await loop.run_in_executor(None, self._drift.compute, variety, features_df)
         batch_drift = await loop.run_in_executor(
             None,
             partial(
@@ -250,9 +240,7 @@ class ForecastService:
             response.kghora_lo = round(max(0.0, pred - halfwidth), 4)
             response.kghora_hi = round(pred + halfwidth, 4)
             response.confidence = (
-                "baja" if rel > cls._CONF_BAJA
-                else "media" if rel > cls._CONF_MEDIA
-                else "alta"
+                "baja" if rel > cls._CONF_BAJA else "media" if rel > cls._CONF_MEDIA else "alta"
             )
         except Exception as exc:
             logger.warning("No se pudo adjuntar incertidumbre: %s", exc)
@@ -260,7 +248,8 @@ class ForecastService:
 
     @staticmethod
     def _attach_drift(
-        response: ForecastResponse, drift_dict: dict[str, Any] | None,
+        response: ForecastResponse,
+        drift_dict: dict[str, Any] | None,
     ) -> ForecastResponse:
         """Inyecta el reporte de drift en la respuesta sin romper si es None."""
         if drift_dict is None:

@@ -1,4 +1,5 @@
 """Contexto del entrenamiento: datos descriptivos del dataset para mostrar al lector."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,9 +17,9 @@ class TrainingContext:
     date_min: str | None
     date_max: str | None
     n_fundos: int
-    fundos_top: list[str]      # primeros 5 alfabeticamente
+    fundos_top: list[str]  # primeros 5 alfabeticamente
     n_formatos: int
-    formatos_top: list[str]    # primeros 5 alfabeticamente
+    formatos_top: list[str]  # primeros 5 alfabeticamente
 
 
 def build_context(

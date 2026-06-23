@@ -5,6 +5,7 @@ Corre en el contenedor API (necesita fastapi):
       "pip install -q pytest && pytest /app/tests/test_api_conformal.py -q"
 En el trainer se salta solo (importorskip).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -54,9 +55,11 @@ def test_ff_desconocido_aplica_cold_factor():
 
 def test_legacy_sin_conformal_no_rompe_vector():
     # Contrato de forma: una banda por fila, en orden.
-    hw = _halfwidths([
-        {"FUNDO": "A", "FORMATO": "G"},
-        {"FUNDO": "Z", "FORMATO": "Z"},
-    ])
+    hw = _halfwidths(
+        [
+            {"FUNDO": "A", "FORMATO": "G"},
+            {"FUNDO": "Z", "FORMATO": "Z"},
+        ]
+    )
     assert isinstance(hw, np.ndarray) and hw.shape == (2,)
     assert hw[0] == 0.5 and hw[1] == 2.0

@@ -108,7 +108,7 @@ def s3_download_prefix(s3, bucket: str, prefix: str, dest: Path) -> int:
         key = obj["Key"]
         if key.endswith("/"):
             continue
-        rel = key[len(prefix):].lstrip("/")
+        rel = key[len(prefix) :].lstrip("/")
         target = dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         s3.download_file(bucket, key, str(target))
@@ -128,8 +128,7 @@ def discover_champions(s3, bucket: str) -> dict[str, dict]:
     """
     objs = s3_list(s3, bucket, f"{ARTIFACTS_ROOT}/")
     champ_keys = [
-        o for o in objs
-        if "/champion/champion_" in o["Key"] and o["Key"].endswith(".json")
+        o for o in objs if "/champion/champion_" in o["Key"] and o["Key"].endswith(".json")
     ]
     by_variety: dict[str, dict] = {}
     for o in sorted(champ_keys, key=lambda x: x["LastModified"]):
@@ -137,7 +136,7 @@ def discover_champions(s3, bucket: str) -> dict[str, dict]:
         # artifacts/<exp_id>/<run_id>/artifacts/champion/champion_<VAR>.json
         parts = key.split("/")
         exp_id = parts[1]
-        variety = parts[-1][len("champion_"):-len(".json")]
+        variety = parts[-1][len("champion_") : -len(".json")]
         try:
             doc = s3_get_json(s3, bucket, key)
         except Exception as exc:  # noqa: BLE001
@@ -189,7 +188,7 @@ def build_metrics(summary: dict) -> dict[str, float]:
     fm = summary.get("full_metrics_model") or {}
     for k, v in fm.items():
         if isinstance(v, (int, float)):
-            m[f"full_model_{k}"] = float(v)    # -> full_model_r2, etc.
+            m[f"full_model_{k}"] = float(v)  # -> full_model_r2, etc.
     fb = summary.get("full_metrics_business") or {}
     for k, v in fb.items():
         if isinstance(v, (int, float)):
@@ -219,8 +218,13 @@ def already_registered(client: MlflowClient, model_name: str) -> bool:
 
 
 def reconstruct_variety(
-    s3, bucket: str, variety: str, info: dict,
-    experiment_prefix: str, model_name: str, dry_run: bool,
+    s3,
+    bucket: str,
+    variety: str,
+    info: dict,
+    experiment_prefix: str,
+    model_name: str,
+    dry_run: bool,
 ) -> bool:
     exp_id, run_id = info["exp_id"], info["run_id"]
     run_prefix = f"{ARTIFACTS_ROOT}/{exp_id}/{run_id}/artifacts/"
@@ -265,13 +269,15 @@ def reconstruct_variety(
                 mlflow.log_params(params)
             if metrics:
                 mlflow.log_metrics(metrics)
-            mlflow.set_tags({
-                "variety": variety,
-                "model_type": params["model_type"],
-                "is_champion": "true",
-                "source": "s3_reconcile",
-                "reconciled_from_run_id": run_id,
-            })
+            mlflow.set_tags(
+                {
+                    "variety": variety,
+                    "model_type": params["model_type"],
+                    "is_champion": "true",
+                    "source": "s3_reconcile",
+                    "reconciled_from_run_id": run_id,
+                }
+            )
             # Re-sube los artifacts del run original (incluye winner_dashboard/,
             # que la API lista para servir el reporte HTML).
             mlflow.log_artifacts(str(run_dir))
@@ -292,8 +298,11 @@ def reconstruct_variety(
 
 
 def register_model(
-    model_name: str, model_uri: str, variety: str,
-    metrics: dict[str, float], orig_run_id: str,
+    model_name: str,
+    model_uri: str,
+    variety: str,
+    metrics: dict[str, float],
+    orig_run_id: str,
 ) -> None:
     """Registra y etiqueta la version (espeja src/step_06_track/mlflow_registry)."""
     mv = mlflow.register_model(model_uri=model_uri, name=model_name)

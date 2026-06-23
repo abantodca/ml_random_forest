@@ -51,9 +51,7 @@ async def validation_exception_handler(
     )
 
 
-async def variety_not_found_handler(
-    request: Request, exc: VarietyNotFoundError
-) -> JSONResponse:
+async def variety_not_found_handler(request: Request, exc: VarietyNotFoundError) -> JSONResponse:
     """Maneja errores de variedad no encontrada (404)."""
     logger.warning(
         "Variety not found: '%s' on %s %s",
@@ -93,9 +91,7 @@ async def model_not_available_handler(
     )
 
 
-async def forecast_not_found_handler(
-    request: Request, exc: ForecastNotFoundError
-) -> JSONResponse:
+async def forecast_not_found_handler(request: Request, exc: ForecastNotFoundError) -> JSONResponse:
     """Maneja errores de pronóstico no encontrado (404)."""
     logger.warning(
         "Forecast not found: id=%s on %s %s",

@@ -99,9 +99,7 @@ class DriftService:
     # API pública
     # ------------------------------------------------------------------
 
-    def compute(
-        self, variety: str, features_df: pd.DataFrame
-    ) -> list[dict[str, Any] | None]:
+    def compute(self, variety: str, features_df: pd.DataFrame) -> list[dict[str, Any] | None]:
         """Devuelve un reporte de drift por fila (o None si no hay baseline).
 
         Diseñado para no romper el flujo de predicción: ante CUALQUIER
@@ -116,7 +114,9 @@ class DriftService:
         except Exception as exc:
             logger.warning(
                 "DriftService: no se pudo construir baseline para '%s': %s",
-                variety, exc, exc_info=True,
+                variety,
+                exc,
+                exc_info=True,
             )
             return [None] * len(features_df)
 
@@ -124,14 +124,13 @@ class DriftService:
             return [None] * len(features_df)
 
         try:
-            return [
-                self._row_report(baseline, row)
-                for _, row in features_df.iterrows()
-            ]
+            return [self._row_report(baseline, row) for _, row in features_df.iterrows()]
         except Exception as exc:
             logger.warning(
                 "DriftService.compute fallo para '%s': %s",
-                variety, exc, exc_info=True,
+                variety,
+                exc,
+                exc_info=True,
             )
             return [None] * len(features_df)
 
@@ -157,7 +156,9 @@ class DriftService:
         except Exception as exc:
             logger.warning(
                 "DriftService.compute_batch: baseline error '%s': %s",
-                variety, exc, exc_info=True,
+                variety,
+                exc,
+                exc_info=True,
             )
             return None
         if baseline is None:
@@ -168,7 +169,9 @@ class DriftService:
         except Exception as exc:
             logger.warning(
                 "DriftService.compute_batch fallo para '%s': %s",
-                variety, exc, exc_info=True,
+                variety,
+                exc,
+                exc_info=True,
             )
             return None
 
@@ -192,9 +195,7 @@ class DriftService:
             if cached and cached[0] == run_id:
                 return cached[1]
 
-            model_name = (
-                f"{self._mlflow_service.experiment_prefix}{variety}"
-            )
+            model_name = f"{self._mlflow_service.experiment_prefix}{variety}"
             uri = f"models:/{model_name}/{version_info['version']}"
             try:
                 sklearn_pipeline = mlflow.sklearn.load_model(uri)
@@ -202,7 +203,8 @@ class DriftService:
                 logger.warning(
                     "DriftService: no se pudo cargar sklearn flavor de '%s' (%s)."
                     " El reporte de drift quedará deshabilitado para esta variedad.",
-                    variety, exc,
+                    variety,
+                    exc,
                 )
                 return None
 
@@ -213,8 +215,12 @@ class DriftService:
         logger.info(
             "📐 Drift baseline cargado para '%s' | n=%d | rango FECHA=%s..%s | "
             "numéricas=%d | categóricas=%d",
-            variety, baseline.n_samples, baseline.date_from, baseline.date_to,
-            len(baseline.numeric), len(baseline.categorical),
+            variety,
+            baseline.n_samples,
+            baseline.date_from,
+            baseline.date_to,
+            len(baseline.numeric),
+            len(baseline.categorical),
         )
         return baseline
 
@@ -223,7 +229,9 @@ class DriftService:
     # ------------------------------------------------------------------
 
     def _row_report(
-        self, baseline: VarietyBaseline, row: pd.Series,
+        self,
+        baseline: VarietyBaseline,
+        row: pd.Series,
     ) -> dict[str, Any]:
         per_feature: list[dict[str, Any]] = []
         worst_status = "ok"
@@ -240,20 +248,22 @@ class DriftService:
             # panel exponga el rango histórico — el usuario ve qué valor
             # esperaría el modelo si decidiera incluirla.
             if value is None or pd.isna(value):
-                per_feature.append({
-                    "feature": col,
-                    "value": None,
-                    "value_str": "no enviado",
-                    "baseline_median": nb.center,
-                    "baseline_iqr": nb.scale,
-                    "baseline_p05": nb.p05,
-                    "baseline_p95": nb.p95,
-                    "baseline_freq": None,
-                    "z_score": None,
-                    "is_unseen_category": False,
-                    "status": "ok",
-                    "source": nb.source,
-                })
+                per_feature.append(
+                    {
+                        "feature": col,
+                        "value": None,
+                        "value_str": "no enviado",
+                        "baseline_median": nb.center,
+                        "baseline_iqr": nb.scale,
+                        "baseline_p05": nb.p05,
+                        "baseline_p95": nb.p95,
+                        "baseline_freq": None,
+                        "z_score": None,
+                        "is_unseen_category": False,
+                        "status": "ok",
+                        "source": nb.source,
+                    }
+                )
                 continue
             value_f = float(value)
             z = (value_f - nb.center) / nb.scale
@@ -265,20 +275,22 @@ class DriftService:
             else:
                 status = "ok"
             worst_status = self._merge_status(worst_status, status)
-            per_feature.append({
-                "feature": col,
-                "value": value_f,
-                "value_str": None,
-                "baseline_median": nb.center,
-                "baseline_iqr": nb.scale,
-                "baseline_p05": nb.p05,
-                "baseline_p95": nb.p95,
-                "baseline_freq": None,
-                "z_score": float(z),
-                "is_unseen_category": False,
-                "status": status,
-                "source": nb.source,
-            })
+            per_feature.append(
+                {
+                    "feature": col,
+                    "value": value_f,
+                    "value_str": None,
+                    "baseline_median": nb.center,
+                    "baseline_iqr": nb.scale,
+                    "baseline_p05": nb.p05,
+                    "baseline_p95": nb.p95,
+                    "baseline_freq": None,
+                    "z_score": float(z),
+                    "is_unseen_category": False,
+                    "status": status,
+                    "source": nb.source,
+                }
+            )
             score_acc += min(abs_z / Z_WARNING_THRESHOLD, 1.0)
             n_features += 1
 
@@ -301,20 +313,22 @@ class DriftService:
                 status = "ok"
                 contribution = 0.0
             worst_status = self._merge_status(worst_status, status)
-            per_feature.append({
-                "feature": col,
-                "value": None,
-                "value_str": value_str,
-                "baseline_median": None,
-                "baseline_iqr": None,
-                "baseline_p05": None,
-                "baseline_p95": None,
-                "baseline_freq": freq,
-                "z_score": None,
-                "is_unseen_category": (freq <= 0.0),
-                "status": status,
-                "source": "history",
-            })
+            per_feature.append(
+                {
+                    "feature": col,
+                    "value": None,
+                    "value_str": value_str,
+                    "baseline_median": None,
+                    "baseline_iqr": None,
+                    "baseline_p05": None,
+                    "baseline_p95": None,
+                    "baseline_freq": freq,
+                    "z_score": None,
+                    "is_unseen_category": (freq <= 0.0),
+                    "status": status,
+                    "source": "history",
+                }
+            )
             score_acc += contribution
             n_features += 1
 
@@ -380,9 +394,7 @@ class DriftService:
             nb = baseline.numeric.get(col)
             if nb is None or col not in features_df.columns:
                 continue
-            values = (
-                features_df[col].dropna().to_numpy(dtype=float)
-            )
+            values = features_df[col].dropna().to_numpy(dtype=float)
             if len(values) == 0:
                 continue
 
@@ -397,31 +409,27 @@ class DriftService:
             # diferencia significativa que PSI no capturó (por ejemplo,
             # corrimiento de la mediana sin cambio de bins).
             feature_status = psi_status
-            if (
-                ks_pval is not None
-                and ks_pval < _PVALUE_ALPHA
-                and feature_status == "ok"
-            ):
+            if ks_pval is not None and ks_pval < _PVALUE_ALPHA and feature_status == "ok":
                 feature_status = "warning"
             worst_status = self._merge_status(worst_status, feature_status)
 
-            per_feature.append({
-                "feature": col,
-                "kind": "numeric",
-                "psi": float(psi),
-                "psi_status": psi_status,
-                "ks_statistic": ks_stat,
-                "ks_pvalue": ks_pval,
-                "chi2_statistic": None,
-                "chi2_pvalue": None,
-                "method": "+".join(method_parts),
-                "status": feature_status,
-                "n_baseline": (
-                    int(len(nb.samples)) if nb.samples is not None else None
-                ),
-                "n_observed": int(len(values)),
-                "source": nb.source,
-            })
+            per_feature.append(
+                {
+                    "feature": col,
+                    "kind": "numeric",
+                    "psi": float(psi),
+                    "psi_status": psi_status,
+                    "ks_statistic": ks_stat,
+                    "ks_pvalue": ks_pval,
+                    "chi2_statistic": None,
+                    "chi2_pvalue": None,
+                    "method": "+".join(method_parts),
+                    "status": feature_status,
+                    "n_baseline": (int(len(nb.samples)) if nb.samples is not None else None),
+                    "n_observed": int(len(values)),
+                    "source": nb.source,
+                }
+            )
             psi_sum += min(psi, 1.0)  # capped para que un PSI gigante no domine
             psi_count += 1
 
@@ -431,14 +439,13 @@ class DriftService:
             cb = baseline.categorical.get(col)
             if cb is None or col not in features_df.columns:
                 continue
-            observed_counts = (
-                features_df[col].dropna().astype(str).value_counts()
-            )
+            observed_counts = features_df[col].dropna().astype(str).value_counts()
             if observed_counts.empty:
                 continue
 
             psi, psi_status, n_unseen = self._compute_psi_categorical(
-                observed_counts, cb,
+                observed_counts,
+                cb,
             )
             chi2_stat, chi2_pval = self._compute_chi2(observed_counts, cb)
 
@@ -447,11 +454,7 @@ class DriftService:
                 method_parts.append("chi2")
 
             feature_status = psi_status
-            if (
-                chi2_pval is not None
-                and chi2_pval < _PVALUE_ALPHA
-                and feature_status == "ok"
-            ):
+            if chi2_pval is not None and chi2_pval < _PVALUE_ALPHA and feature_status == "ok":
                 feature_status = "warning"
             if n_unseen > 0:
                 # Categoría no vista siempre eleva el estado a alert: es
@@ -459,22 +462,24 @@ class DriftService:
                 feature_status = "alert"
             worst_status = self._merge_status(worst_status, feature_status)
 
-            per_feature.append({
-                "feature": col,
-                "kind": "categorical",
-                "psi": float(psi),
-                "psi_status": psi_status,
-                "ks_statistic": None,
-                "ks_pvalue": None,
-                "chi2_statistic": chi2_stat,
-                "chi2_pvalue": chi2_pval,
-                "method": "+".join(method_parts),
-                "status": feature_status,
-                "n_baseline": baseline.n_samples or None,
-                "n_observed": int(observed_counts.sum()),
-                "source": "history",
-                "unseen_categories": n_unseen,
-            })
+            per_feature.append(
+                {
+                    "feature": col,
+                    "kind": "categorical",
+                    "psi": float(psi),
+                    "psi_status": psi_status,
+                    "ks_statistic": None,
+                    "ks_pvalue": None,
+                    "chi2_statistic": chi2_stat,
+                    "chi2_pvalue": chi2_pval,
+                    "method": "+".join(method_parts),
+                    "status": feature_status,
+                    "n_baseline": baseline.n_samples or None,
+                    "n_observed": int(observed_counts.sum()),
+                    "source": "history",
+                    "unseen_categories": n_unseen,
+                }
+            )
             psi_sum += min(psi, 1.0)
             psi_count += 1
 
@@ -495,7 +500,9 @@ class DriftService:
             "score": float(score),
             "status": worst_status,
             "verdict": self._batch_verdict(
-                worst_status, baseline, len(features_df),
+                worst_status,
+                baseline,
+                len(features_df),
             ),
             "training_window": {
                 "start": baseline.date_from,
@@ -508,7 +515,8 @@ class DriftService:
 
     @staticmethod
     def _compute_psi_numeric(
-        observed_values: np.ndarray, nb: NumericBaseline,
+        observed_values: np.ndarray,
+        nb: NumericBaseline,
     ) -> tuple[float, str]:
         """PSI numérico con bins por percentiles del baseline.
 
@@ -542,11 +550,10 @@ class DriftService:
             # uniformemente entre los bins resultantes.
             n_bins = len(edges) - 1
             theoretical = np.array(
-                [0.05, 0.20, 0.25, 0.25, 0.20, 0.05], dtype=float,
+                [0.05, 0.20, 0.25, 0.25, 0.20, 0.05],
+                dtype=float,
             )
-            baseline_freqs = (
-                theoretical if n_bins == 6 else np.full(n_bins, 1.0 / n_bins)
-            )
+            baseline_freqs = theoretical if n_bins == 6 else np.full(n_bins, 1.0 / n_bins)
 
         observed_counts, _ = np.histogram(observed_values, bins=edges)
         n_obs = observed_counts.sum()
@@ -561,7 +568,8 @@ class DriftService:
 
     @staticmethod
     def _compute_psi_categorical(
-        observed_counts: pd.Series, baseline_freqs: dict[str, float],
+        observed_counts: pd.Series,
+        baseline_freqs: dict[str, float],
     ) -> tuple[float, str, int]:
         """PSI categórico + cuenta de categorías no vistas en baseline."""
         n_obs = int(observed_counts.sum())
@@ -580,7 +588,8 @@ class DriftService:
 
     @staticmethod
     def _compute_ks(
-        observed_values: np.ndarray, nb: NumericBaseline,
+        observed_values: np.ndarray,
+        nb: NumericBaseline,
     ) -> tuple[float | None, float | None]:
         """K-S de dos muestras. Solo aplicable si baseline guarda samples."""
         if (
@@ -598,7 +607,8 @@ class DriftService:
 
     @staticmethod
     def _compute_chi2(
-        observed_counts: pd.Series, baseline_freqs: dict[str, float],
+        observed_counts: pd.Series,
+        baseline_freqs: dict[str, float],
     ) -> tuple[float | None, float | None]:
         """Chi² goodness-of-fit alineando categorías con baseline.
 
@@ -606,16 +616,16 @@ class DriftService:
         reportan vía PSI (n_unseen). Devuelve (None, None) si quedan <2
         categorías comunes — el test no es definible.
         """
-        common_cats = [
-            c for c in observed_counts.index if baseline_freqs.get(c, 0.0) > 0.0
-        ]
+        common_cats = [c for c in observed_counts.index if baseline_freqs.get(c, 0.0) > 0.0]
         if len(common_cats) < 2:
             return None, None
         obs = np.array(
-            [float(observed_counts[c]) for c in common_cats], dtype=float,
+            [float(observed_counts[c]) for c in common_cats],
+            dtype=float,
         )
         expected_p = np.array(
-            [baseline_freqs[c] for c in common_cats], dtype=float,
+            [baseline_freqs[c] for c in common_cats],
+            dtype=float,
         )
         # Renormalizamos para que sum(expected) == sum(observed) (requisito
         # de scipy.stats.chisquare). Las masas omitidas (categorías no
@@ -634,11 +644,11 @@ class DriftService:
 
     @staticmethod
     def _batch_verdict(
-        status: str, baseline: VarietyBaseline, n_rows: int,
+        status: str,
+        baseline: VarietyBaseline,
+        n_rows: int,
     ) -> str:
-        n_base = (
-            f"{baseline.n_samples:,}" if baseline.n_samples else "—"
-        )
+        n_base = f"{baseline.n_samples:,}" if baseline.n_samples else "—"
         if status == "ok":
             return (
                 f"Lote estable: {n_rows} pronósticos comparados contra "

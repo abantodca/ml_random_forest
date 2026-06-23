@@ -22,6 +22,7 @@ Calculamos DOS escenarios para que el gerente vea ambas perspectivas:
      generalizacion. Util como sanity check (confirma que el modelo
      "puede" aprender la senal) pero NO sirve para decidir despliegue.
 """
+
 from __future__ import annotations
 
 import logging
@@ -146,7 +147,8 @@ def validate_against_business_unit(
     except Exception:
         logger.warning(
             "business_validation: final_pipeline.predict(X_full) fallo; "
-            "metrics_insample queda vacio", exc_info=True,
+            "metrics_insample queda vacio",
+            exc_info=True,
         )
         y_pred_h_full = None
 
@@ -155,9 +157,7 @@ def validate_against_business_unit(
             np.asarray(y_pred_h_full, dtype=float), h_ef, kg_jr
         )
         if kg_jr_pred_in.size > 0:
-            result.metrics_insample = calculate_regression_metrics(
-                kg_jr_real_in, kg_jr_pred_in
-            )
+            result.metrics_insample = calculate_regression_metrics(kg_jr_real_in, kg_jr_pred_in)
             result.n_insample = kg_jr_pred_in.size
             result.kg_jr_real_insample = kg_jr_real_in
             result.kg_jr_pred_insample = kg_jr_pred_in

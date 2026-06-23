@@ -24,8 +24,15 @@ from app.schemas import ForecastCreate
 # (ver MLmodel.signature.inputs del run mas reciente). Cualquier cambio
 # en el set de columnas raw del entrenamiento debe espejarse aqui.
 MODEL_INPUT_COLUMNS: list[str] = [
-    "KG/HA", "%INDUS", "DPC", "P/BAYA", "HA", "DIA_COSECHA",
-    "FORMATO", "FUNDO", "FECHA",
+    "KG/HA",
+    "%INDUS",
+    "DPC",
+    "P/BAYA",
+    "HA",
+    "DIA_COSECHA",
+    "FORMATO",
+    "FUNDO",
+    "FECHA",
 ]
 
 

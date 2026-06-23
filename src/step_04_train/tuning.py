@@ -18,6 +18,7 @@ Acumulamos predicciones out-of-fold (OOF) durante el outer CV: son
 predicciones honestas (cada fila predicha por un modelo que NO la vio en
 entrenamiento) y se usan para construir los graficos del reporte gerencial.
 """
+
 from __future__ import annotations
 
 import logging
@@ -94,7 +95,8 @@ def _build_pipeline(preprocessor: Pipeline, model_type: str) -> Pipeline:
 
 
 def _build_strat_label(
-    X: pd.DataFrame, min_count: int,
+    X: pd.DataFrame,
+    min_count: int,
 ) -> tuple[pd.Series | None, str]:
     """Etiqueta de estratificacion ADAPTATIVA por variedad.
 
@@ -117,8 +119,7 @@ def _build_strat_label(
     candidates: list[tuple[str, pd.Series]] = []
     if "FUNDO" in X.columns and "FORMATO" in X.columns:
         candidates.append(
-            ("FUNDO_FORMATO",
-             X["FUNDO"].astype(str) + "_" + X["FORMATO"].astype(str))
+            ("FUNDO_FORMATO", X["FUNDO"].astype(str) + "_" + X["FORMATO"].astype(str))
         )
     if "FUNDO" in X.columns:
         candidates.append(("FUNDO", X["FUNDO"].astype(str)))
@@ -167,6 +168,7 @@ def _objective(
         OPTUNA_OBJECTIVE_GAP_PENALTY,
         OPTUNA_OBJECTIVE_STD_PENALTY,
     )
+
     track_gap = OPTUNA_OBJECTIVE_GAP_PENALTY > 0.0
 
     params = suggest_full_params(trial, model_type)
@@ -269,6 +271,7 @@ def _build_cv_splitters(
     # Outer
     if CV_OUTER_STRATEGY == "temporal_year":
         from src.step_04_train.temporal_cv import TemporalYearSplit
+
         outer_cv = TemporalYearSplit(
             year_col="ANIO",
             n_splits=outer_folds,
@@ -277,7 +280,9 @@ def _build_cv_splitters(
     else:
         outer_splitter_cls = StratifiedKFold if strat_label is not None else KFold
         outer_cv = outer_splitter_cls(
-            n_splits=outer_folds, shuffle=True, random_state=random_state,
+            n_splits=outer_folds,
+            shuffle=True,
+            random_state=random_state,
         )
 
     # Inner: siempre stratified (cuando hay strat_label) — el outer fold
@@ -285,13 +290,17 @@ def _build_cv_splitters(
     # estabiliza la inner CV de Optuna.
     inner_splitter_cls = StratifiedKFold if strat_label is not None else KFold
     inner_cv = inner_splitter_cls(
-        n_splits=inner_folds, shuffle=True, random_state=random_state,
+        n_splits=inner_folds,
+        shuffle=True,
+        random_state=random_state,
     )
     return outer_cv, inner_cv, strat_label, strat_strategy
 
 
 def _maybe_sample_weights(
-    y: pd.Series, use_sample_weights: bool, logger,
+    y: pd.Series,
+    use_sample_weights: bool,
+    logger,
     X: pd.DataFrame | None = None,
     high_season_months: tuple | None = None,
 ) -> np.ndarray | None:
@@ -320,7 +329,9 @@ def _maybe_sample_weights(
     # n_bins/weight_cap leidos de src.config para evitar override silencioso
     # del default de compute_sample_weights (antes hardcoded n_bins=10 aqui).
     sw = compute_sample_weights(
-        y, n_bins=SAMPLE_WEIGHT_BINS, weight_cap=SAMPLE_WEIGHT_CAP,
+        y,
+        n_bins=SAMPLE_WEIGHT_BINS,
+        weight_cap=SAMPLE_WEIGHT_CAP,
     )
     extra_tags = ""
     if SAMPLE_WEIGHT_INV_Y:
@@ -336,13 +347,13 @@ def _maybe_sample_weights(
         months = pd.to_datetime(X[DATE_COLUMN], errors="coerce").dt.month
         boost = np.where(
             months.isin(meses_pico).to_numpy(),
-            SAMPLE_WEIGHT_HIGH_SEASON_BOOST, 1.0,
+            SAMPLE_WEIGHT_HIGH_SEASON_BOOST,
+            1.0,
         )
         sw = sw * boost
         sw = sw * (len(sw) / sw.sum())
         extra_tags += (
-            f" | high_season ON (meses={list(meses_pico)}"
-            f" x{SAMPLE_WEIGHT_HIGH_SEASON_BOOST})"
+            f" | high_season ON (meses={list(meses_pico)} x{SAMPLE_WEIGHT_HIGH_SEASON_BOOST})"
         )
     logger.info(
         f"Sample weights ON | n_bins={SAMPLE_WEIGHT_BINS} | "
@@ -377,12 +388,17 @@ def _run_outer_cv_loop(
     """
     n = len(y)
     res = _OuterFoldResults(
-        mae_test=[], mae_train=[], gap=[], r2=[], best_params=[],
+        mae_test=[],
+        mae_train=[],
+        gap=[],
+        r2=[],
+        best_params=[],
         oof_pred=np.full(n, np.nan, dtype=float),
         oof_fold=np.full(n, -1, dtype=int),
     )
     for fold_idx, (train_idx, test_idx) in enumerate(
-        outer_cv.split(X, strat_label), start=1,
+        outer_cv.split(X, strat_label),
+        start=1,
     ):
         fold_t0 = time.perf_counter()
         logger.info(f"Outer fold {fold_idx}/{outer_folds} | tuning + eval")
@@ -398,7 +414,12 @@ def _run_outer_cv_loop(
             # Binding por defaults: la lambda se consume dentro de esta
             # iteracion, pero el binding explicito blinda contra B023.
             lambda trial, X_tr=X_tr, y_tr=y_tr, sw_tr=sw_tr, strat_tr=strat_tr: _objective(
-                trial, X_tr, y_tr, preprocessor, inner_cv, model_type,
+                trial,
+                X_tr,
+                y_tr,
+                preprocessor,
+                inner_cv,
+                model_type,
                 sample_weights_train=sw_tr,
                 strat_label_train=strat_tr,
             ),
@@ -568,7 +589,12 @@ def _pick_final_params(
     final_study = _make_study(random_state)
     final_study.optimize(
         lambda trial: _objective(
-            trial, X, y, preprocessor, inner_cv, model_type,
+            trial,
+            X,
+            y,
+            preprocessor,
+            inner_cv,
+            model_type,
             sample_weights_train=sample_weights,
             strat_label_train=strat_label,
         ),
@@ -656,7 +682,10 @@ def perform_nested_cv(
     final_trials = final_trials if final_trials is not None else n_trials
 
     outer_cv, inner_cv, strat_label, strat_strategy = _build_cv_splitters(
-        X, outer_folds, inner_folds, random_state,
+        X,
+        outer_folds,
+        inner_folds,
+        random_state,
     )
 
     total_trials = outer_folds * n_trials + (0 if skip_final_tuning else final_trials)
@@ -674,27 +703,35 @@ def perform_nested_cv(
         )
     else:
         logger.info(
-            "CV NO estratificado (variedad sin variabilidad util en "
-            "FUNDO/FORMATO; KFold normal)"
+            "CV NO estratificado (variedad sin variabilidad util en FUNDO/FORMATO; KFold normal)"
         )
 
     sample_weights = _maybe_sample_weights(
-        y, use_sample_weights, logger, X=X,
-        high_season_months=getattr(
-            variety_cfg, "sample_weight_high_season_months", None
-        ),
+        y,
+        use_sample_weights,
+        logger,
+        X=X,
+        high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
     )
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     t0 = time.perf_counter()
 
     fold_results = _run_outer_cv_loop(
-        X=X, y=y, preprocessor=preprocessor, model_type=model_type,
-        outer_cv=outer_cv, inner_cv=inner_cv, strat_label=strat_label,
+        X=X,
+        y=y,
+        preprocessor=preprocessor,
+        model_type=model_type,
+        outer_cv=outer_cv,
+        inner_cv=inner_cv,
+        strat_label=strat_label,
         sample_weights=sample_weights,
-        n_trials=n_trials, final_trials=final_trials,
+        n_trials=n_trials,
+        final_trials=final_trials,
         skip_final_tuning=skip_final_tuning,
-        outer_folds=outer_folds, random_state=random_state,
-        t0=t0, logger=logger,
+        outer_folds=outer_folds,
+        random_state=random_state,
+        t0=t0,
+        logger=logger,
     )
     nested_metrics = _aggregate_nested_metrics(fold_results)
     logger.info(
@@ -706,28 +743,48 @@ def perform_nested_cv(
     )
 
     best_params = _pick_final_params(
-        fold_results=fold_results, X=X, y=y, preprocessor=preprocessor,
-        inner_cv=inner_cv, model_type=model_type,
-        sample_weights=sample_weights, strat_label=strat_label,
-        final_trials=final_trials, skip_final_tuning=skip_final_tuning,
-        random_state=random_state, logger=logger,
+        fold_results=fold_results,
+        X=X,
+        y=y,
+        preprocessor=preprocessor,
+        inner_cv=inner_cv,
+        model_type=model_type,
+        sample_weights=sample_weights,
+        strat_label=strat_label,
+        final_trials=final_trials,
+        skip_final_tuning=skip_final_tuning,
+        random_state=random_state,
+        logger=logger,
     )
 
     # Reporte dual (Fase A.2): si el outer fue stratified, anadir el chequeo
     # temporal honesto con los params finales. Si el outer YA fue temporal,
     # seria redundante.
     from src.config import CV_OUTER_STRATEGY, DUAL_CV_REPORT
+
     if DUAL_CV_REPORT and CV_OUTER_STRATEGY != "temporal_year":
-        nested_metrics.update(_temporal_honesty_check(
-            X=X, y=y, preprocessor=preprocessor, model_type=model_type,
-            best_params=best_params, sample_weights=sample_weights,
-            logger=logger,
-        ))
+        nested_metrics.update(
+            _temporal_honesty_check(
+                X=X,
+                y=y,
+                preprocessor=preprocessor,
+                model_type=model_type,
+                best_params=best_params,
+                sample_weights=sample_weights,
+                logger=logger,
+            )
+        )
 
     final_pipeline = _fit_final_ensemble(
-        preprocessor=preprocessor, model_type=model_type, best_params=best_params,
-        X=X, y=y, sample_weights=sample_weights, random_state=random_state,
-        t0=t0, logger=logger,
+        preprocessor=preprocessor,
+        model_type=model_type,
+        best_params=best_params,
+        X=X,
+        y=y,
+        sample_weights=sample_weights,
+        random_state=random_state,
+        t0=t0,
+        logger=logger,
     )
     oof = {
         "y_true": np.asarray(y, dtype=float),

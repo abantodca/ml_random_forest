@@ -4,6 +4,7 @@ Centraliza el patron `cols-> fallback config -> validar` que repetian los
 tres transformers (CustomKNNImputer, OutlierCapper, MissingFlagger) con
 diferencias minimas. Privado al package (`_helpers`).
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -33,8 +34,6 @@ def resolve_cols(
     missing = [c for c in chosen if c not in X.columns]
     if missing:
         if require_all:
-            raise ValueError(
-                f"{transformer_name}: columnas inexistentes en X: {missing}"
-            )
+            raise ValueError(f"{transformer_name}: columnas inexistentes en X: {missing}")
         return [c for c in chosen if c in X.columns]
     return list(chosen)

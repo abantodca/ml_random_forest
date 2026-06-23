@@ -11,6 +11,7 @@ en `variety_runner` despues de elegir campeon (`Winner_{variedad}.html`).
 NO selecciona ni registra el campeon: eso vive en `variety_runner` para
 poder elegir entre todos los modelos al final.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,14 +84,16 @@ def _full_dataset_metrics(
         if logger is not None:
             logger.warning(
                 "full_metrics: final_pipeline.predict(X) fallo; "
-                "se omite tarjeta 'Aplicacion Total'", exc_info=True,
+                "se omite tarjeta 'Aplicacion Total'",
+                exc_info=True,
             )
         pred_h_full = None
 
     full_metrics_h: dict[str, float] = {}
     if pred_h_full is not None:
         full_metrics_h = calculate_regression_metrics(
-            np.asarray(y, dtype=float), pred_h_full,
+            np.asarray(y, dtype=float),
+            pred_h_full,
         )
 
     # KG/JR (business): reusamos las metricas in-sample que ya calcula
@@ -102,13 +105,15 @@ def _full_dataset_metrics(
 
 def _set_initial_run_tags(variety: str, model_type: str, version: int, args) -> None:
     """Tags MLflow basicos al abrir el run. Se invoca DENTRO del start_run."""
-    set_tags({
-        "variety": variety,
-        "tuning": args.tuning,
-        "model_type": model_type,
-        "version": f"v{version}",
-        "trained_at": datetime.now().isoformat(timespec="seconds"),
-    })
+    set_tags(
+        {
+            "variety": variety,
+            "tuning": args.tuning,
+            "model_type": model_type,
+            "version": f"v{version}",
+            "trained_at": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
 
 
 def _log_full_metrics(
@@ -121,10 +126,12 @@ def _log_full_metrics(
     """
     if full_metrics_business:
         log_metrics({f"full_business_{k}": v for k, v in full_metrics_business.items()})
-        set_tags({
-            "full_business_mape": f"{full_metrics_business.get('mape', float('nan')):.2f}",
-            "full_business_r2":   f"{full_metrics_business.get('r2',   float('nan')):.4f}",
-        })
+        set_tags(
+            {
+                "full_business_mape": f"{full_metrics_business.get('mape', float('nan')):.2f}",
+                "full_business_r2": f"{full_metrics_business.get('r2', float('nan')):.4f}",
+            }
+        )
     if full_metrics_h:
         log_metrics({f"full_model_{k}": v for k, v in full_metrics_h.items()})
 
@@ -150,8 +157,10 @@ def _log_pipeline_with_signature(final_pipeline, X) -> str | None:
     except Exception:
         y_sample = None
     model_info = log_pipeline(
-        final_pipeline, name="model_pipeline",
-        X_sample=X_sample, y_sample=y_sample,
+        final_pipeline,
+        name="model_pipeline",
+        X_sample=X_sample,
+        y_sample=y_sample,
     )
     return model_info.model_uri if model_info is not None else None
 
@@ -180,8 +189,7 @@ def _build_run_summary(
         "full_metrics_business": {k: float(v) for k, v in full_metrics_business.items()},
         "full_metrics_model": {k: float(v) for k, v in full_metrics_h.items()},
         "best_params": {
-            k: (float(v) if isinstance(v, (int, float)) else v)
-            for k, v in best_params.items()
+            k: (float(v) if isinstance(v, (int, float)) else v) for k, v in best_params.items()
         },
         "artifacts": {"pipeline": str(local_pipeline)},
         "elapsed_seconds": round(elapsed, 2),
@@ -216,20 +224,21 @@ def _log_run_metadata_and_params(
         # Otros errores (e.g. ImportError) deberian propagar -> NO los
         # tragamos. Trazabilidad rota es un finding de auditoria; loggear
         # con traceback para que el siguiente sysadmin sepa que arreglar.
-        log.warning("collect_run_metadata fallo (no aborta training)",
-                    exc_info=True)
-    log_params({
-        "variety": variety,
-        "tuning": args.tuning,
-        "model_type": model_type,
-        "n_trials": settings["n_trials"],
-        "final_trials": settings["final_trials"],
-        "outer_folds": settings["outer_folds"],
-        "inner_folds": settings["inner_folds"],
-        "skip_final_tuning": settings["skip_final_tuning"],
-        "n_rows": int(X.shape[0]),
-        "n_features_input": int(X.shape[1]),
-    })
+        log.warning("collect_run_metadata fallo (no aborta training)", exc_info=True)
+    log_params(
+        {
+            "variety": variety,
+            "tuning": args.tuning,
+            "model_type": model_type,
+            "n_trials": settings["n_trials"],
+            "final_trials": settings["final_trials"],
+            "outer_folds": settings["outer_folds"],
+            "inner_folds": settings["inner_folds"],
+            "skip_final_tuning": settings["skip_final_tuning"],
+            "n_rows": int(X.shape[0]),
+            "n_features_input": int(X.shape[1]),
+        }
+    )
 
 
 def _persist_pipeline_and_oof_locally(
@@ -272,12 +281,14 @@ def _persist_pipeline_and_oof_locally(
 def _log_nested_cv_summary(nested_metrics: dict[str, float]) -> None:
     """Loguea nested CV metrics + tags resumen filtrables en MLflow UI."""
     log_metrics(nested_metrics)
-    set_tags({
-        "r2_mean": f"{nested_metrics['nested_cv_r2_mean']:.4f}",
-        "mae_test_mean": f"{nested_metrics['nested_cv_mae_mean']:.4f}",
-        "mae_train_mean": f"{nested_metrics.get('nested_cv_mae_train_mean', 0):.4f}",
-        "overfit_gap": f"{nested_metrics.get('nested_cv_gap_mean', 0):+.4f}",
-    })
+    set_tags(
+        {
+            "r2_mean": f"{nested_metrics['nested_cv_r2_mean']:.4f}",
+            "mae_test_mean": f"{nested_metrics['nested_cv_mae_mean']:.4f}",
+            "mae_train_mean": f"{nested_metrics.get('nested_cv_mae_train_mean', 0):.4f}",
+            "overfit_gap": f"{nested_metrics.get('nested_cv_gap_mean', 0):+.4f}",
+        }
+    )
 
 
 def _run_business_validation(
@@ -302,15 +313,20 @@ def _run_business_validation(
     """
     log.info("Validando en unidad de negocio (KG/JR)...")
     business_validation = validate_against_business_unit(
-        oof=oof, final_pipeline=final_pipeline,
-        X_full=X, business_cols=business_cols,
+        oof=oof,
+        final_pipeline=final_pipeline,
+        X_full=X,
+        business_cols=business_cols,
     )
     log_business_metrics(business_validation)
     log_business_audit(
         logger,
-        variety=variety, model_type=model_type, tuning=args.tuning,
+        variety=variety,
+        model_type=model_type,
+        tuning=args.tuning,
         business_validation=business_validation,
-        nested_metrics=nested_metrics, best_params=best_params,
+        nested_metrics=nested_metrics,
+        best_params=best_params,
         mlflow_run_id=run_id,
     )
     return business_validation
@@ -334,8 +350,10 @@ def _write_residual_diagnostics(
     try:
         residual_html = REPORTS_DIR / f"residuals_{variety}_{run_name}.html"
         write_residual_report(
-            variety=variety, model_type=model_type,
-            y_true=oof["y_true"], y_pred=oof["y_pred"],
+            variety=variety,
+            model_type=model_type,
+            y_true=oof["y_true"],
+            y_pred=oof["y_pred"],
             out_path=residual_html,
             run_id=run_id,
         )
@@ -358,7 +376,8 @@ def _build_bv_oof_dump(business_validation: BusinessValidation) -> dict[str, flo
     """
     if business_validation and not business_validation.is_empty():
         return {
-            k: float(v) for k, v in business_validation.metrics_oof.items()
+            k: float(v)
+            for k, v in business_validation.metrics_oof.items()
             if isinstance(v, (int, float)) and math.isfinite(v)
         }
     return {}
@@ -421,13 +440,19 @@ def train_model(
         # reproducible y permite detectar drift automaticamente cuando
         # dataset_sha256 cambia.
         _log_run_metadata_and_params(
-            variety=variety, model_type=model_type, args=args,
-            settings=eff, X=X, log=log,
+            variety=variety,
+            model_type=model_type,
+            args=args,
+            settings=eff,
+            X=X,
+            log=log,
         )
 
         log.info("[3/6] Nested CV con Optuna...")
         final_pipeline, best_params, nested_metrics, oof = perform_nested_cv(
-            X=X, y=y, preprocessor=preprocessor,
+            X=X,
+            y=y,
+            preprocessor=preprocessor,
             n_trials=eff["n_trials"],
             final_trials=eff["final_trials"],
             model_type=model_type,
@@ -445,9 +470,12 @@ def train_model(
         # la heuristica ±1.96·std del ensemble (cobertura real << nominal).
         try:
             from src.step_05_evaluate.conformal_bands import build_conformal_metadata
+
             final_pipeline.conformal_ = build_conformal_metadata(
-                y_true=oof["y_true"], y_pred_oof=oof["y_pred"],
-                fundo=X["FUNDO"], formato=X["FORMATO"],
+                y_true=oof["y_true"],
+                y_pred_oof=oof["y_pred"],
+                fundo=X["FUNDO"],
+                formato=X["FORMATO"],
             )
             if final_pipeline.conformal_:
                 qbf = final_pipeline.conformal_["q_by_fundo"]
@@ -462,8 +490,11 @@ def train_model(
             final_pipeline.conformal_ = None
 
         local_pipeline, oof_arr_path = _persist_pipeline_and_oof_locally(
-            final_pipeline=final_pipeline, oof=oof,
-            variety=variety, run_name=run_name, log=log,
+            final_pipeline=final_pipeline,
+            oof=oof,
+            variety=variety,
+            run_name=run_name,
+            log=log,
         )
 
         log.info("[4/6] MLflow logging...")
@@ -472,18 +503,29 @@ def train_model(
 
         # ---- Validacion en unidad de negocio (KG/JR = KG/JR_H * H-EF) ----
         business_validation = _run_business_validation(
-            oof=oof, final_pipeline=final_pipeline,
-            X=X, business_cols=business_cols,
-            variety=variety, model_type=model_type, args=args,
-            nested_metrics=nested_metrics, best_params=best_params,
-            run_id=run.info.run_id, logger=logger, log=log,
+            oof=oof,
+            final_pipeline=final_pipeline,
+            X=X,
+            business_cols=business_cols,
+            variety=variety,
+            model_type=model_type,
+            args=args,
+            nested_metrics=nested_metrics,
+            best_params=best_params,
+            run_id=run.info.run_id,
+            logger=logger,
+            log=log,
         )
 
         # ---- Metricas en DATASET COMPLETO (refit + predict all) ----
         # "Aplicacion Total": tarjeta del dashboard ejecutivo. Es la perspectiva
         # del modelo de produccion aplicado a toda la historia disponible.
         full_metrics_business, full_metrics_h, _pred_h_full = _full_dataset_metrics(
-            final_pipeline, X, y, business_validation, logger=logger,
+            final_pipeline,
+            X,
+            y,
+            business_validation,
+            logger=logger,
         )
         _log_full_metrics(full_metrics_business, full_metrics_h)
 
@@ -514,8 +556,12 @@ def train_model(
         log_artifact(str(oof_arr_path), artifact_path="oof")
 
         _write_residual_diagnostics(
-            variety=variety, model_type=model_type, run_name=run_name,
-            run_id=run.info.run_id, oof=oof, log=log,
+            variety=variety,
+            model_type=model_type,
+            run_name=run_name,
+            run_id=run.info.run_id,
+            oof=oof,
+            log=log,
         )
 
         elapsed = time.perf_counter() - t0
@@ -523,11 +569,15 @@ def train_model(
         # Summary local versionado por run_name. Cada run histórico (xgb_v19,
         # xgb_v20, ...) conserva su propio JSON sin sobrescribirse.
         summary = _build_run_summary(
-            variety=variety, model_type=model_type, run_id=run.info.run_id,
-            nested_metrics=nested_metrics, bv_oof_dump=bv_oof_dump,
+            variety=variety,
+            model_type=model_type,
+            run_id=run.info.run_id,
+            nested_metrics=nested_metrics,
+            bv_oof_dump=bv_oof_dump,
             full_metrics_business=full_metrics_business,
             full_metrics_h=full_metrics_h,
-            best_params=best_params, local_pipeline=local_pipeline,
+            best_params=best_params,
+            local_pipeline=local_pipeline,
             elapsed=elapsed,
         )
         summary_path = dump_json_artifact(

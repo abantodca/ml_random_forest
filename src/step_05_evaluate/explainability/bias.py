@@ -9,6 +9,7 @@ dinero al negocio sin disparar el filtro de magnitud. Las predicciones
 llegan en rango aceptable pero todas hacia el mismo lado, generando
 subestimacion estructural.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,9 +24,9 @@ class GroupBias:
 
     group_value: str
     n: int
-    mean_signed_bias: float          # mean(pred - real) en KG/JR. >0 = sobreestima
-    bias_pct_of_real_mean: float     # bias / mean(real) * 100 (lectura ejecutiva)
-    direction: str                   # 'sobreestima' | 'subestima' | 'neutro'
+    mean_signed_bias: float  # mean(pred - real) en KG/JR. >0 = sobreestima
+    bias_pct_of_real_mean: float  # bias / mean(real) * 100 (lectura ejecutiva)
+    direction: str  # 'sobreestima' | 'subestima' | 'neutro'
 
 
 def residual_bias_by_group(
@@ -72,11 +73,13 @@ def residual_bias_by_group(
             direction = "subestima"
         else:
             direction = "neutro"
-        out.append(GroupBias(
-            group_value=str(cat),
-            n=int(mask.sum()),
-            mean_signed_bias=signed_bias,
-            bias_pct_of_real_mean=bias_pct,
-            direction=direction,
-        ))
+        out.append(
+            GroupBias(
+                group_value=str(cat),
+                n=int(mask.sum()),
+                mean_signed_bias=signed_bias,
+                bias_pct_of_real_mean=bias_pct,
+                direction=direction,
+            )
+        )
     return sorted(out, key=lambda g: -abs(g.bias_pct_of_real_mean))

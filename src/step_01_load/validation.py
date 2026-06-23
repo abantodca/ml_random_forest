@@ -15,6 +15,7 @@ Comportamiento: solo loguea warnings y devuelve la lista de issues. NO
 aborta el pipeline. Los sintomas reales aparecen en el modelo (training
 fallido, MAPE alto). Sin dependencias nuevas: solo pandas + numpy.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,15 +35,15 @@ logger = logging.getLogger(__name__)
 # Rangos sanos por columna. Si un valor cae fuera, lo marcamos como
 # violacion de schema. None = sin chequeo de rango.
 _NUMERIC_RANGES: dict = {
-    TARGET: (0.0, None),       # KG/JR_H > 0; sin techo (puede haber outliers altos)
-    "KG/HA": (0.0, None),      # productividad por hectarea > 0
-    "%INDUS": (0.0, 100.0),    # porcentaje
-    "DPC": (0.0, None),        # dias post cosecha; tipicamente 0-180
-    "P/BAYA": (0.0, None),     # peso por baya en gramos
-    "HA": (0.0, None),         # hectareas cosechadas
-    "DIA_COSECHA": (1, 366),   # dia desde inicio de campana (no DOY); cap >365 generoso
-    "H-EF": (0.0, 24.0),       # horas efectivas en una jornada (validacion solo)
-    "KG/JR": (0.0, None),      # kilos por jornal (validacion solo)
+    TARGET: (0.0, None),  # KG/JR_H > 0; sin techo (puede haber outliers altos)
+    "KG/HA": (0.0, None),  # productividad por hectarea > 0
+    "%INDUS": (0.0, 100.0),  # porcentaje
+    "DPC": (0.0, None),  # dias post cosecha; tipicamente 0-180
+    "P/BAYA": (0.0, None),  # peso por baya en gramos
+    "HA": (0.0, None),  # hectareas cosechadas
+    "DIA_COSECHA": (1, 366),  # dia desde inicio de campana (no DOY); cap >365 generoso
+    "H-EF": (0.0, 24.0),  # horas efectivas en una jornada (validacion solo)
+    "KG/JR": (0.0, None),  # kilos por jornal (validacion solo)
 }
 
 

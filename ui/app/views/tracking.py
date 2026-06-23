@@ -71,15 +71,21 @@ def _real_column_config() -> dict:
     cc = st.column_config
     return {
         "FUNDO": cc.SelectboxColumn("Fundo", options=list(cat.fundos), required=True),
-        "FORMATO": cc.SelectboxColumn("Formato", options=list(cat.formatos), required=True, width="medium"),
+        "FORMATO": cc.SelectboxColumn(
+            "Formato", options=list(cat.formatos), required=True, width="medium"
+        ),
         "FECHA": cc.DateColumn("Fecha", format="YYYY-MM-DD", required=True),
         "KG/HA": cc.NumberColumn("KG/HA", min_value=0.0, step=100.0, format="%.0f", required=True),
-        "KG/JR_H": cc.NumberColumn("KG/JR_H real", min_value=0.0, step=0.1, format="%.2f", required=True),
+        "KG/JR_H": cc.NumberColumn(
+            "KG/JR_H real", min_value=0.0, step=0.1, format="%.2f", required=True
+        ),
         "DPC": cc.NumberColumn("DPC", min_value=0.0, max_value=400.0),
         "%INDUS": cc.NumberColumn("%INDUS", min_value=0.0, max_value=100.0),
         "P/BAYA": cc.NumberColumn("P/BAYA", min_value=0.0),
         "HA": cc.NumberColumn("HA", min_value=0.0),
-        "DIA_COSECHA": cc.NumberColumn("Día cosecha", min_value=0, max_value=365, step=1, format="%d"),
+        "DIA_COSECHA": cc.NumberColumn(
+            "Día cosecha", min_value=0, max_value=365, step=1, format="%d"
+        ),
     }
 
 
@@ -107,15 +113,21 @@ def _render_real_upload(variety: str) -> None:
 
 def _real_subir(variety: str) -> None:
     st.download_button(
-        "⬇️ Plantilla Excel", P.build_real_template_xlsx(),
-        file_name="plantilla_datos_reales.xlsx", mime=_XLSX_MIME, key="real_tpl",
+        "⬇️ Plantilla Excel",
+        P.build_real_template_xlsx(),
+        file_name="plantilla_datos_reales.xlsx",
+        mime=_XLSX_MIME,
+        key="real_tpl",
     )
     uploaded = st.file_uploader(
         "Excel de DATOS REALES (cosecha ocurrida + KG/JR_H)",
-        type=["xlsx", "xls"], key="real_upload",
+        type=["xlsx", "xls"],
+        key="real_upload",
     )
     replace = st.checkbox(
-        "Reemplazar TODO el histórico real de la variedad", value=True, key="real_replace",
+        "Reemplazar TODO el histórico real de la variedad",
+        value=True,
+        key="real_replace",
         help="Activado: borra lo anterior y deja solo este archivo. Desactivado: agrega.",
     )
     if uploaded is None:
@@ -125,7 +137,10 @@ def _real_subir(variety: str) -> None:
     res = _api_call(
         "Subiendo...",
         lambda: get_tracking_service().upload_real_excel(
-            variety, uploaded.getvalue(), uploaded.name, replace=replace,
+            variety,
+            uploaded.getvalue(),
+            uploaded.name,
+            replace=replace,
         ),
         error_prefix="Error al subir",
     )
@@ -154,8 +169,12 @@ def _real_editar(variety: str) -> None:
         "eliminar esa observación; «🗑 Eliminar todos» borra el set completo)."
     )
     edited = st.data_editor(
-        df, column_config=_real_column_config(), num_rows="dynamic",
-        use_container_width=True, hide_index=True, key="real_editor",
+        df,
+        column_config=_real_column_config(),
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="real_editor",
     )
     b1, b2, _ = st.columns([1.6, 1.2, 3])
     if b1.button("💾 Guardar cambios (reemplaza)", type="primary", key="real_save"):
@@ -197,8 +216,12 @@ def _render_kpis(points: list[AccuracyPoint]) -> None:
     with k2:
         kpi_card("MAE real", f"{vm.mae:.2f}", icon="📏", variant="accent")
     with k3:
-        kpi_card("MAPE real", f"{vm.mape:.1f}%" if vm.has_mape else "—", icon="📐",
-                 variant=vm.mape_variant)
+        kpi_card(
+            "MAPE real",
+            f"{vm.mape:.1f}%" if vm.has_mape else "—",
+            icon="📐",
+            variant=vm.mape_variant,
+        )
     with k4:
         kpi_card("Sesgo", f"{vm.bias:+.2f}", icon="🎯", variant=vm.bias_variant)
     st.caption(
@@ -213,9 +236,9 @@ def _render_decomp_insight(points: list[AccuracyPoint]) -> None:
         empty_state(
             "Descomposición datos-vs-modelo no disponible",
             help="Subí datos reales con las features completas "
-                 "(DPC, HA, DIA_COSECHA…) para saber si el error viene "
-                 "del <strong>input proyectado</strong> o del "
-                 "<strong>modelo</strong>.",
+            "(DPC, HA, DIA_COSECHA…) para saber si el error viene "
+            "del <strong>input proyectado</strong> o del "
+            "<strong>modelo</strong>.",
             icon="🧭",
         )
         return
@@ -224,13 +247,15 @@ def _render_decomp_insight(points: list[AccuracyPoint]) -> None:
     c1, c2 = st.columns(2)
     with c1:
         insight_card(
-            "Error por datos", f"{vm.mean_data:.2f}",
+            "Error por datos",
+            f"{vm.mean_data:.2f}",
             "Promedio |error| atribuible a la <strong>proyección de KG/HA</strong>",
             vm.data_variant,
         )
     with c2:
         insight_card(
-            "Error del modelo", f"{vm.mean_model:.2f}",
+            "Error del modelo",
+            f"{vm.mean_model:.2f}",
             "Promedio |error| del modelo dado el <strong>input real</strong>",
             vm.model_variant,
         )
@@ -249,8 +274,7 @@ def _render_decomp_insight(points: list[AccuracyPoint]) -> None:
 def _render_charts(points: list[AccuracyPoint]) -> None:
     vm = P.build_charts_vm(points)
     section_title("📈 PROYECTADO VS REAL")
-    st.plotly_chart(build_pred_vs_real_line(vm.fechas, vm.pred, vm.real),
-                    use_container_width=True)
+    st.plotly_chart(build_pred_vs_real_line(vm.fechas, vm.pred, vm.real), use_container_width=True)
     st.plotly_chart(build_residual_bars(vm.fechas, vm.err), use_container_width=True)
 
     section_title("🎯 PRECISIÓN (PARIDAD)")
@@ -274,14 +298,26 @@ def _render_weekly(points: list[AccuracyPoint]) -> None:
     if vm.cumplimiento is not None:
         w1, w2, w3 = st.columns(3)
         with w1:
-            kpi_card("Cumplimiento global", f"{vm.cumplimiento:.1f}%", icon="📊",
-                     variant=vm.cumpl_variant)
+            kpi_card(
+                "Cumplimiento global",
+                f"{vm.cumplimiento:.1f}%",
+                icon="📊",
+                variant=vm.cumpl_variant,
+            )
         with w2:
-            insight_card("Mejor semana", vm.mejor_week,
-                         f"Δ {vm.mejor_pct:+.1f}% · {vm.mejor_n} punto(s)", "success")
+            insight_card(
+                "Mejor semana",
+                vm.mejor_week,
+                f"Δ {vm.mejor_pct:+.1f}% · {vm.mejor_n} punto(s)",
+                "success",
+            )
         with w3:
-            insight_card("Peor semana", vm.peor_week,
-                         f"Δ {vm.peor_pct:+.1f}% · {vm.peor_n} punto(s)", "warning")
+            insight_card(
+                "Peor semana",
+                vm.peor_week,
+                f"Δ {vm.peor_pct:+.1f}% · {vm.peor_n} punto(s)",
+                "warning",
+            )
 
     st.plotly_chart(
         build_weekly_bars(vm.weeks, vm.proj_sums, vm.real_sums),
@@ -292,8 +328,9 @@ def _render_weekly(points: list[AccuracyPoint]) -> None:
 
 def _render_table(points: list[AccuracyPoint]) -> None:
     section_title("📋 DETALLE")
-    st.dataframe(pd.DataFrame(P.build_table_rows(points)),
-                 use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame(P.build_table_rows(points)), use_container_width=True, hide_index=True
+    )
 
 
 # ── Render principal ────────────────────────────────────────────────────
@@ -344,7 +381,7 @@ else:
     empty_state(
         "Aún no hay pares proyectado ↔ real para esta variedad",
         help="Cargá datos reales (abajo) cuyo <strong>(fundo, formato, fecha)</strong> "
-             "coincida con pronósticos ya almacenados para empezar a medir la precisión.",
+        "coincida con pronósticos ya almacenados para empezar a medir la precisión.",
         icon="📭",
     )
 

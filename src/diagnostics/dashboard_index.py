@@ -34,6 +34,7 @@ Llamado automaticamente por `variety_runner.train_variety` al final del
 training (despues del register MLflow) para que el index siempre refleje
 los runs nuevos sin pasos manuales.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,10 +55,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ReportFile:
     filename: str
-    kind: str          # "winner" | "eda" | "resid" | "excel" | "json" | "other"
+    kind: str  # "winner" | "eda" | "resid" | "excel" | "json" | "other"
     variety: str | None
-    label: str         # texto principal (timestamp o nombre humano)
-    sub: str           # texto secundario (modelo, etc.)
+    label: str  # texto principal (timestamp o nombre humano)
+    sub: str  # texto secundario (modelo, etc.)
     ext: str
     mtime: datetime
 
@@ -65,9 +66,7 @@ class ReportFile:
 # Regex compartidos. `.+?` non-greedy para tolerar variedades con `_`
 # (ej. POP_HASS); el ancla del timestamp `\d{4}-\d{2}-\d{2}` desambigua.
 _RE_EDA = re.compile(r"^EDA_(.+?)_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})$")
-_RE_WINNER_TS = re.compile(
-    r"^Winner_(.+?)_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})(?:-(\d{2}))?$"
-)
+_RE_WINNER_TS = re.compile(r"^Winner_(.+?)_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})(?:-(\d{2}))?$")
 _RE_WINNER_LEGACY = re.compile(r"^Winner_(.+?)$")
 _RE_RESID = re.compile(r"^residuals_(.+?)_(.+)$")
 
@@ -104,10 +103,13 @@ def _classify(path: Path) -> ReportFile | None:
         m = _RE_WINNER_LEGACY.match(base)
         if m:
             return ReportFile(
-                name, "winner", m.group(1),
+                name,
+                "winner",
+                m.group(1),
                 mtime.strftime("%Y-%m-%d %H:%M") + " (legacy)",
                 "Winner sin run-id",
-                ext, mtime,
+                ext,
+                mtime,
             )
 
     # Winner Excel
@@ -117,22 +119,26 @@ def _classify(path: Path) -> ReportFile | None:
         if m:
             secs = m.group(5) or "00"
             label = f"{m.group(2)} {m.group(3)}:{m.group(4)}:{secs}"
-            return ReportFile(name, "excel", m.group(1), label,
-                              "Excel ejecutivo", ext, mtime)
+            return ReportFile(name, "excel", m.group(1), label, "Excel ejecutivo", ext, mtime)
         m = _RE_WINNER_LEGACY.match(base)
         if m:
             return ReportFile(
-                name, "excel", m.group(1),
+                name,
+                "excel",
+                m.group(1),
                 mtime.strftime("%Y-%m-%d %H:%M") + " (legacy)",
-                "Excel ejecutivo", ext, mtime,
+                "Excel ejecutivo",
+                ext,
+                mtime,
             )
 
     # Residuals
     if name.startswith("residuals_") and ext == "html":
         m = _RE_RESID.match(base)
         if m:
-            return ReportFile(name, "resid", m.group(1), m.group(2),
-                              "Diagnostico residuales", ext, mtime)
+            return ReportFile(
+                name, "resid", m.group(1), m.group(2), "Diagnostico residuales", ext, mtime
+            )
 
     # Sin variedad reconocible -> descartar del indice. El dashboard solo
     # lista archivos cuya variedad sale del filename; los huerfanos
@@ -397,12 +403,13 @@ def _render_item(rf: ReportFile, *, hidden: bool = False) -> str:
         f'<span class="ext {ext_class}">{escape(rf.ext.upper())}</span>'
         f'<div class="item-body">'
         f'<div class="item-name">{escape(rf.label)}</div>'
-        f'{sub_html}</div></div>'
+        f"{sub_html}</div></div>"
     )
 
 
-def _render_kind_block(label: str, icon: str, items: list[ReportFile],
-                       *, collapse_after: int = 3) -> str:
+def _render_kind_block(
+    label: str, icon: str, items: list[ReportFile], *, collapse_after: int = 3
+) -> str:
     if not items:
         return ""
     visible = items[:collapse_after]
@@ -413,19 +420,19 @@ def _render_kind_block(label: str, icon: str, items: list[ReportFile],
     if extra:
         show_more = (
             f'<div class="show-more expand" onclick="toggleExtra(this)">'
-            f'+ Ver {len(extra)} mas &#x25BC;</div>'
+            f"+ Ver {len(extra)} mas &#x25BC;</div>"
             f'<div class="show-more collapse" onclick="toggleExtra(this)">'
-            f'- Colapsar &#x25B2;</div>'
+            f"- Colapsar &#x25B2;</div>"
         )
     return (
         f'<div class="kind-block">'
         f'<div class="kind-header">'
-        f'<span>{icon} {escape(label)}</span>'
+        f"<span>{icon} {escape(label)}</span>"
         f'<span class="kbadge">{len(items)}</span>'
-        f'</div>'
-        f'{items_html}'
-        f'{show_more}'
-        f'</div>'
+        f"</div>"
+        f"{items_html}"
+        f"{show_more}"
+        f"</div>"
     )
 
 
@@ -439,12 +446,12 @@ def _render_variety_block(b: VarietyBucket) -> str:
         f'<div class="variety-block" data-variety="{escape(b.variety)}">'
         f'<div class="variety-header" onclick="toggleVariety(this.parentElement)">'
         f'<span class="name"><span class="icon-folder">&#x1F4C2;</span>'
-        f'{escape(b.variety)}</span>'
+        f"{escape(b.variety)}</span>"
         f'<span><span class="badge">{b.total}</span> '
         f'<span class="arrow">&#x25BC;</span></span>'
-        f'</div>'
+        f"</div>"
         f'<div class="variety-body">{body}</div>'
-        f'</div>'
+        f"</div>"
     )
 
 
@@ -460,8 +467,8 @@ def _latest_pill(scan: ScanResult) -> str:
         f'<a class="latest-pill" href="#" data-href="{escape(latest.filename)}" '
         f'onclick="loadFromTopbar(event, this)">'
         f'<span class="dot"></span>'
-        f'<span>Latest: <b>{escape(latest.variety or "?")}</b> &middot; '
-        f'{escape(latest.label)}</span></a>'
+        f"<span>Latest: <b>{escape(latest.variety or '?')}</b> &middot; "
+        f"{escape(latest.label)}</span></a>"
     )
 
 
@@ -469,8 +476,7 @@ def _initial_href(scan: ScanResult) -> str:
     """Pre-selecciona el Winner mas reciente. Si no hay, primer EDA."""
     latest_winner: ReportFile | None = None
     for b in scan.by_variety.values():
-        if b.winners and (latest_winner is None
-                          or b.winners[0].mtime > latest_winner.mtime):
+        if b.winners and (latest_winner is None or b.winners[0].mtime > latest_winner.mtime):
             latest_winner = b.winners[0]
     if latest_winner:
         return latest_winner.filename
@@ -569,8 +575,8 @@ def render_dashboard(scan: ScanResult) -> str:
     if scan.total == 0:
         sidebar_body = (
             '<div class="empty-sidebar">No hay reportes aun.<br><br>'
-            'Corre <code>task train VARIETIES=POP TUNING=smoke</code> '
-            'para generar.</div>'
+            "Corre <code>task train VARIETIES=POP TUNING=smoke</code> "
+            "para generar.</div>"
         )
     else:
         # Variedades ordenadas por mas reciente Winner (o EDA si no hay)
@@ -579,6 +585,7 @@ def render_dashboard(scan: ScanResult) -> str:
                 if items:
                     return items[0].mtime
             return datetime.min
+
         ordered = sorted(scan.by_variety.values(), key=_sort_key, reverse=True)
         sidebar_body = "".join(_render_variety_block(b) for b in ordered)
 
@@ -598,7 +605,7 @@ def render_dashboard(scan: ScanResult) -> str:
   <div class="brand">ml_training <small>- Reports Dashboard</small></div>
   <div class="topbar-actions">
     {_latest_pill(scan)}
-    <span class="count">{scan.total} reporte{'' if scan.total == 1 else 's'}
+    <span class="count">{scan.total} reporte{"" if scan.total == 1 else "s"}
       &middot; {escape(ts_now)}</span>
     <button class="refresh-btn" onclick="refreshDashboard()">&#x21BB; Refresh</button>
   </div>
@@ -625,8 +632,7 @@ def render_dashboard(scan: ScanResult) -> str:
 </html>"""
 
 
-def write_dashboard(reports_dir: Path,
-                    *, filename: str = "index.html") -> Path:
+def write_dashboard(reports_dir: Path, *, filename: str = "index.html") -> Path:
     """Escanea reports_dir y escribe reports_dir/<filename>. Devuelve el path.
 
     Default `filename='index.html'`: reemplaza al index.html JS-dinamico
@@ -654,11 +660,13 @@ def write_dashboard(reports_dir: Path,
 def _main() -> int:
     parser = argparse.ArgumentParser(description="Genera reports/index.html")
     parser.add_argument(
-        "--reports-dir", default=None,
+        "--reports-dir",
+        default=None,
         help="Override del directorio reports/ (default: config.REPORTS_DIR)",
     )
     parser.add_argument(
-        "--filename", default="index.html",
+        "--filename",
+        default="index.html",
         help="Nombre del archivo de salida (default: index.html)",
     )
     args = parser.parse_args()
@@ -667,6 +675,7 @@ def _main() -> int:
         reports_dir = Path(args.reports_dir)
     else:
         from src.config import REPORTS_DIR  # lazy import
+
         reports_dir = REPORTS_DIR
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")

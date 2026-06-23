@@ -97,21 +97,19 @@ def _render_feature_table(drift: DriftReport) -> None:
     rows = []
     for f in drift.per_feature:
         is_missing = f.value_str == "no enviado"
-        estado = (
-            "⚪ No enviado" if is_missing else _STATUS_LABEL.get(f.status, f.status)
+        estado = "⚪ No enviado" if is_missing else _STATUS_LABEL.get(f.status, f.status)
+        rows.append(
+            {
+                "Variable": f.feature,
+                "Valor enviado": f.display_value,
+                "Rango usual": _format_baseline_range(f),
+                "z-score": f"{f.z_score:+.2f}σ" if f.z_score is not None else "—",
+                "Frec. histórica": (
+                    f"{f.baseline_freq * 100:.1f}%" if f.baseline_freq is not None else "—"
+                ),
+                "Estado": estado,
+            }
         )
-        rows.append({
-            "Variable": f.feature,
-            "Valor enviado": f.display_value,
-            "Rango usual": _format_baseline_range(f),
-            "z-score": f"{f.z_score:+.2f}σ" if f.z_score is not None else "—",
-            "Frec. histórica": (
-                f"{f.baseline_freq * 100:.1f}%"
-                if f.baseline_freq is not None
-                else "—"
-            ),
-            "Estado": estado,
-        })
     df = pd.DataFrame(rows)
     st.dataframe(
         df,
@@ -130,8 +128,7 @@ def _render_feature_table(drift: DriftReport) -> None:
     alerts = [f for f in drift.per_feature if f.status == "alert"]
     if alerts:
         bullets = "\n".join(
-            f"- **{a.feature}** = {a.value_str or a.value}: {_alert_reason(a)}"
-            for a in alerts
+            f"- **{a.feature}** = {a.value_str or a.value}: {_alert_reason(a)}" for a in alerts
         )
         st.warning("Variables fuera de rango:\n\n" + bullets)
 
@@ -178,9 +175,7 @@ def render_batch_drift_panel(
         return
 
     badge = _STATUS_LABEL.get(batch_drift.status, batch_drift.status)
-    header = (
-        f"{title}  ·  PSI prom.={batch_drift.score:.3f}  ·  {badge}"
-    )
+    header = f"{title}  ·  PSI prom.={batch_drift.score:.3f}  ·  {badge}"
     with st.expander(header, expanded=expanded):
         _render_batch_summary(batch_drift)
         _render_batch_feature_table(batch_drift)
@@ -199,9 +194,7 @@ def _render_batch_summary(batch: BatchDriftReport) -> None:
         meta_parts = [f"Lote: {batch.n_rows:,} filas"]
         tw = batch.training_window
         if tw.n_samples and tw.start and tw.end:
-            meta_parts.append(
-                f"Baseline: {tw.n_samples:,} cosechas · {tw.start} a {tw.end}"
-            )
+            meta_parts.append(f"Baseline: {tw.n_samples:,} cosechas · {tw.start} a {tw.end}")
         insight_card(
             label=_STATUS_HEADER.get(batch.status, "Drift del lote"),
             value=batch.verdict or "—",
@@ -217,19 +210,17 @@ def _render_batch_feature_table(batch: BatchDriftReport) -> None:
 
     rows = []
     for f in batch.per_feature:
-        rows.append({
-            "Variable": f.feature,
-            "Tipo": "Numérica" if f.kind == "numeric" else "Categórica",
-            "PSI": f"{f.psi:.3f}",
-            "K-S p-value": (
-                f"{f.ks_pvalue:.4f}" if f.ks_pvalue is not None else "—"
-            ),
-            "Chi² p-value": (
-                f"{f.chi2_pvalue:.4f}" if f.chi2_pvalue is not None else "—"
-            ),
-            "Tests": f.method.upper(),
-            "Estado": _STATUS_LABEL.get(f.status, f.status),
-        })
+        rows.append(
+            {
+                "Variable": f.feature,
+                "Tipo": "Numérica" if f.kind == "numeric" else "Categórica",
+                "PSI": f"{f.psi:.3f}",
+                "K-S p-value": (f"{f.ks_pvalue:.4f}" if f.ks_pvalue is not None else "—"),
+                "Chi² p-value": (f"{f.chi2_pvalue:.4f}" if f.chi2_pvalue is not None else "—"),
+                "Tests": f.method.upper(),
+                "Estado": _STATUS_LABEL.get(f.status, f.status),
+            }
+        )
     df = pd.DataFrame(rows)
     st.dataframe(
         df,
@@ -267,13 +258,9 @@ def _render_batch_feature_table(batch: BatchDriftReport) -> None:
             if a.chi2_pvalue is not None and a.chi2_pvalue < 0.05:
                 reasons.append(f"Chi² p={a.chi2_pvalue:.4f}")
             if a.unseen_categories > 0:
-                reasons.append(
-                    f"{a.unseen_categories} categoría(s) no vista(s)"
-                )
+                reasons.append(f"{a.unseen_categories} categoría(s) no vista(s)")
             bullets.append(f"- **{a.feature}**: {', '.join(reasons)}")
-        st.warning(
-            "Variables con drift severo:\n\n" + "\n".join(bullets)
-        )
+        st.warning("Variables con drift severo:\n\n" + "\n".join(bullets))
 
 
 def _render_batch_row_breakdown(batch: BatchDriftReport) -> None:
@@ -281,9 +268,7 @@ def _render_batch_row_breakdown(batch: BatchDriftReport) -> None:
     total = counts.ok + counts.warning + counts.alert
     if total == 0:
         return
-    st.caption(
-        "**Distribución de filas por estado de drift individual:**"
-    )
+    st.caption("**Distribución de filas por estado de drift individual:**")
     c1, c2, c3 = st.columns(3)
     c1.metric(
         "🟢 Confiables",

@@ -8,9 +8,7 @@ import pandas as pd
 from app.core.config import settings
 
 
-def read_excel_dataframe(
-    contents: bytes, required_columns: frozenset[str]
-) -> pd.DataFrame:
+def read_excel_dataframe(contents: bytes, required_columns: frozenset[str]) -> pd.DataFrame:
     """Lee el Excel a DataFrame, normaliza nombres de columna y valida
     que estén las columnas requeridas.
 
@@ -26,9 +24,7 @@ def read_excel_dataframe(
     df.columns = [str(c).strip() for c in df.columns]
     missing = required_columns - set(df.columns)
     if missing:
-        raise ValueError(
-            f"Faltan columnas requeridas: {', '.join(sorted(missing))}"
-        )
+        raise ValueError(f"Faltan columnas requeridas: {', '.join(sorted(missing))}")
     return df
 
 
@@ -38,9 +34,7 @@ def validate_excel_file(contents: bytes, filename: str | None) -> None:
         raise ValueError("El archivo debe ser Excel (.xlsx o .xls)")
     max_bytes = settings.max_excel_file_size_mb * 1024 * 1024
     if len(contents) > max_bytes:
-        raise ValueError(
-            f"El archivo excede el limite de {settings.max_excel_file_size_mb} MB"
-        )
+        raise ValueError(f"El archivo excede el limite de {settings.max_excel_file_size_mb} MB")
 
 
 def validate_upload_size(size: int | None, filename: str | None) -> None:
@@ -60,9 +54,7 @@ def validate_upload_size(size: int | None, filename: str | None) -> None:
         return
     max_bytes = settings.max_excel_file_size_mb * 1024 * 1024
     if size > max_bytes:
-        raise ValueError(
-            f"El archivo excede el limite de {settings.max_excel_file_size_mb} MB"
-        )
+        raise ValueError(f"El archivo excede el limite de {settings.max_excel_file_size_mb} MB")
 
 
 def parse_date_value(value) -> date:

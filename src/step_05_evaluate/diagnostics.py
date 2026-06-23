@@ -17,6 +17,7 @@ El script plotly.js se carga UNA sola vez desde el <head> del HTML (ver
 `html.styles._PLOTLY_JS_TAG`); por eso `plotly_div` (importado de
 `html.helpers`) siempre pasa `include_plotlyjs=False`.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -39,6 +40,7 @@ def _sample_step(n: int, cap: int = _SCATTER_MAX_POINTS) -> np.ndarray:
     if n <= cap:
         return np.arange(n)
     return np.linspace(0, n - 1, cap).astype(int)
+
 
 _PLOTLY_LAYOUT_DEFAULTS = dict(
     plot_bgcolor="white",
@@ -79,22 +81,32 @@ def plot_pred_vs_actual_plotly(
 
     Trace = go.Scattergl if y_true.size > 5000 else go.Scatter
     fig = go.Figure()
-    fig.add_trace(Trace(
-        x=y_true, y=y_pred, mode="markers", name="observaciones",
-        marker=dict(color=color, size=5, opacity=0.45,
-                    line=dict(width=0)),
-        hovertemplate=f"{x_label}: %{{x:.3f}}<br>{y_label}: %{{y:.3f}}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], y=[lo, hi], mode="lines",
-        name="y = x (ideal)",
-        line=dict(color=_DANGER, dash="dash", width=1.5),
-        hoverinfo="skip",
-    ))
+    fig.add_trace(
+        Trace(
+            x=y_true,
+            y=y_pred,
+            mode="markers",
+            name="observaciones",
+            marker=dict(color=color, size=5, opacity=0.45, line=dict(width=0)),
+            hovertemplate=f"{x_label}: %{{x:.3f}}<br>{y_label}: %{{y:.3f}}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[lo, hi],
+            y=[lo, hi],
+            mode="lines",
+            name="y = x (ideal)",
+            line=dict(color=_DANGER, dash="dash", width=1.5),
+            hoverinfo="skip",
+        )
+    )
     fig.update_layout(
         title=dict(text=title, font=dict(size=14, color=_PRIMARY)),
-        xaxis_title=x_label, yaxis_title=y_label,
-        height=380, showlegend=True,
+        xaxis_title=x_label,
+        yaxis_title=y_label,
+        height=380,
+        showlegend=True,
         legend=dict(font=dict(size=10), x=0.02, y=0.98, bgcolor="rgba(255,255,255,.7)"),
         **_PLOTLY_LAYOUT_DEFAULTS,
     )
@@ -126,34 +138,45 @@ def plot_calibration_plotly(calibration_df) -> str:
 
     fig = go.Figure()
     # Diagonal ideal
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], y=[lo, hi], mode="lines",
-        name="Calibrado perfecto (y=x)",
-        line=dict(color=_DANGER, dash="dash", width=1.5),
-        hoverinfo="skip",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[lo, hi],
+            y=[lo, hi],
+            mode="lines",
+            name="Calibrado perfecto (y=x)",
+            line=dict(color=_DANGER, dash="dash", width=1.5),
+            hoverinfo="skip",
+        )
+    )
     # Puntos por bin (size proporcional a count)
-    fig.add_trace(go.Scatter(
-        x=bin_pred, y=bin_real, mode="markers+lines",
-        name="Bins de prediccion (10)",
-        marker=dict(color=_PRIMARY, size=8 + counts / counts.max() * 14,
-                    opacity=0.75, line=dict(color="white", width=1)),
-        line=dict(color=_PRIMARY, width=1, dash="dot"),
-        hovertemplate=(
-            "Predicho promedio: %{x:.2f}<br>"
-            "Real promedio: %{y:.2f}<br>"
-            "n filas: %{text}<extra></extra>"
-        ),
-        text=counts,
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=bin_pred,
+            y=bin_real,
+            mode="markers+lines",
+            name="Bins de prediccion (10)",
+            marker=dict(
+                color=_PRIMARY,
+                size=8 + counts / counts.max() * 14,
+                opacity=0.75,
+                line=dict(color="white", width=1),
+            ),
+            line=dict(color=_PRIMARY, width=1, dash="dot"),
+            hovertemplate=(
+                "Predicho promedio: %{x:.2f}<br>"
+                "Real promedio: %{y:.2f}<br>"
+                "n filas: %{text}<extra></extra>"
+            ),
+            text=counts,
+        )
+    )
     fig.update_layout(
-        title=dict(text="Calibracion: predicho vs real (bins)",
-                   font=dict(size=14, color=_PRIMARY)),
+        title=dict(text="Calibracion: predicho vs real (bins)", font=dict(size=14, color=_PRIMARY)),
         xaxis_title="Prediccion media (bin)",
         yaxis_title="Real media (bin)",
-        height=350, showlegend=True,
-        legend=dict(font=dict(size=10), x=0.02, y=0.98,
-                    bgcolor="rgba(255,255,255,.7)"),
+        height=350,
+        showlegend=True,
+        legend=dict(font=dict(size=10), x=0.02, y=0.98, bgcolor="rgba(255,255,255,.7)"),
         **_PLOTLY_LAYOUT_DEFAULTS,
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
@@ -186,12 +209,16 @@ def plot_error_histogram_plotly(
     centers = np.round((edges[:-1] + edges[1:]) / 2, 3)
     width = float(edges[1] - edges[0])
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=centers, y=counts, width=width,
-        marker=dict(color=_PRIMARY, opacity=0.78),
-        hovertemplate="Error ~%{x:.2f}<br>n: %{y}<extra></extra>",
-        name="Distribución",
-    ))
+    fig.add_trace(
+        go.Bar(
+            x=centers,
+            y=counts,
+            width=width,
+            marker=dict(color=_PRIMARY, opacity=0.78),
+            hovertemplate="Error ~%{x:.2f}<br>n: %{y}<extra></extra>",
+            name="Distribución",
+        )
+    )
     # Lineas verticales para percentiles clave
     for _pct, val, color, label in [
         (50, p50, "#2ca02c", f"p50: {p50:.2f}"),
@@ -199,17 +226,22 @@ def plot_error_histogram_plotly(
         (99, p99, _DANGER, f"p99: {p99:.2f}"),
     ]:
         fig.add_vline(
-            x=val, line_dash="dash", line_color=color, line_width=2,
+            x=val,
+            line_dash="dash",
+            line_color=color,
+            line_width=2,
             annotation_text=label,
             annotation_position="top",
             annotation_font=dict(size=10, color=color),
         )
     fig.update_layout(
-        title=dict(text="Distribución del error absoluto (OOF · KG/JR)",
-                   font=dict(size=14, color=_PRIMARY)),
+        title=dict(
+            text="Distribución del error absoluto (OOF · KG/JR)", font=dict(size=14, color=_PRIMARY)
+        ),
         xaxis_title="Error absoluto (kg/jornal)",
         yaxis_title="Cantidad de cosechas",
-        height=320, showlegend=False,
+        height=320,
+        showlegend=False,
         bargap=0.04,
         **_PLOTLY_LAYOUT_DEFAULTS,
     )
@@ -244,26 +276,31 @@ def plot_residuals_vs_predicted_plotly(
     Trace = go.Scattergl if y_pred.size > 5000 else go.Scatter
 
     fig = go.Figure()
-    fig.add_trace(Trace(
-        x=y_pred, y=residuals, mode="markers",
-        marker=dict(color=_PRIMARY, size=4, opacity=0.4),
-        name="residuos",
-        hovertemplate=(
-            "Predicción: %{x:.2f}<br>Residuo: %{y:+.2f}<extra></extra>"
-        ),
-    ))
+    fig.add_trace(
+        Trace(
+            x=y_pred,
+            y=residuals,
+            mode="markers",
+            marker=dict(color=_PRIMARY, size=4, opacity=0.4),
+            name="residuos",
+            hovertemplate=("Predicción: %{x:.2f}<br>Residuo: %{y:+.2f}<extra></extra>"),
+        )
+    )
     fig.add_hline(
-        y=0, line_dash="dash", line_color=_DANGER, line_width=1.5,
+        y=0,
+        line_dash="dash",
+        line_color=_DANGER,
+        line_width=1.5,
         annotation_text="ideal (residuo = 0)",
         annotation_position="top right",
         annotation_font=dict(size=10, color=_DANGER),
     )
     fig.update_layout(
-        title=dict(text="Residuos vs predicción (KG/JR)",
-                   font=dict(size=14, color=_PRIMARY)),
+        title=dict(text="Residuos vs predicción (KG/JR)", font=dict(size=14, color=_PRIMARY)),
         xaxis_title="Predicción del modelo (kg/jornal)",
         yaxis_title="Residuo = real - predicho (kg/jornal)",
-        height=340, showlegend=False,
+        height=340,
+        showlegend=False,
         **_PLOTLY_LAYOUT_DEFAULTS,
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
@@ -305,26 +342,37 @@ def plot_error_over_time_plotly(
 
     fig = go.Figure()
     Trace = go.Scattergl if s_pts.size > 5000 else go.Scatter
-    fig.add_trace(Trace(
-        x=s_pts.index.strftime("%Y-%m-%d"), y=s_pts.values, mode="markers",
-        marker=dict(color=_PRIMARY, size=3, opacity=0.35),
-        name="Error por cosecha",
-        hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Error: %{y:.2f} kg/jornal<extra></extra>",
-    ))
+    fig.add_trace(
+        Trace(
+            x=s_pts.index.strftime("%Y-%m-%d"),
+            y=s_pts.values,
+            mode="markers",
+            marker=dict(color=_PRIMARY, size=3, opacity=0.35),
+            name="Error por cosecha",
+            hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Error: %{y:.2f} kg/jornal<extra></extra>",
+        )
+    )
     rolling = rolling.iloc[_sample_step(rolling.size)].round(3)
-    fig.add_trace(go.Scatter(
-        x=rolling.index.strftime("%Y-%m-%d"), y=rolling.values, mode="lines",
-        line=dict(color=_DANGER, width=2.2),
-        name=f"Media móvil {rolling_window}d",
-        hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Media móvil: %{y:.2f}<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=rolling.index.strftime("%Y-%m-%d"),
+            y=rolling.values,
+            mode="lines",
+            line=dict(color=_DANGER, width=2.2),
+            name=f"Media móvil {rolling_window}d",
+            hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Media móvil: %{y:.2f}<extra></extra>",
+        )
+    )
     fig.update_layout(
-        title=dict(text=f"Error absoluto en el tiempo (KG/JR · ventana {rolling_window}d)",
-                   font=dict(size=14, color=_PRIMARY)),
-        xaxis_title="Fecha de cosecha", yaxis_title="Error absoluto (kg/jornal)",
-        height=320, showlegend=True,
-        legend=dict(font=dict(size=10), x=0.02, y=0.98,
-                    bgcolor="rgba(255,255,255,.7)"),
+        title=dict(
+            text=f"Error absoluto en el tiempo (KG/JR · ventana {rolling_window}d)",
+            font=dict(size=14, color=_PRIMARY),
+        ),
+        xaxis_title="Fecha de cosecha",
+        yaxis_title="Error absoluto (kg/jornal)",
+        height=320,
+        showlegend=True,
+        legend=dict(font=dict(size=10), x=0.02, y=0.98, bgcolor="rgba(255,255,255,.7)"),
         **_PLOTLY_LAYOUT_DEFAULTS,
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
@@ -386,8 +434,11 @@ def plot_partial_dependence_plotly(
     for plot_idx, feat_idx in enumerate(top_idx):
         try:
             pdp = partial_dependence(
-                actual, X_sample, features=[feat_idx],
-                kind="average", grid_resolution=30,
+                actual,
+                X_sample,
+                features=[feat_idx],
+                kind="average",
+                grid_resolution=30,
             )
             grid_x = pdp["grid_values"][0]
             avg_y = pdp["average"][0]
@@ -395,28 +446,34 @@ def plot_partial_dependence_plotly(
             continue
 
         feat_label = (
-            feature_names[feat_idx]
-            if feat_idx < len(feature_names)
-            else f"feature_{feat_idx}"
+            feature_names[feat_idx] if feat_idx < len(feature_names) else f"feature_{feat_idx}"
         )
-        fig.add_trace(go.Scatter(
-            x=grid_x, y=avg_y, mode="lines",
-            name=feat_label,
-            line=dict(color=palette[plot_idx % len(palette)], width=2),
-            hovertemplate=f"{feat_label}: %{{x:.2f}}<br>Predicción: %{{y:.3f}}<extra></extra>",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=grid_x,
+                y=avg_y,
+                mode="lines",
+                name=feat_label,
+                line=dict(color=palette[plot_idx % len(palette)], width=2),
+                hovertemplate=f"{feat_label}: %{{x:.2f}}<br>Predicción: %{{y:.3f}}<extra></extra>",
+            )
+        )
 
     if len(fig.data) == 0:
         return ""
 
     fig.update_layout(
-        title=dict(text=f"Top-{top_k} features: efecto marginal sobre la predicción (KG/JR_H)",
-                   font=dict(size=14, color=_PRIMARY)),
+        title=dict(
+            text=f"Top-{top_k} features: efecto marginal sobre la predicción (KG/JR_H)",
+            font=dict(size=14, color=_PRIMARY),
+        ),
         xaxis_title="Valor de la feature (rango observado)",
         yaxis_title="Predicción promedio",
-        height=380, showlegend=True,
-        legend=dict(font=dict(size=10), orientation="h",
-                    yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=380,
+        showlegend=True,
+        legend=dict(
+            font=dict(size=10), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+        ),
         **_PLOTLY_LAYOUT_DEFAULTS,
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")

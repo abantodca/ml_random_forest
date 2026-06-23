@@ -79,7 +79,9 @@ def _hydrate_data_from_s3(logger) -> bool:
 
         ACCUMULATED_FILE.parent.mkdir(parents=True, exist_ok=True)
         boto3.client("s3").download_file(bucket, key, str(ACCUMULATED_FILE))
-        logger.info(f"Acumulado descargado: {ACCUMULATED_FILE} ({ACCUMULATED_FILE.stat().st_size} bytes)")
+        logger.info(
+            f"Acumulado descargado: {ACCUMULATED_FILE} ({ACCUMULATED_FILE.stat().st_size} bytes)"
+        )
 
         summary = split_workbook(
             input_path=ACCUMULATED_FILE,
@@ -218,9 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     parallel = _resolve_parallelism(args, settings)
 
     logger.info("=" * 78)
-    logger.info(
-        f"Inicio | tuning={args.tuning} | models={models} | varieties={varieties}"
-    )
+    logger.info(f"Inicio | tuning={args.tuning} | models={models} | varieties={varieties}")
     logger.info(
         f"Paralelismo: variedades={parallel} | "
         f"inner_cv_n_jobs={settings['inner_cv_n_jobs']} | cores={os.cpu_count()}"

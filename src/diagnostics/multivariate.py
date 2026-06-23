@@ -13,6 +13,7 @@ Correlation matrix:
     Spearman (rangos) por defecto: robusto a outliers y captura monotonias
     no lineales. Pearson como complemento.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,11 +43,12 @@ class CorrelationMatrix:
     method: str  # "pearson" o "spearman"
     columns: list[str]
     matrix: list[list[float]]  # row-major
-    high_pairs: list[tuple]    # (col_a, col_b, corr) con |corr| > CORRELATION_HIGH_THRESHOLD
+    high_pairs: list[tuple]  # (col_a, col_b, corr) con |corr| > CORRELATION_HIGH_THRESHOLD
 
 
-def compute_vif(X: pd.DataFrame, threshold_high: float = 10.0,
-                threshold_watch: float = 5.0) -> list[VIFResult]:
+def compute_vif(
+    X: pd.DataFrame, threshold_high: float = 10.0, threshold_watch: float = 5.0
+) -> list[VIFResult]:
     """Calcula VIF para cada columna numerica de X.
 
     Excluye columnas constantes / con NaN. Usa pinv para estabilidad
@@ -79,9 +81,7 @@ def compute_vif(X: pd.DataFrame, threshold_high: float = 10.0,
             if not np.isfinite(vif) or vif < 1.0:
                 vif = float("inf")
             severity = (
-                "high" if vif >= threshold_high
-                else "watch" if vif >= threshold_watch
-                else "ok"
+                "high" if vif >= threshold_high else "watch" if vif >= threshold_watch else "ok"
             )
             results.append(VIFResult(feature=c, vif=vif, severity=severity))
     except Exception:
@@ -110,12 +110,11 @@ def compute_mutual_information(
     if numeric.empty:
         return []
 
-    discrete_mask = [
-        numeric[c].nunique() <= discrete_threshold for c in numeric.columns
-    ]
+    discrete_mask = [numeric[c].nunique() <= discrete_threshold for c in numeric.columns]
     try:
         mi = mutual_info_regression(
-            numeric.values, df["__target__"].values,
+            numeric.values,
+            df["__target__"].values,
             discrete_features=np.array(discrete_mask),
             random_state=42,
         )
@@ -123,10 +122,7 @@ def compute_mutual_information(
         return []
 
     pairs = sorted(zip(numeric.columns, mi, strict=True), key=lambda t: t[1], reverse=True)
-    return [
-        MutualInfoResult(feature=c, mi=float(v), rank=i + 1)
-        for i, (c, v) in enumerate(pairs)
-    ]
+    return [MutualInfoResult(feature=c, mi=float(v), rank=i + 1) for i, (c, v) in enumerate(pairs)]
 
 
 def correlation_matrix(

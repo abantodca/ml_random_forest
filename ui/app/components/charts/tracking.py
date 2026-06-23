@@ -24,18 +24,30 @@ def _axes(fig: go.Figure, *, ytitle: str = "", xtitle: str = "") -> None:
     igual que antes). Los builders que necesitan etiqueta de eje lo pasan
     aquí en lugar de vía `update_layout` para garantizar que _axes no lo borre.
     """
-    fig.update_yaxes(gridcolor=GRID_COLOR, zeroline=False,
-                     tickfont=dict(size=10, color=AXIS_TEXT), title_text=ytitle,
-                     title_font=dict(size=11, color=AXIS_TEXT))
-    fig.update_xaxes(gridcolor=GRID_COLOR,
-                     tickfont=dict(size=10, color=AXIS_TEXT), title_text=xtitle,
-                     title_font=dict(size=11, color=AXIS_TEXT))
+    fig.update_yaxes(
+        gridcolor=GRID_COLOR,
+        zeroline=False,
+        tickfont=dict(size=10, color=AXIS_TEXT),
+        title_text=ytitle,
+        title_font=dict(size=11, color=AXIS_TEXT),
+    )
+    fig.update_xaxes(
+        gridcolor=GRID_COLOR,
+        tickfont=dict(size=10, color=AXIS_TEXT),
+        title_text=xtitle,
+        title_font=dict(size=11, color=AXIS_TEXT),
+    )
 
 
 def _legend() -> dict:
-    return dict(orientation="h", y=-0.18, x=0.5, xanchor="center",
-                font=dict(size=11, color=TEMA["text_secondary"]),
-                bgcolor="rgba(0,0,0,0)")
+    return dict(
+        orientation="h",
+        y=-0.18,
+        x=0.5,
+        xanchor="center",
+        font=dict(size=11, color=TEMA["text_secondary"]),
+        bgcolor="rgba(0,0,0,0)",
+    )
 
 
 def _moving_average(values: list[float], window: int) -> list[float | None]:
@@ -66,27 +78,39 @@ def build_pred_vs_real_line(
     # Calcular error para enriquecer el hover (customdata[0])
     errors = (
         [p - r for p, r in zip(proyectado, real, strict=True)]
-        if len(proyectado) == len(real) else []
+        if len(proyectado) == len(real)
+        else []
     )
     has_errors = bool(errors)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=fechas, y=proyectado, mode="lines+markers", name="Proyectado",
-        line=dict(color=TEMA["primary"], width=2.5), marker=dict(size=7),
-        customdata=[[e] for e in errors] if has_errors else None,
-        hovertemplate=(
-            "%{x}<br>Proyectado: <b>%{y:.2f}</b> kg/h"
-            + ("<br>Error: <b>%{customdata[0]:+.2f}</b>" if has_errors else "")
-            + "<extra></extra>"
-        ),
-    ))
-    fig.add_trace(go.Scatter(
-        x=fechas, y=real, mode="lines+markers", name="Real",
-        line=dict(color=TEMA["success"], width=2.5),
-        marker=dict(size=7, symbol="diamond"),
-        hovertemplate="%{x}<br>Real: <b>%{y:.2f}</b> kg/h<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=fechas,
+            y=proyectado,
+            mode="lines+markers",
+            name="Proyectado",
+            line=dict(color=TEMA["primary"], width=2.5),
+            marker=dict(size=7),
+            customdata=[[e] for e in errors] if has_errors else None,
+            hovertemplate=(
+                "%{x}<br>Proyectado: <b>%{y:.2f}</b> kg/h"
+                + ("<br>Error: <b>%{customdata[0]:+.2f}</b>" if has_errors else "")
+                + "<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=fechas,
+            y=real,
+            mode="lines+markers",
+            name="Real",
+            line=dict(color=TEMA["success"], width=2.5),
+            marker=dict(size=7, symbol="diamond"),
+            hovertemplate="%{x}<br>Real: <b>%{y:.2f}</b> kg/h<extra></extra>",
+        )
+    )
     fig.update_layout(
         title=_title("Proyectado vs Real (KGHORA)"),
         height=380,
@@ -130,10 +154,7 @@ def build_parity_plot(
 
     # Errors for customdata hover
     errors = [p - r for r, p in zip(real, proyectado, strict=True)]
-    pct_errors = [
-        (p - r) / r * 100.0 if r else None
-        for r, p in zip(real, proyectado, strict=True)
-    ]
+    pct_errors = [(p - r) / r * 100.0 if r else None for r, p in zip(real, proyectado, strict=True)]
     customdata = [[e, pe] for e, pe in zip(errors, pct_errors, strict=True)]
 
     fig = go.Figure()
@@ -141,37 +162,51 @@ def build_parity_plot(
     # Banda ±MAE alrededor de y=x: zona de "error típico aceptable"
     if n and mae > 0:
         band_rgb = hex_to_rgb(TEMA["success"])
-        fig.add_trace(go.Scatter(
-            x=[lo, hi, hi, lo, lo],
-            y=[lo + mae, hi + mae, hi - mae, lo - mae, lo + mae],
-            fill="toself",
-            fillcolor=f"rgba({band_rgb},0.08)",
-            line=dict(width=0),
-            name=f"±MAE ({mae:.2f})",
-            hoverinfo="skip",
-            showlegend=True,
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=[lo, hi, hi, lo, lo],
+                y=[lo + mae, hi + mae, hi - mae, lo - mae, lo + mae],
+                fill="toself",
+                fillcolor=f"rgba({band_rgb},0.08)",
+                line=dict(width=0),
+                name=f"±MAE ({mae:.2f})",
+                hoverinfo="skip",
+                showlegend=True,
+            )
+        )
 
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], y=[lo, hi], mode="lines", name="Perfecto (y=x)",
-        line=dict(color=TEMA["success"], dash="dash", width=2),
-        hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=real, y=proyectado, mode="markers", name="Pronósticos",
-        marker=dict(size=9, color=TEMA["primary"], line=dict(width=1, color="white"),
-                    opacity=0.85),
-        customdata=customdata,
-        hovertemplate=(
-            "Real: <b>%{x:.2f}</b> kg/h<br>"
-            "Proyectado: <b>%{y:.2f}</b> kg/h<br>"
-            "Error: <b>%{customdata[0]:+.2f}</b> kg/h"
-            "<extra></extra>"
-        ),
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[lo, hi],
+            y=[lo, hi],
+            mode="lines",
+            name="Perfecto (y=x)",
+            line=dict(color=TEMA["success"], dash="dash", width=2),
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=real,
+            y=proyectado,
+            mode="markers",
+            name="Pronósticos",
+            marker=dict(
+                size=9, color=TEMA["primary"], line=dict(width=1, color="white"), opacity=0.85
+            ),
+            customdata=customdata,
+            hovertemplate=(
+                "Real: <b>%{x:.2f}</b> kg/h<br>"
+                "Proyectado: <b>%{y:.2f}</b> kg/h<br>"
+                "Error: <b>%{customdata[0]:+.2f}</b> kg/h"
+                "<extra></extra>"
+            ),
+        )
+    )
     fig.update_layout(
         title=_title(f"Paridad real vs proyectado · R²={r2:.2f} · MAPE={mape:.1f}%"),
-        height=420, legend=_legend(),
+        height=420,
+        legend=_legend(),
     )
     _axes(fig, xtitle="Real (KGHORA · kg/h)", ytitle="Proyectado (KGHORA · kg/h)")
     if empty_message:
@@ -194,12 +229,16 @@ def build_residual_bars(
     ocultan. Parámetro opcional → backward-compatible.
     """
     colors = [TEMA["warning"] if r > 0 else TEMA["info"] for r in residuals]
-    fig = go.Figure(go.Bar(
-        x=fechas, y=residuals, marker_color=colors,
-        hovertemplate="%{x}<br>Error: <b>%{y:+.2f}</b> kg/h<extra></extra>",
-        name="Error diario",
-        showlegend=False,
-    ))
+    fig = go.Figure(
+        go.Bar(
+            x=fechas,
+            y=residuals,
+            marker_color=colors,
+            hovertemplate="%{x}<br>Error: <b>%{y:+.2f}</b> kg/h<extra></extra>",
+            name="Error diario",
+            showlegend=False,
+        )
+    )
     fig.add_hline(y=0, line_color=AXIS_TEXT, line_width=1)
 
     if residuals:
@@ -207,27 +246,34 @@ def build_residual_bars(
         sd = (sum((r - bias) ** 2 for r in residuals) / len(residuals)) ** 0.5
 
         # Banda ±1σ alrededor del sesgo: dónde cae el ~68% de los errores.
-        fig.add_hrect(y0=bias - sd, y1=bias + sd, fillcolor=TEMA["accent"],
-                      opacity=0.08, line_width=0)
-        fig.add_hline(y=bias, line_dash="dash", line_color=TEMA["accent"],
-                      annotation_text=f"sesgo {bias:+.2f} · σ {sd:.2f}",
-                      annotation_font=dict(size=10, color=TEMA["accent"]))
+        fig.add_hrect(
+            y0=bias - sd, y1=bias + sd, fillcolor=TEMA["accent"], opacity=0.08, line_width=0
+        )
+        fig.add_hline(
+            y=bias,
+            line_dash="dash",
+            line_color=TEMA["accent"],
+            annotation_text=f"sesgo {bias:+.2f} · σ {sd:.2f}",
+            annotation_font=dict(size=10, color=TEMA["accent"]),
+        )
 
         # Media móvil: revela tendencia sistemática de los errores
         n = len(residuals)
-        win = (
-            rolling_window if rolling_window is not None
-            else (min(7, n // 3) if n >= 6 else 0)
-        )
+        win = rolling_window if rolling_window is not None else (min(7, n // 3) if n >= 6 else 0)
         if win >= 3:
             ma = _moving_average(residuals, win)
             # Filtrar None (no deberían aparecer con _moving_average actual)
             ma_clean = [v if v is not None else float("nan") for v in ma]
-            fig.add_trace(go.Scatter(
-                x=fechas, y=ma_clean, mode="lines", name=f"Media móvil ({win}p)",
-                line=dict(color=TEMA["text"], width=2, dash="dot"),
-                hovertemplate="%{x}<br>Media móvil: <b>%{y:+.2f}</b><extra></extra>",
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=fechas,
+                    y=ma_clean,
+                    mode="lines",
+                    name=f"Media móvil ({win}p)",
+                    line=dict(color=TEMA["text"], width=2, dash="dot"),
+                    hovertemplate="%{x}<br>Media móvil: <b>%{y:+.2f}</b><extra></extra>",
+                )
+            )
             fig.update_layout(showlegend=True, legend=_legend())
 
     fig.update_layout(
@@ -270,43 +316,66 @@ def build_decomp_scatter(
         info_rgb = hex_to_rgb(TEMA["info"])
         # Q1(++)/Q3(--): ambos sesgados en el mismo sentido → más grave (warning)
         for x0, x1, y0, y1 in [
-            (0, x_range, 0, y_range),      # Q1
-            (-x_range, 0, -y_range, 0),    # Q3
+            (0, x_range, 0, y_range),  # Q1
+            (-x_range, 0, -y_range, 0),  # Q3
         ]:
-            fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
-                          fillcolor=f"rgba({warning_rgb},0.04)", line_width=0,
-                          layer="below")
+            fig.add_shape(
+                type="rect",
+                x0=x0,
+                x1=x1,
+                y0=y0,
+                y1=y1,
+                fillcolor=f"rgba({warning_rgb},0.04)",
+                line_width=0,
+                layer="below",
+            )
         # Q2/Q4: sesgos opuestos se cancelan parcialmente → info
         for x0, x1, y0, y1 in [
-            (-x_range, 0, 0, y_range),     # Q2
-            (0, x_range, -y_range, 0),     # Q4
+            (-x_range, 0, 0, y_range),  # Q2
+            (0, x_range, -y_range, 0),  # Q4
         ]:
-            fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
-                          fillcolor=f"rgba({info_rgb},0.04)", line_width=0,
-                          layer="below")
+            fig.add_shape(
+                type="rect",
+                x0=x0,
+                x1=x1,
+                y0=y0,
+                y1=y1,
+                fillcolor=f"rgba({info_rgb},0.04)",
+                line_width=0,
+                layer="below",
+            )
 
-    fig.add_trace(go.Scatter(
-        x=err_data, y=err_model, mode="markers", text=labels,
-        marker=dict(size=10, color=TEMA["primary"],
-                    line=dict(width=1, color="white"), opacity=0.85),
-        customdata=customdata,
-        hovertemplate=(
-            "<b>%{text}</b><br>"
-            "Error datos: <b>%{x:+.2f}</b> kg/h<br>"
-            "Error modelo: <b>%{y:+.2f}</b> kg/h<br>"
-            "Error total: <b>%{customdata[0]:+.2f}</b> kg/h"
-            "<extra></extra>"
-        ),
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=err_data,
+            y=err_model,
+            mode="markers",
+            text=labels,
+            marker=dict(
+                size=10, color=TEMA["primary"], line=dict(width=1, color="white"), opacity=0.85
+            ),
+            customdata=customdata,
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                "Error datos: <b>%{x:+.2f}</b> kg/h<br>"
+                "Error modelo: <b>%{y:+.2f}</b> kg/h<br>"
+                "Error total: <b>%{customdata[0]:+.2f}</b> kg/h"
+                "<extra></extra>"
+            ),
+        )
+    )
     fig.add_hline(y=0, line_color=AXIS_TEXT, line_width=1)
     fig.add_vline(x=0, line_color=AXIS_TEXT, line_width=1)
     fig.update_layout(
         title=_title("Diagnóstico: error de datos vs error de modelo"),
-        height=420, showlegend=False,
+        height=420,
+        showlegend=False,
     )
-    _axes(fig,
-          xtitle="Error de datos (proyección de KG/HA · kg/h)",
-          ytitle="Error de modelo (input real · kg/h)")
+    _axes(
+        fig,
+        xtitle="Error de datos (proyección de KG/HA · kg/h)",
+        ytitle="Error de modelo (input real · kg/h)",
+    )
     if empty_message:
         fig.add_annotation(**empty_state_annotation(empty_message))
     return fig
@@ -325,10 +394,7 @@ def build_weekly_bars(
     responsable no tenga que calcularlo fuera del gráfico.
     """
     # Δ% por semana para customdata
-    pct = [
-        ((p - r) / r * 100.0) if r else None
-        for p, r in zip(proyectado, real, strict=True)
-    ]
+    pct = [((p - r) / r * 100.0) if r else None for p, r in zip(proyectado, real, strict=True)]
     cd_proj = [[p, pt] for p, pt in zip(proyectado, pct, strict=True)]
     cd_real = [[r, pt] for r, pt in zip(real, pct, strict=True)]
 
@@ -340,24 +406,32 @@ def build_weekly_bars(
     _line_c = [TEMA["danger"]] * len(weeks)
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=weeks, y=proyectado, name="Proyectado",
-        marker=dict(color=TEMA["primary"], line=dict(color=_line_c, width=_line_w)),
-        customdata=cd_proj,
-        hovertemplate=(
-            "<b>%{x}</b><br>Proyectado: <b>%{customdata[0]:.1f}</b><br>"
-            "Δ%: <b>%{customdata[1]:+.1f}%</b><extra></extra>"
-        ),
-    ))
-    fig.add_trace(go.Bar(
-        x=weeks, y=real, name="Real",
-        marker=dict(color=TEMA["success"], line=dict(color=_line_c, width=_line_w)),
-        customdata=cd_real,
-        hovertemplate=(
-            "<b>%{x}</b><br>Real: <b>%{customdata[0]:.1f}</b><br>"
-            "Δ%: <b>%{customdata[1]:+.1f}%</b><extra></extra>"
-        ),
-    ))
+    fig.add_trace(
+        go.Bar(
+            x=weeks,
+            y=proyectado,
+            name="Proyectado",
+            marker=dict(color=TEMA["primary"], line=dict(color=_line_c, width=_line_w)),
+            customdata=cd_proj,
+            hovertemplate=(
+                "<b>%{x}</b><br>Proyectado: <b>%{customdata[0]:.1f}</b><br>"
+                "Δ%: <b>%{customdata[1]:+.1f}%</b><extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=weeks,
+            y=real,
+            name="Real",
+            marker=dict(color=TEMA["success"], line=dict(color=_line_c, width=_line_w)),
+            customdata=cd_real,
+            hovertemplate=(
+                "<b>%{x}</b><br>Real: <b>%{customdata[0]:.1f}</b><br>"
+                "Δ%: <b>%{customdata[1]:+.1f}%</b><extra></extra>"
+            ),
+        )
+    )
     fig.update_layout(
         barmode="group",
         title=_title("Cierre semanal (ISO): proyectado vs real"),

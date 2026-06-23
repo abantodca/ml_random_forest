@@ -4,20 +4,21 @@ Aplica estilos consistentes a todas las hojas del workbook ya escrito por
 los `build_*_df`. Encapsulado aqui para que cuando se ajusten colores o
 reglas condicionales, no haya que tocar la logica de DataFrames.
 """
+
 from __future__ import annotations
 
 # Paletas (bg, fg) en hex. Usadas en hoja Inicio + Acciones.
 _VERDICT_COLORS = {
-    "GREEN":   ("C8E6C9", "1B5E20"),
+    "GREEN": ("C8E6C9", "1B5E20"),
     "GREEN-2": ("DCEDC8", "33691E"),
-    "AMBER":   ("FFE0B2", "BF360C"),
-    "RED":     ("FFCDD2", "B71C1C"),
+    "AMBER": ("FFE0B2", "BF360C"),
+    "RED": ("FFCDD2", "B71C1C"),
 }
 
 _SCORE_COLORS = {
-    "ALTO":  ("C8E6C9", "1B5E20"),
+    "ALTO": ("C8E6C9", "1B5E20"),
     "MEDIO": ("FFE0B2", "BF360C"),
-    "BAJO":  ("FFCDD2", "B71C1C"),
+    "BAJO": ("FFCDD2", "B71C1C"),
 }
 
 _SEVERITY_COLORS = {
@@ -83,16 +84,31 @@ def apply_formatting(workbook) -> None:
                 col_idx = header.index(err_col_name) + 1
                 col_letter = get_column_letter(col_idx)
                 rng = f"{col_letter}2:{col_letter}{ws.max_row}"
-                ws.conditional_formatting.add(rng, CellIsRule(
-                    operator="greaterThan", formula=["20"],
-                    fill=PatternFill("solid", fgColor="FCE4E4"),
-                    font=Font(color="9B1C1C", bold=True)))
-                ws.conditional_formatting.add(rng, CellIsRule(
-                    operator="between", formula=["10", "20"],
-                    fill=PatternFill("solid", fgColor="FFF5D6")))
-                ws.conditional_formatting.add(rng, CellIsRule(
-                    operator="lessThan", formula=["10"],
-                    fill=PatternFill("solid", fgColor="E0F2EE")))
+                ws.conditional_formatting.add(
+                    rng,
+                    CellIsRule(
+                        operator="greaterThan",
+                        formula=["20"],
+                        fill=PatternFill("solid", fgColor="FCE4E4"),
+                        font=Font(color="9B1C1C", bold=True),
+                    ),
+                )
+                ws.conditional_formatting.add(
+                    rng,
+                    CellIsRule(
+                        operator="between",
+                        formula=["10", "20"],
+                        fill=PatternFill("solid", fgColor="FFF5D6"),
+                    ),
+                )
+                ws.conditional_formatting.add(
+                    rng,
+                    CellIsRule(
+                        operator="lessThan",
+                        formula=["10"],
+                        fill=PatternFill("solid", fgColor="E0F2EE"),
+                    ),
+                )
 
         # Hoja Resumen: pintar secciones ##  ##
         if sheet_name == "Resumen":

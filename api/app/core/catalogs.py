@@ -51,9 +51,7 @@ def normalize_formato(value: object) -> Formato:
         return Formato(candidate)
     except ValueError as exc:
         valid = ", ".join(f.value for f in Formato)
-        raise ValueError(
-            f"FORMATO '{value}' no válido. Valores aceptados: {valid}"
-        ) from exc
+        raise ValueError(f"FORMATO '{value}' no válido. Valores aceptados: {valid}") from exc
 
 
 def normalize_fundo(value: object) -> Fundo:
@@ -65,6 +63,4 @@ def normalize_fundo(value: object) -> Fundo:
         return Fundo(candidate)
     except ValueError as exc:
         valid = ", ".join(f.value for f in Fundo)
-        raise ValueError(
-            f"FUNDO '{value}' no válido. Valores aceptados: {valid}"
-        ) from exc
+        raise ValueError(f"FUNDO '{value}' no válido. Valores aceptados: {valid}") from exc

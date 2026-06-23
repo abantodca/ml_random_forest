@@ -29,6 +29,7 @@ Para una variedad nueva con estacionalidad distinta, agregar una entrada:
 Antes de fijar overrides, re-validar la evidencia por variedad (los
 umbrales de POP salieron de su EDA/ACF; no extrapolar sin medir).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields

@@ -13,6 +13,7 @@ Estos tags hacen posible:
     - Detectar drift: si dataset_sha256 cambia entre runs, la data se actualizo
     - Auditar: que codigo + que data produjo este model en Registry
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -47,10 +48,14 @@ def _git_info(repo_root: Path | None = None) -> dict[str, str]:
     # 2) git binary contra repo en disco
     cwd = repo_root or Path.cwd()
     try:
-        sha = subprocess.check_output(
-            ["git", "-C", str(cwd), "rev-parse", "HEAD"],
-            stderr=subprocess.DEVNULL,
-        ).decode("utf-8").strip()
+        sha = (
+            subprocess.check_output(
+                ["git", "-C", str(cwd), "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
         status = subprocess.check_output(
             ["git", "-C", str(cwd), "status", "--porcelain"],
             stderr=subprocess.DEVNULL,

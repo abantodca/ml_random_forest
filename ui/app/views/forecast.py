@@ -41,17 +41,33 @@ _EDITOR_KEY = "prono_grid_editor"
 def _column_config(varieties: list[str], fundos: list[str], formatos: list[str]) -> dict:
     cc = st.column_config
     return {
-        "VARIEDAD": cc.SelectboxColumn("Variedad", options=varieties, required=True, width="medium"),
+        "VARIEDAD": cc.SelectboxColumn(
+            "Variedad", options=varieties, required=True, width="medium"
+        ),
         "FECHA": cc.DateColumn("Fecha", format="YYYY-MM-DD", required=True),
         "FUNDO": cc.SelectboxColumn("Fundo", options=fundos, required=True),
         "FORMATO": cc.SelectboxColumn("Formato", options=formatos, required=True, width="medium"),
-        "KG/HA": cc.NumberColumn("KG/HA", min_value=0.0, max_value=100_000.0, step=100.0, format="%.0f", required=True),
-        "DPC": cc.NumberColumn("DPC", min_value=0.0, max_value=400.0, step=1.0, format="%.0f", required=True),
-        "HA": cc.NumberColumn("HA", min_value=0.0, max_value=10_000.0, step=0.5, format="%.1f", required=True),
-        "DIA_COSECHA": cc.NumberColumn("Día cosecha", min_value=0, max_value=365, step=1, format="%d", required=True),
-        "%INDUS": cc.NumberColumn("%INDUS", min_value=0.0, max_value=100.0, step=0.5, help="Opcional"),
-        "P/BAYA": cc.NumberColumn("P/BAYA (g)", min_value=0.0, max_value=100.0, step=0.1, help="Opcional"),
-        "HORAS_EFECTIVAS": cc.NumberColumn("Horas efect.", min_value=0.0, max_value=24.0, step=0.5, help="Opcional → KGJN"),
+        "KG/HA": cc.NumberColumn(
+            "KG/HA", min_value=0.0, max_value=100_000.0, step=100.0, format="%.0f", required=True
+        ),
+        "DPC": cc.NumberColumn(
+            "DPC", min_value=0.0, max_value=400.0, step=1.0, format="%.0f", required=True
+        ),
+        "HA": cc.NumberColumn(
+            "HA", min_value=0.0, max_value=10_000.0, step=0.5, format="%.1f", required=True
+        ),
+        "DIA_COSECHA": cc.NumberColumn(
+            "Día cosecha", min_value=0, max_value=365, step=1, format="%d", required=True
+        ),
+        "%INDUS": cc.NumberColumn(
+            "%INDUS", min_value=0.0, max_value=100.0, step=0.5, help="Opcional"
+        ),
+        "P/BAYA": cc.NumberColumn(
+            "P/BAYA (g)", min_value=0.0, max_value=100.0, step=0.1, help="Opcional"
+        ),
+        "HORAS_EFECTIVAS": cc.NumberColumn(
+            "Horas efect.", min_value=0.0, max_value=24.0, step=0.5, help="Opcional → KGJN"
+        ),
         "EXTERNAL_ID": cc.TextColumn("ID externo", help="Opcional"),
     }
 
@@ -78,11 +94,15 @@ def _render_results(result: F.BatchRunResult) -> None:
         st.warning(vm.warning_msg)
 
     section_title("📊 RESULTADOS")
-    st.dataframe(vm.results_df, use_container_width=True, hide_index=True,
-                 column_config={
-                     "KGHORA pred": st.column_config.NumberColumn("KGHORA pred", format="%.3f"),
-                     "KGJN pred": st.column_config.NumberColumn("KGJN pred", format="%.3f"),
-                 })
+    st.dataframe(
+        vm.results_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "KGHORA pred": st.column_config.NumberColumn("KGHORA pred", format="%.3f"),
+            "KGJN pred": st.column_config.NumberColumn("KGJN pred", format="%.3f"),
+        },
+    )
 
     if not vm.hist_df.empty:
         st.plotly_chart(build_kghora_histogram(vm.hist_df), use_container_width=True)
@@ -94,8 +114,10 @@ def _render_results(result: F.BatchRunResult) -> None:
             st.markdown(f"**Variedad:** `{name}`")
             render_batch_drift_panel(bd, expanded=True)
         else:
-            opts = {f"{n} ({d.n_rows} filas · {F.DRIFT_BADGE.get(d.status, '—')})": d
-                    for n, d in result.batch_drifts}
+            opts = {
+                f"{n} ({d.n_rows} filas · {F.DRIFT_BADGE.get(d.status, '—')})": d
+                for n, d in result.batch_drifts
+            }
             lbl = st.selectbox("Variedad", list(opts.keys()), key="grid_bd_sel")
             render_batch_drift_panel(opts[lbl], expanded=True)
 
@@ -121,21 +143,30 @@ def _render_new(all_names: list[str]) -> None:
     section_title("🌿 DEFAULTS (filas nuevas y plantilla)")
     d1, d2, d3, d4 = st.columns([2, 1, 2, 2], vertical_alignment="bottom")
     variety = d1.selectbox(
-        "Variedad", all_names,
+        "Variedad",
+        all_names,
         index=all_names.index(default_variety) if default_variety in all_names else 0,
         key="grid_def_var",
     )
     fundo = d2.selectbox("Fundo", fundos, key="grid_def_fundo") if fundos else ""
-    formato = d3.selectbox(
-        "Formato", formatos,
-        index=formatos.index(fmt_default) if fmt_default in formatos else 0,
-        key="grid_def_fmt",
-    ) if formatos else ""
+    formato = (
+        d3.selectbox(
+            "Formato",
+            formatos,
+            index=formatos.index(fmt_default) if fmt_default in formatos else 0,
+            key="grid_def_fmt",
+        )
+        if formatos
+        else ""
+    )
     with d4:
         st.download_button(
-            "⬇️ Plantilla Excel", F.template_xlsx(variety, fundo, formato),
-            file_name="plantilla_pronosticos.xlsx", mime=_XLSX_MIME,
-            use_container_width=True, key="grid_tpl",
+            "⬇️ Plantilla Excel",
+            F.template_xlsx(variety, fundo, formato),
+            file_name="plantilla_pronosticos.xlsx",
+            mime=_XLSX_MIME,
+            use_container_width=True,
+            key="grid_tpl",
         )
 
     if _SS_GRID not in st.session_state:
@@ -146,8 +177,10 @@ def _render_new(all_names: list[str]) -> None:
         expanded=False,
     ):
         up = st.file_uploader(
-            "Excel de pronósticos (a predecir)", type=["xlsx", "xls", "csv"],
-            key="grid_upload", label_visibility="collapsed",
+            "Excel de pronósticos (a predecir)",
+            type=["xlsx", "xls", "csv"],
+            key="grid_upload",
+            label_visibility="collapsed",
         )
         if up is not None and st.button("Cargar a la grilla", key="grid_load"):
             try:
@@ -170,7 +203,9 @@ def _render_new(all_names: list[str]) -> None:
     edited = st.data_editor(
         st.session_state[_SS_GRID],
         column_config=_column_config(all_names, fundos, formatos),
-        num_rows="dynamic", use_container_width=True, hide_index=True,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
         key=_EDITOR_KEY,
     )
 
@@ -196,8 +231,9 @@ def _render_new(all_names: list[str]) -> None:
         )
         cols_con_error = F.affected_columns(exc.issues)
         st.caption(f"Columnas afectadas: {', '.join(f'**{c}**' for c in cols_con_error)}")
-        st.dataframe(pd.DataFrame(F.issue_rows(exc.issues)),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(F.issue_rows(exc.issues)), use_container_width=True, hide_index=True
+        )
         return
     except Exception as exc:
         st.error(f"Error inesperado de validación: {exc}")
@@ -206,7 +242,8 @@ def _render_new(all_names: list[str]) -> None:
     progress = st.progress(0.0, text="Procesando...")
     with st.spinner("Prediciendo y guardando..."):
         result = F.execute_batch(
-            valid, progress_cb=lambda frac, txt: progress.progress(frac, text=txt),
+            valid,
+            progress_cb=lambda frac, txt: progress.progress(frac, text=txt),
         )
     progress.empty()
     for err in result.errors:

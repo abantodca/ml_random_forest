@@ -89,9 +89,7 @@ class ModelReloadResponse(BaseModel):
     status: str
     models_loaded: int
     models_available: int
-    summary: dict[str, int] = Field(
-        ..., description="Resumen: loaded, updated, unchanged, failed"
-    )
+    summary: dict[str, int] = Field(..., description="Resumen: loaded, updated, unchanged, failed")
     models: list[ModelInfo]
 
     model_config = ConfigDict(

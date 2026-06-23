@@ -17,6 +17,7 @@ Modulos:
     html_renderer     : ensamblaje del reporte HTML
     eda               : entrypoint `run_eda(variety) -> Path`
 """
+
 from src.diagnostics.eda import run_eda  # noqa: F401
 
 __all__ = ["run_eda"]

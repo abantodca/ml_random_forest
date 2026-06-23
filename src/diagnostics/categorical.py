@@ -17,6 +17,7 @@ Las funciones devuelven dataclasses serializables a JSON via dataclasses.asdict;
 el caller decide el formato (HTML para dashboard, JSON sidecar para que el
 pipeline / LLM consuma stats sin parsear HTML).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -39,8 +40,8 @@ from src.config import (
 class TopCategory:
     value: str
     count: int
-    pct: float           # frecuencia relativa (0..1)
-    cum_pct: float       # frecuencia acumulada (orden descendente)
+    pct: float  # frecuencia relativa (0..1)
+    cum_pct: float  # frecuencia acumulada (orden descendente)
     target_mean: float | None = None
     target_std: float | None = None
     target_count: int = 0
@@ -53,24 +54,25 @@ class CategoricalProfile:
     n_missing: int
     miss_ratio: float
     cardinality: int
-    n_singletons: int    # categorias con count==1 (ruido potencial)
+    n_singletons: int  # categorias con count==1 (ruido potencial)
     top_categories: list[TopCategory] = field(default_factory=list)
-    coverage_top10_pct: float = 0.0   # cobertura cumulativa del top-10
+    coverage_top10_pct: float = 0.0  # cobertura cumulativa del top-10
     chi2_statistic: float | None = None
     chi2_p_value: float | None = None
     chi2_dof: int | None = None
-    cramers_v_target: float | None = None   # asociacion con target binarizado
+    cramers_v_target: float | None = None  # asociacion con target binarizado
     target_encoding_recommendation: str = ""
 
 
 @dataclass
 class CategoricalAssociation:
     """Asociacion (Cramer's V) entre dos categoricas. Simetrica."""
+
     feature_a: str
     feature_b: str
     cramers_v: float
     chi2_p_value: float
-    severity: str        # "ok"|"watch"|"high"
+    severity: str  # "ok"|"watch"|"high"
 
 
 @dataclass
@@ -90,6 +92,7 @@ def _cramers_v(table: np.ndarray) -> tuple[float, float, int]:
     devolvemos igual y dejamos que el caller filtre.
     """
     from scipy.stats import chi2_contingency
+
     if table.size == 0 or table.sum() == 0:
         return 0.0, 1.0, 0
     chi2, p, dof, _ = chi2_contingency(table)
@@ -138,10 +141,17 @@ def profile_categorical(
         sub_target = target[mask].dropna()
         tmean = float(sub_target.mean()) if len(sub_target) >= min_count_for_target else None
         tstd = float(sub_target.std()) if len(sub_target) >= min_count_for_target else None
-        top_cats.append(TopCategory(
-            value=str(val), count=int(c), pct=float(pct), cum_pct=float(cum_pct),
-            target_mean=tmean, target_std=tstd, target_count=int(len(sub_target)),
-        ))
+        top_cats.append(
+            TopCategory(
+                value=str(val),
+                count=int(c),
+                pct=float(pct),
+                cum_pct=float(cum_pct),
+                target_mean=tmean,
+                target_std=tstd,
+                target_count=int(len(sub_target)),
+            )
+        )
 
     coverage_top10 = float(counts.head(10).sum() / total) if total > 0 else 0.0
 
@@ -162,6 +172,7 @@ def profile_categorical(
                 chi2_dof_val = dof
                 # statistic util para el HTML
                 from scipy.stats import chi2_contingency
+
                 chi2_stat = float(chi2_contingency(ct.values)[0])
         except Exception:
             pass
@@ -225,16 +236,16 @@ def compute_associations(
                 v, p, _ = _cramers_v(ct.values)
             except Exception:
                 continue
-            sev = (
-                "high" if v >= threshold_high
-                else "watch" if v >= threshold_watch
-                else "ok"
+            sev = "high" if v >= threshold_high else "watch" if v >= threshold_watch else "ok"
+            out.append(
+                CategoricalAssociation(
+                    feature_a=a,
+                    feature_b=b,
+                    cramers_v=float(v),
+                    chi2_p_value=float(p),
+                    severity=sev,
+                )
             )
-            out.append(CategoricalAssociation(
-                feature_a=a, feature_b=b,
-                cramers_v=float(v), chi2_p_value=float(p),
-                severity=sev,
-            ))
     return sorted(out, key=lambda x: x.cramers_v, reverse=True)
 
 
@@ -246,9 +257,6 @@ def build_categorical_report(
     top_n: int = 10,
 ) -> CategoricalReport:
     """Profile completo + asociaciones para todas las categoricas indicadas."""
-    profiles = [
-        profile_categorical(df, c, target, top_n=top_n)
-        for c in columns if c in df.columns
-    ]
+    profiles = [profile_categorical(df, c, target, top_n=top_n) for c in columns if c in df.columns]
     associations = compute_associations(df, columns)
     return CategoricalReport(profiles=profiles, associations=associations)

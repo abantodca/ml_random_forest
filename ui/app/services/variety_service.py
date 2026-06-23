@@ -38,9 +38,7 @@ class VarietyService:
 
     def get_catalogs(self) -> Catalogs:
         """Trae catálogos cerrados (FORMATO, FUNDO) del backend."""
-        data = self._client.get(
-            endpoints.CATALOGS, timeout=self._client.timeout_read
-        )
+        data = self._client.get(endpoints.CATALOGS, timeout=self._client.timeout_read)
         return Catalogs(
             formatos=tuple(data.get("formatos", ())),
             formato_default=str(data.get("formato_default", "")),
@@ -82,9 +80,7 @@ class VarietyService:
         max_workers = min(WORKERS_VARIETY_DETAIL_MAX, len(names))
         detail_map: dict[str, VarietyViewModel] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(self._fetch_one_detail, n): n for n in names
-            }
+            futures = {executor.submit(self._fetch_one_detail, n): n for n in names}
             for future in as_completed(futures):
                 vm = future.result()
                 detail_map[vm.name] = vm

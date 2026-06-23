@@ -63,9 +63,7 @@ def train_variety(
         )
 
     logger.info("#" * 78)
-    logger.info(
-        f"# VARIEDAD INICIO: {variety} | modelos={model_types} | pid={os.getpid()}"
-    )
+    logger.info(f"# VARIEDAD INICIO: {variety} | modelos={model_types} | pid={os.getpid()}")
     logger.info("#" * 78)
 
     experiment_name = f"{args.experiment_prefix}{variety}"
@@ -110,9 +108,7 @@ def train_variety(
             f"dt={champion.elapsed_seconds:.1f}s | "
             f"composite_aux={champion.composite_score:.4f}"
         )
-        logger.info(
-            f"[{variety}] Decision: {champion_decision.get('justification', '')}"
-        )
+        logger.info(f"[{variety}] Decision: {champion_decision.get('justification', '')}")
 
         args_register = _apply_quality_gate(champion, args, variety, logger)
         emit_mape_metric(variety=variety, mape_value=champion.oof_mape)
@@ -125,9 +121,7 @@ def train_variety(
         try:
             X_full, _, business_full = _load_variety_inputs(variety)
         except Exception:  # defensive: pandas/openpyxl puede lanzar varios tipos en IO
-            logger.exception(
-                f"[{variety}] no se pudo recargar data para outputs ejecutivos"
-            )
+            logger.exception(f"[{variety}] no se pudo recargar data para outputs ejecutivos")
             X_full = None
             business_full = None
 
@@ -223,7 +217,9 @@ def _run_model_loop(
     for model_type in model_types:
         try:
             results.append(train_model(variety, model_type, args, settings, logger))
-        except Exception:  # defensive: train_model envuelve logica heterogenea (model fit, MLflow, IO)
+        except (
+            Exception
+        ):  # defensive: train_model envuelve logica heterogenea (model fit, MLflow, IO)
             logger.exception(f"[{variety}/{model_type}] FALLO")
             failures.append(model_type)
         finally:
@@ -265,6 +261,7 @@ def _apply_quality_gate(
     # gate y registro v2 experimental — la API sirve la ULTIMA version).
     # Releemos el modulo (no import top-level) para honrar el env del run.
     from src import config as _cfg
+
     if not _cfg.REGISTER_ENABLED:
         logger.info(
             f"[{variety}] Registro OMITIDO: REGISTER_ENABLED=0 (guard "
@@ -340,9 +337,7 @@ def _delete_loser_runs(
             loser.mlflow_run_id = ""
             deleted_count += 1
         except MlflowException:
-            logger.exception(
-                f"[{variety}] error eliminando run de {loser.model_type}"
-            )
+            logger.exception(f"[{variety}] error eliminando run de {loser.model_type}")
     if deleted_count > 0:
         logger.info(
             f"[{variety}] Eliminados {deleted_count}/{len(losers)} run(s) "
@@ -386,9 +381,7 @@ def _render_winner_and_cleanup(
             keep.append(winner_excel_path)
         deleted = cleanup_residual_reports(variety=variety, keep=keep)
         if deleted:
-            logger.info(
-                f"[{variety}] Limpieza reports/: {len(deleted)} archivo(s) borrado(s)"
-            )
+            logger.info(f"[{variety}] Limpieza reports/: {len(deleted)} archivo(s) borrado(s)")
         return str(winner_path)
     except Exception:  # defensive: render HTML mezcla plotly, jinja, IO; varios tipos posibles
         logger.exception(f"[{variety}] no se pudo construir Winner dashboard")
@@ -407,6 +400,7 @@ def _write_global_dashboard_index(variety: str, logger) -> None:
     """
     try:
         from src.diagnostics.dashboard_index import write_dashboard
+
         write_dashboard(REPORTS_DIR)
     except Exception:  # defensive: write_dashboard mezcla scan FS + jinja + IO
         logger.exception(f"[{variety}] no se pudo regenerar reports/index.html")
@@ -543,10 +537,7 @@ def _export_winner_excel(
         logger.exception(f"[{variety}] no se pudo cargar pipeline del campeon")
         return None
 
-    excel_filename = (
-        f"Winner_{variety}_{run_label}.xlsx" if run_label
-        else f"Winner_{variety}.xlsx"
-    )
+    excel_filename = f"Winner_{variety}_{run_label}.xlsx" if run_label else f"Winner_{variety}.xlsx"
     excel_path = export_business_excel(
         variety=variety,
         model_type=champion.model_type,
@@ -561,8 +552,7 @@ def _export_winner_excel(
     )
     if excel_path is None:
         logger.warning(
-            f"[{variety}] Excel del campeon NO generado "
-            "(faltan columnas KG/JR/H-EF en el dataset)"
+            f"[{variety}] Excel del campeon NO generado (faltan columnas KG/JR/H-EF en el dataset)"
         )
         return None
     logger.info(f"[{variety}] Excel del campeon: {excel_path}")
@@ -651,6 +641,7 @@ def _tag_champion(
         # training no genera EDA propio.
         try:
             from src.diagnostics.eda import find_latest_eda_sidecar
+
             sidecar = find_latest_eda_sidecar(variety)
             if sidecar is not None:
                 eda_html = sidecar.with_suffix(".html")
@@ -684,6 +675,7 @@ def _tag_drift_summary(client, champion: ModelResult, variety: str, logger) -> N
             extract_drift_summary,
             find_latest_eda_sidecar,
         )
+
         sidecar = find_latest_eda_sidecar(variety)
         if sidecar is not None:
             for k, v in extract_drift_summary(sidecar).items():
@@ -708,8 +700,7 @@ def _register_champion(
     )
     if winner_report_path:
         report_uri = (
-            f"runs:/{champion.mlflow_run_id}/winner_dashboard/"
-            f"{Path(winner_report_path).name}"
+            f"runs:/{champion.mlflow_run_id}/winner_dashboard/{Path(winner_report_path).name}"
         )
     else:
         report_uri = None

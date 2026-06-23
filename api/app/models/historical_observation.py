@@ -51,7 +51,10 @@ class HistoricalObservation(Base):
     __table_args__ = (
         Index(
             "ix_history_variety_group_fecha",
-            "variety", "fundo", "formato", "fecha",
+            "variety",
+            "fundo",
+            "formato",
+            "fecha",
         ),
     )
 

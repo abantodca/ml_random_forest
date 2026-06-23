@@ -22,8 +22,16 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # Orden de columnas de la grilla de datos REALES (= inputs del pronóstico + KG/JR_H).
 REAL_COLS = [
-    "FUNDO", "FORMATO", "FECHA", "KG/HA", "KG/JR_H",
-    "DPC", "%INDUS", "P/BAYA", "HA", "DIA_COSECHA",
+    "FUNDO",
+    "FORMATO",
+    "FECHA",
+    "KG/HA",
+    "KG/JR_H",
+    "DPC",
+    "%INDUS",
+    "P/BAYA",
+    "HA",
+    "DIA_COSECHA",
 ]
 
 
@@ -51,10 +59,7 @@ def filter_options(points: list[AccuracyPoint]) -> tuple[list[str], list[str]]:
 def apply_filters(
     points: list[AccuracyPoint], sel_fundos: list[str], sel_weeks: list[str]
 ) -> list[AccuracyPoint]:
-    return [
-        p for p in points
-        if p.fundo in sel_fundos and iso_week(p.fecha) in sel_weeks
-    ]
+    return [p for p in points if p.fundo in sel_fundos and iso_week(p.fecha) in sel_weeks]
 
 
 # ── Grilla / plantilla de datos reales (lógica pura, sin st) ─────────────────
@@ -69,8 +74,8 @@ def build_real_template_xlsx() -> bytes:
             "FUNDO": [fundo],
             "FORMATO": [fmt],
             "KG/HA": [4800.0],
-            "KG/JR_H": [3.9],        # ← productividad REAL realizada (obligatoria)
-            "DPC": [118.0],          # opcionales: habilitan descomposición exacta
+            "KG/JR_H": [3.9],  # ← productividad REAL realizada (obligatoria)
+            "DPC": [118.0],  # opcionales: habilitan descomposición exacta
             "HA": [9.0],
             "DIA_COSECHA": [32],
             "%INDUS": [5.0],
@@ -88,15 +93,23 @@ def real_grid_from_history(variety: str) -> pd.DataFrame:
     obs = get_tracking_service().list_history(variety)
     if not obs:
         return pd.DataFrame(columns=REAL_COLS)
-    df = pd.DataFrame([
-        {
-            "FUNDO": o.fundo, "FORMATO": o.formato, "FECHA": o.fecha[:10],
-            "KG/HA": o.kg_ha, "KG/JR_H": o.kg_jr_h, "DPC": o.dpc,
-            "%INDUS": o.indus_pct, "P/BAYA": o.p_baya, "HA": o.ha,
-            "DIA_COSECHA": o.dia_cosecha,
-        }
-        for o in obs
-    ])[REAL_COLS]
+    df = pd.DataFrame(
+        [
+            {
+                "FUNDO": o.fundo,
+                "FORMATO": o.formato,
+                "FECHA": o.fecha[:10],
+                "KG/HA": o.kg_ha,
+                "KG/JR_H": o.kg_jr_h,
+                "DPC": o.dpc,
+                "%INDUS": o.indus_pct,
+                "P/BAYA": o.p_baya,
+                "HA": o.ha,
+                "DIA_COSECHA": o.dia_cosecha,
+            }
+            for o in obs
+        ]
+    )[REAL_COLS]
     # DateColumn del data_editor exige dtype fecha/datetime, no string.
     df["FECHA"] = pd.to_datetime(df["FECHA"], errors="coerce")
     return df
@@ -127,9 +140,9 @@ class KpiVM:
     mape: float
     has_mape: bool
     bias: float
-    verdict_status: str    # ok / warning / alert
+    verdict_status: str  # ok / warning / alert
     verdict_msg: str
-    sesgo_dir: str         # sobreestima / subestima
+    sesgo_dir: str  # sobreestima / subestima
     mape_variant: str
     bias_variant: str
 
@@ -139,7 +152,7 @@ class DecompVM:
     available: bool
     mean_data: float = 0.0
     mean_model: float = 0.0
-    predominant: str = "data"   # data / model
+    predominant: str = "data"  # data / model
     data_variant: str = "primary"
     model_variant: str = "primary"
 
@@ -199,7 +212,7 @@ def build_decomp_vm(points: list[AccuracyPoint]) -> DecompVM:
     dec = [p for p in points if p.pred_on_real is not None]
     if not dec:
         return DecompVM(available=False)
-    mean_data = _mean([abs(p.error_data) for p in dec])    # type: ignore[arg-type]
+    mean_data = _mean([abs(p.error_data) for p in dec])  # type: ignore[arg-type]
     mean_model = _mean([abs(p.error_model) for p in dec])  # type: ignore[arg-type]
     data_predom = mean_data > mean_model
     return DecompVM(
@@ -220,7 +233,7 @@ def build_charts_vm(points: list[AccuracyPoint]) -> ChartsVM:
         real=[p.real for p in points],
         err=[p.error_total for p in points],
         has_decomp=bool(dec),
-        decomp_data=[p.error_data for p in dec],    # type: ignore[misc]
+        decomp_data=[p.error_data for p in dec],  # type: ignore[misc]
         decomp_model=[p.error_model for p in dec],  # type: ignore[misc]
         decomp_labels=[f"{p.fecha} · {p.fundo}" for p in dec],
     )
@@ -270,8 +283,12 @@ def build_weekly_vm(points: list[AccuracyPoint]) -> WeeklyVM:
         **vm,
         cumplimiento=cumplimiento,
         cumpl_variant="success" if abs(100 - cumplimiento) < 10 else "warning",
-        mejor_week=mejor[0].week, mejor_pct=mejor[1], mejor_n=mejor[0].n,
-        peor_week=peor[0].week, peor_pct=peor[1], peor_n=peor[0].n,
+        mejor_week=mejor[0].week,
+        mejor_pct=mejor[1],
+        mejor_n=mejor[0].n,
+        peor_week=peor[0].week,
+        peor_pct=peor[1],
+        peor_n=peor[0].n,
     )
 
 
@@ -288,7 +305,7 @@ def build_table_rows(points: list[AccuracyPoint]) -> list[dict]:
             "Error %": round(p.abs_pct_error, 1) if p.abs_pct_error is not None else None,
         }
         if p.pred_on_real is not None:
-            row["Err datos"] = round(p.error_data, 2)    # type: ignore[arg-type]
+            row["Err datos"] = round(p.error_data, 2)  # type: ignore[arg-type]
             row["Err modelo"] = round(p.error_model, 2)  # type: ignore[arg-type]
         rows.append(row)
     return rows

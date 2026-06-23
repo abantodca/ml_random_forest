@@ -72,9 +72,7 @@ def get_drift_service(request: Request) -> DriftService:
     if service is None:
         # Fallback defensivo: si el lifespan no lo inicializó (e.g. en tests),
         # lo construimos al vuelo con el MLflowService disponible.
-        mlflow_service: MLflowService | None = getattr(
-            request.app.state, "mlflow_service", None
-        )
+        mlflow_service: MLflowService | None = getattr(request.app.state, "mlflow_service", None)
         if mlflow_service is None:
             raise RuntimeError(
                 "Drift service no inicializado y MLflow service tampoco. "

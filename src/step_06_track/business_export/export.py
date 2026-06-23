@@ -1,4 +1,5 @@
 """Orquestador del Excel ejecutivo: ensambla DataFrames + escribe + formatea."""
+
 from __future__ import annotations
 
 import logging
@@ -54,8 +55,10 @@ def export_business_excel(
 
     # ---- DataFrames ----
     df_oof = build_predictions_df(
-        X_raw=X_raw, business_cols=business_cols,
-        y_h_true=oof["y_true"], y_h_pred=oof["y_pred"],
+        X_raw=X_raw,
+        business_cols=business_cols,
+        y_h_true=oof["y_true"],
+        y_h_pred=oof["y_pred"],
         fold_id=oof.get("fold_id"),
     )
     # Si el final_pipeline es OOFEnsembleRegressor (caso normal con K>=1),
@@ -74,7 +77,8 @@ def export_business_excel(
     except Exception:
         logger.warning(
             "business_export: final_pipeline.predict(X_raw) fallo; "
-            "Predicciones_Total saldra con NaN", exc_info=True,
+            "Predicciones_Total saldra con NaN",
+            exc_info=True,
         )
 
     # Residuals OOF para calibrar Conformal Prediction (preferido sobre la
@@ -87,7 +91,8 @@ def export_business_excel(
     oof_residuals = oof_residuals[np.isfinite(oof_residuals)]
 
     df_total = build_predictions_df(
-        X_raw=X_raw, business_cols=business_cols,
+        X_raw=X_raw,
+        business_cols=business_cols,
         y_h_true=oof_y_true,
         y_h_pred=y_h_pred_full,
         y_h_std=y_h_std_full,
@@ -99,11 +104,13 @@ def export_business_excel(
     by_fundo = build_subgroup_summary(df_oof, "FUNDO")
 
     df_resumen = build_resumen_df(
-        variety=variety, model_type=model_type,
+        variety=variety,
+        model_type=model_type,
         nested_metrics=nested_metrics,
         business_validation=business_validation,
         timestamp=datetime.now().isoformat(timespec="seconds"),
-        n_oof=len(df_oof), n_insample=len(df_total),
+        n_oof=len(df_oof),
+        n_insample=len(df_total),
     )
 
     # Veredicto + acciones usan OOF (honesto). abs_gap viene de nested CV.
@@ -121,7 +128,8 @@ def export_business_excel(
             X_aligned = None
 
     df_inicio = build_inicio_df(
-        variety=variety, model_type=model_type,
+        variety=variety,
+        model_type=model_type,
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
         business_validation=business_validation,
         abs_gap=abs_gap,
@@ -129,7 +137,8 @@ def export_business_excel(
     )
     df_acciones = build_acciones_df(
         business_validation=business_validation,
-        abs_gap=abs_gap, full_mape=oof_mape,
+        abs_gap=abs_gap,
+        full_mape=oof_mape,
         X_aligned=X_aligned,
     )
     df_glosario = build_glosario_df()

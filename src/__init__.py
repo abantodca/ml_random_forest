@@ -9,6 +9,7 @@ queda como no-op silencioso y cualquier `plt.show()` en remote crashea.
 Este es el unico lugar correcto para setearlo: cualquier `import src.*`
 ejecuta este __init__ primero, asi que nunca llegamos tarde.
 """
+
 import matplotlib
 
 matplotlib.use("Agg")

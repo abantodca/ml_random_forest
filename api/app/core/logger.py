@@ -8,9 +8,7 @@ import logging
 import sys
 
 
-def setup_logger(
-    name: str = "rnd-forest-backend", level: str = "INFO"
-) -> logging.Logger:
+def setup_logger(name: str = "rnd-forest-backend", level: str = "INFO") -> logging.Logger:
     """
     Configura el logger de la aplicación.
 

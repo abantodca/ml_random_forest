@@ -21,6 +21,7 @@ CLI:
         --output data/training/DB-HISTORICA.xlsx \\
         --min-rows 100
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,9 +48,7 @@ def _split_by_variety(
 ) -> Iterable[tuple[str, pd.DataFrame]]:
     """Itera (sheet_name, sub_df) por cada variedad con suficientes filas."""
     if variety_col not in df.columns:
-        raise ValueError(
-            f"La columna '{variety_col}' no existe. Disponibles: {list(df.columns)}"
-        )
+        raise ValueError(f"La columna '{variety_col}' no existe. Disponibles: {list(df.columns)}")
 
     df = df.dropna(subset=[variety_col]).copy()
     df[variety_col] = df[variety_col].astype(str).str.strip()
@@ -142,12 +141,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--input", required=True, help="Ruta del Excel acumulado")
     p.add_argument("--output", required=True, help="Ruta del Excel resultante")
-    p.add_argument("--min-rows", type=int, default=100,
-                   help="Filas minimas por variedad para incluirla")
-    p.add_argument("--source-sheet", default="acumulado",
-                   help="Hoja de entrada en el Excel acumulado")
-    p.add_argument("--variety-col", default="VARIEDAD",
-                   help="Columna que identifica la variedad")
+    p.add_argument(
+        "--min-rows", type=int, default=100, help="Filas minimas por variedad para incluirla"
+    )
+    p.add_argument(
+        "--source-sheet", default="acumulado", help="Hoja de entrada en el Excel acumulado"
+    )
+    p.add_argument("--variety-col", default="VARIEDAD", help="Columna que identifica la variedad")
     return p.parse_args(argv)
 
 

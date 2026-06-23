@@ -4,6 +4,7 @@ Contrato: None = default global de hoy -> una variedad sin overrides se
 comporta EXACTAMENTE como antes del refactor. Los overrides viajan
 explicitos (no env) y quedan serializados dentro del pipeline.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -31,7 +32,8 @@ def test_variedad_desconocida_usa_defaults_globales():
 
 def test_override_declarado_se_aplica(monkeypatch):
     monkeypatch.setitem(
-        vc.VARIETY_OVERRIDES, "ARA",
+        vc.VARIETY_OVERRIDES,
+        "ARA",
         {"high_season_months": (11, 12, 1), "imputer_knn_threshold": 0.45},
     )
     cfg = for_variety("ARA")
@@ -54,8 +56,10 @@ def test_feature_generator_respeta_meses_de_temporada():
     assert out_pop["TEMPORADA_BAJA"].tolist() == [0, 1]
     # Variedad de pico veraniego invertido: diciembre es ALTA.
     out_ara = FeatureGenerator._date_features(
-        fechas, add_year=False,
-        high_season_months=(11, 12, 1), low_season_months=(5, 6, 7),
+        fechas,
+        add_year=False,
+        high_season_months=(11, 12, 1),
+        low_season_months=(5, 6, 7),
     )
     assert out_ara["TEMPORADA_ALTA"].tolist() == [0, 1]
     assert out_ara["TEMPORADA_BAJA"].tolist() == [1, 0]

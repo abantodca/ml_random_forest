@@ -44,27 +44,27 @@ LONGITUD_VISIBLE_API_URL: int = 22
 # ---------------------------------------------------------------------------
 TEMA: dict[str, str] = {
     # Marca
-    "primary": "#4F46E5",        # indigo-600
-    "primary_dark": "#3730A3",   # indigo-800 (para hover/text énfasis)
+    "primary": "#4F46E5",  # indigo-600
+    "primary_dark": "#3730A3",  # indigo-800 (para hover/text énfasis)
     "primary_light": "#818CF8",  # indigo-400
-    "accent": "#7C3AED",         # violet-600
+    "accent": "#7C3AED",  # violet-600
     # Semánticos
-    "success": "#047857",        # emerald-700 (más oscuro, mejor contraste)
-    "warning": "#B45309",        # amber-700
-    "danger": "#B91C1C",         # red-700
-    "info": "#0E7490",           # cyan-700
+    "success": "#047857",  # emerald-700 (más oscuro, mejor contraste)
+    "warning": "#B45309",  # amber-700
+    "danger": "#B91C1C",  # red-700
+    "info": "#0E7490",  # cyan-700
     # Superficies
-    "bg": "#F8FAFC",             # slate-50
-    "bg_alt": "#F1F5F9",         # slate-100
+    "bg": "#F8FAFC",  # slate-50
+    "bg_alt": "#F1F5F9",  # slate-100
     "card": "#FFFFFF",
-    "border": "#E2E8F0",         # slate-200
+    "border": "#E2E8F0",  # slate-200
     "border_strong": "#CBD5E1",  # slate-300
     # Texto (sobre fondo claro)
-    "text": "#0F172A",           # slate-900 — títulos
-    "text_body": "#1E293B",      # slate-800 — cuerpo
-    "text_secondary": "#334155", # slate-700 — labels
+    "text": "#0F172A",  # slate-900 — títulos
+    "text_body": "#1E293B",  # slate-800 — cuerpo
+    "text_secondary": "#334155",  # slate-700 — labels
     "text_tertiary": "#475569",  # slate-600 — meta
-    "muted": "#64748B",          # slate-500 — placeholders/grids (antes #94A3B8 → ilegible)
+    "muted": "#64748B",  # slate-500 — placeholders/grids (antes #94A3B8 → ilegible)
     # Compat (alias antiguos)
     "purple": "#7C3AED",
     "blue": "#3B82F6",
@@ -86,10 +86,20 @@ PALETA_SERIES: tuple[str, ...] = (
 # Validación batch (Excel/CSV)
 # ---------------------------------------------------------------------------
 COLUMNAS_REQUERIDAS: tuple[str, ...] = (
-    "VARIEDAD", "FECHA", "KG/HA", "DPC", "HA", "DIA_COSECHA", "FORMATO", "FUNDO",
+    "VARIEDAD",
+    "FECHA",
+    "KG/HA",
+    "DPC",
+    "HA",
+    "DIA_COSECHA",
+    "FORMATO",
+    "FUNDO",
 )
 COLUMNAS_OPCIONALES: tuple[str, ...] = (
-    "%INDUS", "P/BAYA", "HORAS_EFECTIVAS", "EXTERNAL_ID",
+    "%INDUS",
+    "P/BAYA",
+    "HORAS_EFECTIVAS",
+    "EXTERNAL_ID",
 )
 
 # ---------------------------------------------------------------------------

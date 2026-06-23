@@ -1,4 +1,5 @@
 """Construccion del pipeline de preprocesamiento."""
+
 from __future__ import annotations
 
 from sklearn.feature_selection import VarianceThreshold
@@ -59,16 +60,13 @@ def create_preprocessing_pipeline(
     # (p.ej. fallback_threshold lee env IMPUTER_KNN_THRESHOLD).
     imputer_kwargs = (
         {"fallback_threshold": cfg.imputer_knn_threshold}
-        if cfg.imputer_knn_threshold is not None else {}
+        if cfg.imputer_knn_threshold is not None
+        else {}
     )
     capper_step = (
         "outliers",
         OutlierCapper(
-            group_col=(
-                ["FUNDO", "FORMATO"]
-                if ENABLE_OUTLIER_CASCADE_FF
-                else "FUNDO"
-            ),
+            group_col=(["FUNDO", "FORMATO"] if ENABLE_OUTLIER_CASCADE_FF else "FUNDO"),
         ),
     )
     # LOF como FEATURE (additive). EDA POP 2026-05-09 detecto kurt=158
@@ -84,11 +82,7 @@ def create_preprocessing_pipeline(
     #     capper sigue protegiendo al modelo despues. lof_score no esta
     #     en NUMERIC_FEATURES, el capper no lo toca.
     lof_step = ("outlier_score", LOFOutlierScorer())
-    middle_steps = (
-        [lof_step, capper_step]
-        if ENABLE_LOF_BEFORE_CAPPER
-        else [capper_step, lof_step]
-    )
+    middle_steps = [lof_step, capper_step] if ENABLE_LOF_BEFORE_CAPPER else [capper_step, lof_step]
     return Pipeline(
         steps=[
             ("lag_features", LagFeatureTransformer()),

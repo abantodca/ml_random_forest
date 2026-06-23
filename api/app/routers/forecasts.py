@@ -239,9 +239,7 @@ async def delete_forecasts_by_fecha(
     """
     count = await crud.forecast.delete_forecasts_by_fecha(db, fecha)
     logger.info("Deleted by fecha=%s count=%d", fecha, count)
-    return DeletedCountResponse(
-        deleted=count, message=f"{count} pronósticos eliminados de {fecha}"
-    )
+    return DeletedCountResponse(deleted=count, message=f"{count} pronósticos eliminados de {fecha}")
 
 
 @router.delete("/{forecast_id}", response_model=DeletedCountResponse)
@@ -257,6 +255,4 @@ async def delete_forecast(
     """
     await crud.forecast.delete_forecast(db, forecast_id)
     logger.info("Deleted forecast id=%d", forecast_id)
-    return DeletedCountResponse(
-        deleted=1, message=f"Pronóstico {forecast_id} eliminado"
-    )
+    return DeletedCountResponse(deleted=1, message=f"Pronóstico {forecast_id} eliminado")

@@ -3,6 +3,7 @@
 Cubren formateo numerico, tarjetas KPI generales y el boton de descarga.
 Ningun helper aqui debe contener narrativa de negocio: solo wrapping HTML.
 """
+
 from __future__ import annotations
 
 from html import escape
@@ -65,8 +66,8 @@ def kpi_card(label: str, value: str, sub: str = "", flavor: str = "") -> str:
         f'<div class="{cls}">'
         f'<div class="label">{escape(label)}</div>'
         f'<div class="value">{escape(value)}</div>'
-        f'{sub_html}'
-        f'</div>'
+        f"{sub_html}"
+        f"</div>"
     )
 
 
@@ -78,7 +79,7 @@ def download_button(excel_path: str | None, variety: str) -> str:
             '<span class="icon">⬇</span>'
             '<span><span class="label-main">Excel no disponible</span>'
             '<span class="label-sub">faltan columnas KG/JR · H-EF</span></span>'
-            '</a>'
+            "</a>"
         )
     rel = Path(excel_path).name
     return (
@@ -86,5 +87,5 @@ def download_button(excel_path: str | None, variety: str) -> str:
         f'<span class="icon">⬇</span>'
         f'<span><span class="label-main">Descargar Excel completo</span>'
         f'<span class="label-sub">{escape(rel)} · variedad {escape(variety)}</span></span>'
-        f'</a>'
+        f"</a>"
     )

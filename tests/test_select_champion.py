@@ -4,6 +4,7 @@ El gate del campeon es gap_rel = |gap| / MAE_test <= CHAMPION_MAX_GAP_REL
 (adimensional, comparable entre variedades con targets de escala distinta).
 Lex-order: gate -> menor MAPE OOF (tolerancia 0.5pp) -> menor tiempo.
 """
+
 from __future__ import annotations
 
 from src.config import CHAMPION_MAX_GAP_REL
@@ -39,9 +40,7 @@ def test_gate_es_invariante_a_escala_del_target():
     chico = _resultado("chico", gap=0.10, mae_test=1.0, mape_oof=15.0)
     grande = _resultado("grande", gap=10.0, mae_test=100.0, mape_oof=15.0)
     assert abs(chico.gap_rel - grande.gap_rel) < 1e-12
-    assert (chico.gap_rel <= CHAMPION_MAX_GAP_REL) == (
-        grande.gap_rel <= CHAMPION_MAX_GAP_REL
-    )
+    assert (chico.gap_rel <= CHAMPION_MAX_GAP_REL) == (grande.gap_rel <= CHAMPION_MAX_GAP_REL)
 
 
 def test_menor_mape_oof_gana_si_ambos_pasan_gate():
@@ -52,8 +51,6 @@ def test_menor_mape_oof_gana_si_ambos_pasan_gate():
 
 def test_empate_practico_de_mape_lo_decide_el_tiempo():
     # Diferencia 0.3pp (< tolerancia 0.5pp) -> gana el mas rapido.
-    lento = _resultado("lento", gap=0.10, mae_test=1.0, mape_oof=14.0,
-                       elapsed=900.0)
-    rapido = _resultado("rapido", gap=0.10, mae_test=1.0, mape_oof=14.3,
-                        elapsed=100.0)
+    lento = _resultado("lento", gap=0.10, mae_test=1.0, mape_oof=14.0, elapsed=900.0)
+    rapido = _resultado("rapido", gap=0.10, mae_test=1.0, mape_oof=14.3, elapsed=100.0)
     assert select_champion([lento, rapido]) is rapido

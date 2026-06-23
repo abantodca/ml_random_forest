@@ -45,6 +45,4 @@ def render_search_filters(all_variety_names: list[str]) -> SearchCriteria:
                 key="filter_limit",
             )
         submitted = st.form_submit_button("🔍 Buscar", type="primary")
-    return SearchCriteria(
-        variety=variety, fecha=fecha, limit=int(limit), submitted=submitted
-    )
+    return SearchCriteria(variety=variety, fecha=fecha, limit=int(limit), submitted=submitted)

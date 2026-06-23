@@ -18,6 +18,7 @@ Se mantienen como alias para no romper consumidores externos durante la
 transicion. Devuelven los mismos numeros que la implementacion original
 (la logica fue movida tal cual a `diagnostics`).
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -39,9 +40,9 @@ from src.diagnostics.statistical_tests import (  # noqa: F401
 class MetricCI:
     """Estimador puntual + IC bootstrap de una metrica."""
 
-    point: float           # estimador sobre la muestra completa
-    ci_low: float          # percentil alpha/2 de los resamples
-    ci_high: float         # percentil 1-alpha/2 de los resamples
+    point: float  # estimador sobre la muestra completa
+    ci_low: float  # percentil alpha/2 de los resamples
+    ci_high: float  # percentil 1-alpha/2 de los resamples
     n_resamples: int
     alpha: float
 
@@ -84,8 +85,9 @@ def bootstrap_metric_ci(
     point = float(metric_fn(y_true, y_pred))
     ci_low = float(np.percentile(resampled, 100 * alpha / 2))
     ci_high = float(np.percentile(resampled, 100 * (1 - alpha / 2)))
-    return MetricCI(point=point, ci_low=ci_low, ci_high=ci_high,
-                    n_resamples=n_resamples, alpha=alpha)
+    return MetricCI(
+        point=point, ci_low=ci_low, ci_high=ci_high, n_resamples=n_resamples, alpha=alpha
+    )
 
 
 def conformal_intervals(
@@ -151,11 +153,16 @@ def calibration_bins(
 
     bins = pd.qcut(y_pred, q=n_bins, labels=False, duplicates="drop")
     df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "bin": bins})
-    out = df.groupby("bin", observed=True).agg(
-        bin_pred_mean=("y_pred", "mean"),
-        bin_real_mean=("y_true", "mean"),
-        bin_count=("y_true", "size"),
-    ).reset_index().rename(columns={"bin": "bin_idx"})
+    out = (
+        df.groupby("bin", observed=True)
+        .agg(
+            bin_pred_mean=("y_pred", "mean"),
+            bin_real_mean=("y_true", "mean"),
+            bin_count=("y_true", "size"),
+        )
+        .reset_index()
+        .rename(columns={"bin": "bin_idx"})
+    )
     out["bin_diff_pct"] = np.where(
         out["bin_pred_mean"] != 0,
         (out["bin_real_mean"] - out["bin_pred_mean"]) / out["bin_pred_mean"] * 100,

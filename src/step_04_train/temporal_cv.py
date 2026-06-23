@@ -25,6 +25,7 @@ Uso (como outer CV en `tuning.py`):
     for train_idx, test_idx in outer_cv.split(X):
         ...
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable

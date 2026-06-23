@@ -9,6 +9,7 @@ reutilizable. Extraerla aqui permite:
 - Testear unitariamente el balanceo de pesos.
 - Llamarla desde scripts/notebooks de exploracion.
 """
+
 from __future__ import annotations
 
 import numpy as np

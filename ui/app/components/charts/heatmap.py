@@ -36,18 +36,16 @@ def build_metrics_heatmap(
             # Escala continua perceptual (claro→oscuro) con buen contraste
             # de los números negros en cualquier celda.
             colorscale=[
-                [0.00, "#EEF2FF"],   # indigo-50
-                [0.25, "#C7D2FE"],   # indigo-200
-                [0.50, "#A5B4FC"],   # indigo-300
-                [0.75, "#818CF8"],   # indigo-400
-                [1.00, "#6366F1"],   # indigo-500
+                [0.00, "#EEF2FF"],  # indigo-50
+                [0.25, "#C7D2FE"],  # indigo-200
+                [0.50, "#A5B4FC"],  # indigo-300
+                [0.75, "#818CF8"],  # indigo-400
+                [1.00, "#6366F1"],  # indigo-500
             ],
             text=z,
             texttemplate="<b>%{text:.2f}</b>" if not is_empty else "",
             textfont=dict(size=13, color=TEMA["text"], family="Inter, sans-serif"),
-            hovertemplate=(
-                "Variedad: %{x}<br>Métrica: %{y}<br>Valor: %{z:.2f}<extra></extra>"
-            ),
+            hovertemplate=("Variedad: %{x}<br>Métrica: %{y}<br>Valor: %{z:.2f}<extra></extra>"),
             colorbar=dict(
                 thickness=10,
                 len=0.7,

@@ -9,6 +9,7 @@
 Cada `build_*` recibe primitivos / dataclasses listos (no hace I/O ni
 calculos pesados) y devuelve un fragmento HTML escapado.
 """
+
 from __future__ import annotations
 
 import math
@@ -47,7 +48,7 @@ def _hero_kpi_chip(label: str, value: str, status: str, sub: str = "") -> str:
         f'<div class="hero-chip {escape(status)}">'
         f'<div class="chip-label">{escape(label)}</div>'
         f'<div class="chip-value">{escape(value)}</div>'
-        f'{sub_html}</div>'
+        f"{sub_html}</div>"
     )
 
 
@@ -64,27 +65,42 @@ def _hero_kpi_strip(
     """
     chips = []
     if oof_mape is not None and math.isfinite(oof_mape):
-        status = ("ok" if oof_mape <= KPI_PRECISION_HIGH_MAPE_PCT
-                  else "warn" if oof_mape <= KPI_PRECISION_MEDIUM_MAPE_PCT
-                  else "bad")
-        chips.append(_hero_kpi_chip(
-            "Error de predicción", f"{oof_mape:.1f}%", status,
-            "MAPE validado (OOF)",
-        ))
+        status = (
+            "ok"
+            if oof_mape <= KPI_PRECISION_HIGH_MAPE_PCT
+            else "warn"
+            if oof_mape <= KPI_PRECISION_MEDIUM_MAPE_PCT
+            else "bad"
+        )
+        chips.append(
+            _hero_kpi_chip(
+                "Error de predicción",
+                f"{oof_mape:.1f}%",
+                status,
+                "MAPE validado (OOF)",
+            )
+        )
     if oof_r2 is not None and math.isfinite(oof_r2):
         status = "ok" if oof_r2 >= 0.75 else "warn" if oof_r2 >= 0.5 else "bad"
-        chips.append(_hero_kpi_chip(
-            "Variabilidad explicada", f"{oof_r2 * 100:.0f}%", status, "R² (OOF)",
-        ))
+        chips.append(
+            _hero_kpi_chip(
+                "Variabilidad explicada",
+                f"{oof_r2 * 100:.0f}%",
+                status,
+                "R² (OOF)",
+            )
+        )
     gap_rel = champion.gap_rel
     if math.isfinite(gap_rel):
         passed = gap_rel <= CHAMPION_MAX_GAP_REL
-        chips.append(_hero_kpi_chip(
-            "Control de sobreajuste",
-            f"{'✓' if passed else '✗'} {gap_rel:.2f}",
-            "ok" if passed else "bad",
-            f"gap relativo · límite {CHAMPION_MAX_GAP_REL:.2f}",
-        ))
+        chips.append(
+            _hero_kpi_chip(
+                "Control de sobreajuste",
+                f"{'✓' if passed else '✗'} {gap_rel:.2f}",
+                "ok" if passed else "bad",
+                f"gap relativo · límite {CHAMPION_MAX_GAP_REL:.2f}",
+            )
+        )
     if not chips:
         return ""
     return f'<div class="hero-chips">{"".join(chips)}</div>'
@@ -143,23 +159,25 @@ def build_context_section(
     model_label = champion.model_type.upper()
     model_sub = f"de {champion.elapsed_seconds:.0f}s entrenamiento"
 
-    cards = "".join([
-        f'<div class="ctx-card"><div class="label">Cosechas analizadas</div>'
-        f'<div class="value">{ctx.n_rows:,}</div>'
-        f'<div class="sub">filas del histórico</div></div>',
-        f'<div class="ctx-card"><div class="label">Período cubierto</div>'
-        f'<div class="value">{escape(date_range)}</div>'
-        f'<div class="sub">rango de fechas</div></div>',
-        f'<div class="ctx-card"><div class="label">Fundos</div>'
-        f'<div class="value">{ctx.n_fundos}</div>'
-        f'<div class="sub">{escape(fundos_str)}</div></div>',
-        f'<div class="ctx-card"><div class="label">Formatos</div>'
-        f'<div class="value">{ctx.n_formatos}</div>'
-        f'<div class="sub">{escape(formatos_str)}</div></div>',
-        f'<div class="ctx-card"><div class="label">Modelo elegido</div>'
-        f'<div class="value">{escape(model_label)}</div>'
-        f'<div class="sub">{escape(model_sub)}</div></div>',
-    ])
+    cards = "".join(
+        [
+            f'<div class="ctx-card"><div class="label">Cosechas analizadas</div>'
+            f'<div class="value">{ctx.n_rows:,}</div>'
+            f'<div class="sub">filas del histórico</div></div>',
+            f'<div class="ctx-card"><div class="label">Período cubierto</div>'
+            f'<div class="value">{escape(date_range)}</div>'
+            f'<div class="sub">rango de fechas</div></div>',
+            f'<div class="ctx-card"><div class="label">Fundos</div>'
+            f'<div class="value">{ctx.n_fundos}</div>'
+            f'<div class="sub">{escape(fundos_str)}</div></div>',
+            f'<div class="ctx-card"><div class="label">Formatos</div>'
+            f'<div class="value">{ctx.n_formatos}</div>'
+            f'<div class="sub">{escape(formatos_str)}</div></div>',
+            f'<div class="ctx-card"><div class="label">Modelo elegido</div>'
+            f'<div class="value">{escape(model_label)}</div>'
+            f'<div class="sub">{escape(model_sub)}</div></div>',
+        ]
+    )
     return f"""
     <section>
       <div class="eyebrow">Contexto del entrenamiento</div>
@@ -174,8 +192,7 @@ def _kpi_mega_card(kpi: PlainKPI, icon: str) -> str:
     score_pill = ""
     if kpi.score_label not in ("—", ""):
         score_pill = (
-            f'<span class="score-pill {escape(kpi.score_label)}">'
-            f'{escape(kpi.score_label)}</span>'
+            f'<span class="score-pill {escape(kpi.score_label)}">{escape(kpi.score_label)}</span>'
         )
     return f"""
     <div class="kpi-mega">
@@ -201,11 +218,7 @@ def build_mega_kpis(
     k1 = kpi_precision(abs_errors, full_mape)
     k2 = kpi_explanatory_power(full_r2)
     k3 = kpi_vs_baseline(real, pred)
-    cards = (
-        _kpi_mega_card(k1, "🎯")
-        + _kpi_mega_card(k2, "📊")
-        + _kpi_mega_card(k3, "📈")
-    )
+    cards = _kpi_mega_card(k1, "🎯") + _kpi_mega_card(k2, "📊") + _kpi_mega_card(k3, "📈")
     return f"""
     <section>
       <div class="eyebrow">Las preguntas que importan</div>
@@ -254,14 +267,14 @@ def build_bias_section(fundo_bias: list[GroupBias]) -> str:
     if not fundo_bias:
         return ""
     rows = "".join(
-        f'<tr>'
-        f'<td>{escape(b.group_value)}</td>'
-        f'<td>{b.n}</td>'
+        f"<tr>"
+        f"<td>{escape(b.group_value)}</td>"
+        f"<td>{b.n}</td>"
         f'<td class="{"sub" if b.direction == "subestima" else "sobre"}">'
-        f'{b.direction.upper()} {abs(b.bias_pct_of_real_mean):.1f}%'
-        f'</td>'
-        f'<td>{b.mean_signed_bias:+.2f} kg/jornal</td>'
-        f'</tr>'
+        f"{b.direction.upper()} {abs(b.bias_pct_of_real_mean):.1f}%"
+        f"</td>"
+        f"<td>{b.mean_signed_bias:+.2f} kg/jornal</td>"
+        f"</tr>"
         for b in fundo_bias
     )
     return f"""
@@ -297,12 +310,17 @@ _FF_MIN_N = 5
 
 
 def _group_error_rows(
-    groups: pd.Series, abs_err: np.ndarray, real: np.ndarray,
+    groups: pd.Series,
+    abs_err: np.ndarray,
+    real: np.ndarray,
 ) -> list[dict]:
     """[{label, n, mape, ratio}] por categoria, ordenado por MAPE desc."""
     nz_all = real != 0
-    mape_g = (float(np.mean(abs_err[nz_all] / np.abs(real[nz_all])) * 100)
-              if nz_all.any() else float("nan"))
+    mape_g = (
+        float(np.mean(abs_err[nz_all] / np.abs(real[nz_all])) * 100)
+        if nz_all.any()
+        else float("nan")
+    )
     rows: list[dict] = []
     for cat in groups.dropna().unique():
         if str(cat) in ("", "nan", "<NA>", "None"):
@@ -314,10 +332,8 @@ def _group_error_rows(
         if not nz.any():
             continue
         mape = float(np.mean(abs_err[nz] / np.abs(real[nz])) * 100)
-        ratio = (mape / mape_g if math.isfinite(mape_g) and mape_g > 0
-                 else float("nan"))
-        rows.append({"label": str(cat), "n": int(mask.sum()),
-                     "mape": mape, "ratio": ratio})
+        ratio = mape / mape_g if math.isfinite(mape_g) and mape_g > 0 else float("nan")
+        rows.append({"label": str(cat), "n": int(mask.sum()), "mape": mape, "ratio": ratio})
     rows.sort(key=lambda r: r["mape"], reverse=True)
     return rows
 
@@ -343,7 +359,7 @@ def _group_error_table(title: str, rows: list[dict]) -> str:
         f'<td class="num">{r["n"]:,}</td>'
         f'<td class="num">{r["mape"]:.1f}%</td>'
         f'<td class="num">{pill(r["ratio"])}</td>'
-        f'</tr>'
+        f"</tr>"
         for r in rows
     )
     return f"""
@@ -373,22 +389,28 @@ def build_fundo_formato_section(
     saca del detalle tecnico colapsado y los pone a la vista de gerencia
     con el ratio vs el promedio global.
     """
-    if (X_aligned is None or not hasattr(X_aligned, "columns")
-            or len(X_aligned) != abs_err.size or real.size != abs_err.size
-            or abs_err.size == 0):
+    if (
+        X_aligned is None
+        or not hasattr(X_aligned, "columns")
+        or len(X_aligned) != abs_err.size
+        or real.size != abs_err.size
+        or abs_err.size == 0
+    ):
         return ""
 
     tables = []
     if "FUNDO" in X_aligned.columns:
         rows = _group_error_rows(
             X_aligned["FUNDO"].astype(str).reset_index(drop=True),
-            abs_err, real,
+            abs_err,
+            real,
         )
         tables.append(_group_error_table("Error por FUNDO", rows))
     if "FORMATO" in X_aligned.columns:
         rows = _group_error_rows(
             X_aligned["FORMATO"].astype(str).reset_index(drop=True),
-            abs_err, real,
+            abs_err,
+            real,
         )
         tables.append(_group_error_table("Error por FORMATO", rows))
     tables = [t for t in tables if t]
@@ -417,7 +439,8 @@ def _backend_row_html(r: ModelResult, champion: ModelResult) -> str:
     gap_rel = r.gap_rel
     gate_ok = math.isfinite(gap_rel) and gap_rel <= CHAMPION_MAX_GAP_REL
     gate_pill = (
-        '<span class="ratio-pill good">✓ pasa</span>' if gate_ok
+        '<span class="ratio-pill good">✓ pasa</span>'
+        if gate_ok
         else '<span class="ratio-pill bad">✗ falla</span>'
     )
     oof_mape = _oof_mape_of(r)
@@ -429,19 +452,18 @@ def _backend_row_html(r: ModelResult, champion: ModelResult) -> str:
     gap_rel_str = f"{gap_rel:.2f}" if math.isfinite(gap_rel) else "—"
     oof_mape_str = f"{oof_mape:.2f}%" if math.isfinite(oof_mape) else "—"
     delta_mape_str = (
-        "—" if is_champ
-        else (f"{delta_mape:+.2f} pp" if math.isfinite(delta_mape) else "—")
+        "—" if is_champ else (f"{delta_mape:+.2f} pp" if math.isfinite(delta_mape) else "—")
     )
     delta_time_str = "—" if is_champ else f"{delta_time:+.0f}s"
     return (
         f'<tr class="{klass}">'
-        f'<td>{crown}{escape(r.model_type.upper())}</td>'
-        f'<td>{gap_rel_str} {gate_pill}</td>'
-        f'<td>{oof_mape_str}</td>'
-        f'<td>{delta_mape_str}</td>'
-        f'<td>{r.elapsed_seconds:.0f}s</td>'
-        f'<td>{delta_time_str}</td>'
-        f'</tr>'
+        f"<td>{crown}{escape(r.model_type.upper())}</td>"
+        f"<td>{gap_rel_str} {gate_pill}</td>"
+        f"<td>{oof_mape_str}</td>"
+        f"<td>{delta_mape_str}</td>"
+        f"<td>{r.elapsed_seconds:.0f}s</td>"
+        f"<td>{delta_time_str}</td>"
+        f"</tr>"
     )
 
 
@@ -461,10 +483,10 @@ def _temporal_check_note(champion: ModelResult) -> str:
     r2_str = f" · R² temporal: {float(t_r2):.2f}" if t_r2 is not None else ""
     return (
         f'<p class="lead" style="margin-top:12px;font-size:12.5px;">'
-        f'<b>Chequeo de honestidad temporal:</b> si el modelo tuviera que '
-        f'pronosticar un año completo nunca visto, el error subiría a '
-        f'<b>{float(t_mape):.1f}%</b>{r2_str}. El MAPE principal mide el uso '
-        f'real (operar dentro de la temporada con historia disponible).</p>'
+        f"<b>Chequeo de honestidad temporal:</b> si el modelo tuviera que "
+        f"pronosticar un año completo nunca visto, el error subiría a "
+        f"<b>{float(t_mape):.1f}%</b>{r2_str}. El MAPE principal mide el uso "
+        f"real (operar dentro de la temporada con historia disponible).</p>"
     )
 
 
@@ -484,8 +506,7 @@ def build_backends_comparison_section(
         _backend_row_html(r, champion)
         for r in sorted(
             results,
-            key=lambda x: (_oof_mape_of(x) if math.isfinite(_oof_mape_of(x))
-                           else float("inf")),
+            key=lambda x: _oof_mape_of(x) if math.isfinite(_oof_mape_of(x)) else float("inf"),
         )
     )
     return f"""
@@ -564,7 +585,7 @@ def _heteroscedasticity_block_html(heteroscedasticity) -> str:
         f'<div class="body-wrap">'
         f'<div class="title">{escape(title)}</div>'
         f'<div class="body">{escape(heteroscedasticity.note)}</div>'
-        f'</div></div>'
+        f"</div></div>"
     )
 
 
@@ -574,6 +595,7 @@ def _calibration_block_html(calibration_df) -> str:
         return ""
     try:
         from src.step_05_evaluate.diagnostics import plot_calibration_plotly
+
         return plot_calibration_plotly(calibration_df)
     except Exception:
         return ""
@@ -705,7 +727,7 @@ def _metrics_cards_html(kpis: dict) -> str:
         f'<div class="ctx-card"><div class="label">p99 (cola)</div>'
         f'<div class="value">{p99:.2f}</div>'
         f'<div class="sub">kg/jornal · casos extremos</div></div>'
-        '</div>'
+        "</div>"
     )
 
 
@@ -752,17 +774,17 @@ def _top_errors_table_html(
         fecha, fundo, formato = _extract_row_context(X_aligned, i, has_X)
         signo = "↑ sobreestima" if pred_arr[i] > real_arr[i] else "↓ subestima"
         rows_html += (
-            f'<tr>'
+            f"<tr>"
             f'<td class="num">{rank}</td>'
-            f'<td>{escape(fecha)}</td>'
-            f'<td>{escape(fundo)}</td>'
-            f'<td>{escape(formato)}</td>'
+            f"<td>{escape(fecha)}</td>"
+            f"<td>{escape(fundo)}</td>"
+            f"<td>{escape(formato)}</td>"
             f'<td class="num">{real_arr[i]:.2f}</td>'
             f'<td class="num">{pred_arr[i]:.2f}</td>'
             f'<td class="num">{abs_err[i]:.2f}</td>'
             f'<td class="num">{pct_err[i]:.1f}%</td>'
-            f'<td>{signo}</td>'
-            f'</tr>'
+            f"<td>{signo}</td>"
+            f"</tr>"
         )
     return f"""
     <table class="backends-table" style="margin-top:8px">
@@ -798,6 +820,7 @@ def _error_plots_html(
         plot_error_over_time_plotly,
         plot_residuals_vs_predicted_plotly,
     )
+
     hist_html = plot_error_histogram_plotly(abs_err, p50, p90, p99)
     resid_html = plot_residuals_vs_predicted_plotly(pred_arr, residuals)
 
@@ -805,7 +828,8 @@ def _error_plots_html(
     if has_X and "FECHA" in X_aligned.columns:
         try:
             time_html = plot_error_over_time_plotly(
-                X_aligned["FECHA"].to_numpy(), abs_err,
+                X_aligned["FECHA"].to_numpy(),
+                abs_err,
             )
         except Exception:
             time_html = ""
@@ -817,14 +841,15 @@ def _excel_link_html(excel_path: str | None, n: int) -> str:
     if not excel_path:
         return ""
     from pathlib import Path as _P
+
     fname = _P(excel_path).name
     return (
         f'<p style="margin-top:8px;font-size:12px;color:#475569">'
-        f'Para inspeccionar las {n:,} filas con sus errores fila por fila, '
-        f'abri la hoja <b>Predicciones_OOF</b> en el Excel adjunto: '
+        f"Para inspeccionar las {n:,} filas con sus errores fila por fila, "
+        f"abri la hoja <b>Predicciones_OOF</b> en el Excel adjunto: "
         f'<a href="{escape(fname)}" download style="color:#1f4e8a;'
         f'text-decoration:none;border-bottom:1px dashed #1f4e8a">'
-        f'{escape(fname)}</a>.</p>'
+        f"{escape(fname)}</a>.</p>"
     )
 
 
@@ -853,17 +878,28 @@ def build_errors_detail_section(
 
     metrics_cards = _metrics_cards_html(kpis)
 
-    has_X = (X_aligned is not None
-             and hasattr(X_aligned, "iloc")
-             and len(X_aligned) == n)
+    has_X = X_aligned is not None and hasattr(X_aligned, "iloc") and len(X_aligned) == n
 
     order = _compute_top_worst_errors(abs_err, top_n)
     table_html = _top_errors_table_html(
-        order, real_arr, pred_arr, abs_err, pct_err, X_aligned, has_X,
+        order,
+        real_arr,
+        pred_arr,
+        abs_err,
+        pct_err,
+        X_aligned,
+        has_X,
     )
 
     hist_html, resid_html, time_html = _error_plots_html(
-        abs_err, pred_arr, residuals, p50, p90, p99, X_aligned, has_X,
+        abs_err,
+        pred_arr,
+        residuals,
+        p50,
+        p90,
+        p99,
+        X_aligned,
+        has_X,
     )
 
     excel_link = _excel_link_html(excel_path, n)
@@ -896,10 +932,10 @@ def build_errors_detail_section(
         tiempo (¿el modelo se está degradando?).
       </p>
       <div class="charts-grid">
-        {f'<div class="chart-block">{hist_html}</div>' if hist_html else ''}
-        {f'<div class="chart-block">{resid_html}</div>' if resid_html else ''}
+        {f'<div class="chart-block">{hist_html}</div>' if hist_html else ""}
+        {f'<div class="chart-block">{resid_html}</div>' if resid_html else ""}
       </div>
-      {f'<div class="chart-block" style="margin-top:8px">{time_html}</div>' if time_html else ''}
+      {f'<div class="chart-block" style="margin-top:8px">{time_html}</div>' if time_html else ""}
     </section>
     """
 
@@ -922,10 +958,12 @@ def build_diagnostic_links_section(
     if not rdir.exists():
         return ""
 
-    eda_candidates = sorted(rdir.glob(f"EDA_{variety}_*.html"),
-                            key=lambda p: p.stat().st_mtime, reverse=True)
-    residual_candidates = sorted(rdir.glob(f"residuals_{variety}_*.html"),
-                                 key=lambda p: p.stat().st_mtime, reverse=True)
+    eda_candidates = sorted(
+        rdir.glob(f"EDA_{variety}_*.html"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    residual_candidates = sorted(
+        rdir.glob(f"residuals_{variety}_*.html"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
 
     cards = []
     if eda_candidates:
@@ -936,8 +974,8 @@ def build_diagnostic_links_section(
             f'<div class="diag-meta">'
             f'<div class="diag-title">EDA — Analisis del dataset</div>'
             f'<div class="diag-sub">Forma de las variables · ciclos temporales · '
-            f'colinealidad · informacion vs target · cambios entre años</div>'
-            f'</div></a>'
+            f"colinealidad · informacion vs target · cambios entre años</div>"
+            f"</div></a>"
         )
     if residual_candidates:
         # Mostrar todos los modelos (xgb_v1, lgb_v3, etc.)
@@ -949,8 +987,8 @@ def build_diagnostic_links_section(
                 f'<div class="diag-meta">'
                 f'<div class="diag-title">Diagnostico de errores — {escape(label)}</div>'
                 f'<div class="diag-sub">¿El error se distribuye uniforme? '
-                f'¿Quedan patrones temporales? ¿Es normal o hay sesgo?</div>'
-                f'</div></a>'
+                f"¿Quedan patrones temporales? ¿Es normal o hay sesgo?</div>"
+                f"</div></a>"
             )
 
     if not cards:
@@ -965,7 +1003,7 @@ def build_diagnostic_links_section(
         <code>reports/</code> y como artifacts en MLflow.
       </p>
       <div class="diag-grid">
-        {''.join(cards)}
+        {"".join(cards)}
       </div>
     </section>
     """
@@ -978,7 +1016,7 @@ def build_actions_section(actions: list[Action]) -> str:
         f'<div class="body-wrap">'
         f'<div class="title">{escape(a.title)}</div>'
         f'<div class="body">{escape(a.body)}</div>'
-        f'</div></div>'
+        f"</div></div>"
         for a in actions
     )
     return f"""

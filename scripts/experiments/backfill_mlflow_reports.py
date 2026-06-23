@@ -21,9 +21,7 @@ client = MlflowClient()
 # Run de registro del modelo (rnd-forest-POP v1) — también recibe los reportes
 # para que sean visibles desde el Model Registry.
 reg_runs = [
-    v.run_id
-    for v in client.search_model_versions("name='rnd-forest-POP'")
-    if v.version == "1"
+    v.run_id for v in client.search_model_versions("name='rnd-forest-POP'") if v.version == "1"
 ]
 targets = [CHAMPION_RUN] + [r for r in reg_runs if r != CHAMPION_RUN]
 

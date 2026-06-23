@@ -35,8 +35,9 @@ with _c1:
 with _c2:
     kpi_card("Con modelo", str(_cov.n_with_model), icon="🤖", variant=_cov.with_model_variant)
 with _c3:
-    kpi_card("Pendientes", str(_cov.pending), icon="⏳",
-             variant="warning" if _cov.pending else "success")
+    kpi_card(
+        "Pendientes", str(_cov.pending), icon="⏳", variant="warning" if _cov.pending else "success"
+    )
 with _c4:
     kpi_card("Cobertura", f"{_cov.coverage_pct:.0f}%", icon="📈", variant=_cov.coverage_variant)
 
@@ -86,8 +87,12 @@ _detail = build_detail_vm(_vm)
 
 _m1, _m2, _m3, _m4, _m5 = st.columns(5)
 with _m1:
-    insight_card("Algoritmo", _vm.model_type.upper(),
-                 f"Versión <strong>v{_vm.version or '—'}</strong>", "primary")
+    insight_card(
+        "Algoritmo",
+        _vm.model_type.upper(),
+        f"Versión <strong>v{_vm.version or '—'}</strong>",
+        "primary",
+    )
 with _m2:
     insight_card("Test R²", f"{_vm.r2:.3f}", "Varianza explicada (OOF)", _detail.r2_variant)
 with _m3:
@@ -104,16 +109,28 @@ if _gaps.has_train:
     _g1, _g2, _g3 = st.columns(3)
     with _g1:
         if _gaps.train_mae is not None and _gaps.test_mae is not None:
-            insight_card("MAE train", f"{_gaps.train_mae:.3f}",
-                         f"test: {_gaps.test_mae:.3f}", _gaps.mae_card_variant)
+            insight_card(
+                "MAE train",
+                f"{_gaps.train_mae:.3f}",
+                f"test: {_gaps.test_mae:.3f}",
+                _gaps.mae_card_variant,
+            )
     with _g2:
         if _gaps.train_r2 is not None and _gaps.test_r2 is not None:
-            insight_card("R² train", f"{_gaps.train_r2:.3f}",
-                         f"test: {_gaps.test_r2:.3f}", _gaps.r2_card_variant)
+            insight_card(
+                "R² train",
+                f"{_gaps.train_r2:.3f}",
+                f"test: {_gaps.test_r2:.3f}",
+                _gaps.r2_card_variant,
+            )
     with _g3:
         if _gaps.mae_gap_rel is not None:
-            insight_card("Gap MAE relativo", f"{_gaps.mae_gap_rel * 100:+.1f}%",
-                         "positivo → train < test (sobreajuste)", _gaps.gap_card_variant)
+            insight_card(
+                "Gap MAE relativo",
+                f"{_gaps.mae_gap_rel * 100:+.1f}%",
+                "positivo → train < test (sobreajuste)",
+                _gaps.gap_card_variant,
+            )
 else:
     st.caption(
         "ℹ️ Métricas `train_mae`/`train_r2` no disponibles en este registro. "

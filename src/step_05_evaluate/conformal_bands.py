@@ -22,6 +22,7 @@ La metadata se ADJUNTA al pipeline final como atributo `conformal_`
 (dict plano, pickle-safe) en single_run; la API la lee si existe y cae a
 la heuristica de std solo con modelos legacy.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -79,9 +80,7 @@ def build_conformal_metadata(
             q_by_fundo[str(f)] = _q(res_f)
 
     ff_keys = (
-        fundo.reset_index(drop=True).astype(str)
-        + "__"
-        + formato.reset_index(drop=True).astype(str)
+        fundo.reset_index(drop=True).astype(str) + "__" + formato.reset_index(drop=True).astype(str)
     )
     counts = ff_keys.value_counts()
     known_ff = sorted(counts[counts >= MIN_FF_KNOWN].index.tolist())

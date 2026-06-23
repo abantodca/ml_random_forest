@@ -12,6 +12,7 @@ Nota: el pipeline SIEMPRE entrena todos los backends del registry
 `champion.select_champion`. No hay flag de usuario para forzar un modelo:
 ese es el contrato del proyecto (la maquina elige, no el operador).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -156,8 +157,7 @@ def resolve_varieties(arg: str) -> list[str]:
     unknown = [v for v in requested if v not in available_set]
     if unknown:
         print(
-            f"error: variedades desconocidas: {unknown}. "
-            f"Validas: {available}",
+            f"error: variedades desconocidas: {unknown}. Validas: {available}",
             file=sys.stderr,
         )
         sys.exit(2)

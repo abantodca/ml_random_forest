@@ -93,10 +93,7 @@ def sync_to_s3(
             extensions=(".html", ".xlsx"),
         )
 
-        logger.info(
-            f"S3 sync OK | bucket={bucket} | "
-            f"artifacts={n_artifacts} | reports={n_reports}"
-        )
+        logger.info(f"S3 sync OK | bucket={bucket} | artifacts={n_artifacts} | reports={n_reports}")
         logger.info(
             f"  artifacts -> s3://{bucket}/{artifacts_prefix}/\n"
             f"  reports   -> s3://{bucket}/{reports_prefix}/"
@@ -104,7 +101,5 @@ def sync_to_s3(
         return True
 
     except Exception as exc:
-        logger.error(
-            f"S3 sync FALLO (el training se guardo en disco igualmente): {exc}"
-        )
+        logger.error(f"S3 sync FALLO (el training se guardo en disco igualmente): {exc}")
         return False

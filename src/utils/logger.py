@@ -1,4 +1,5 @@
 """Setup del logger con salida a archivo y consola."""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,9 @@ from typing import Any
 from src.config import LOGS_DIR
 
 _DEFAULT_NAME = "ml_pipeline"
-_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)s | %(filename)s:%(lineno)d:%(funcName)s | %(message)s"
+_FORMAT = (
+    "%(asctime)s | %(levelname)-7s | %(name)s | %(filename)s:%(lineno)d:%(funcName)s | %(message)s"
+)
 
 _BUSINESS_AUDIT_FILE = LOGS_DIR / "business_audit.jsonl"
 
@@ -57,7 +60,7 @@ def setup_logging(
     if not file_path.is_absolute():
         file_path = LOGS_DIR / file_path
 
-    target_root = (name == _DEFAULT_NAME)
+    target_root = name == _DEFAULT_NAME
     # Cuando es el target principal, los handlers viven en el ROOT para que
     # cualquier `logging.getLogger(__name__)` los herede sin tocar nada.
     target = logging.getLogger() if target_root else logging.getLogger(name)
@@ -67,8 +70,7 @@ def setup_logging(
     # agregamos otro. Esto deja al usuario re-llamar setup_logging() sin
     # duplicar lineas.
     have_file = any(
-        isinstance(h, logging.FileHandler)
-        and Path(getattr(h, "baseFilename", "")) == file_path
+        isinstance(h, logging.FileHandler) and Path(getattr(h, "baseFilename", "")) == file_path
         for h in target.handlers
     )
     if not have_file:
@@ -156,8 +158,7 @@ def log_business_audit(
         "metrics_kg_jr_oof": {k: float(v) for k, v in moof.items()},
         "metrics_kg_jr_insample": {k: float(v) for k, v in mins.items()},
         "best_params": {
-            k: (float(v) if isinstance(v, (int, float)) else str(v))
-            for k, v in best_params.items()
+            k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in best_params.items()
         },
     }
 

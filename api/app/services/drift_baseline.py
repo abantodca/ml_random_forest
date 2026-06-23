@@ -36,7 +36,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 NUMERIC_FEATURES: tuple[str, ...] = (
-    "KG/HA", "%INDUS", "DPC", "P/BAYA", "HA", "DIA_COSECHA",
+    "KG/HA",
+    "%INDUS",
+    "DPC",
+    "P/BAYA",
+    "HA",
+    "DIA_COSECHA",
 )
 CATEGORICAL_FEATURES: tuple[str, ...] = ("FORMATO", "FUNDO")
 
@@ -67,12 +72,12 @@ class NumericBaseline:
     """
 
     center: float  # = p50 (mediana)
-    scale: float   # = IQR (p75 - p25), siempre > 0
+    scale: float  # = IQR (p75 - p25), siempre > 0
     p05: float
     p25: float
     p75: float
     p95: float
-    source: str    # "history" | "scaler"
+    source: str  # "history" | "scaler"
     samples: np.ndarray | None = None
 
 
@@ -99,7 +104,10 @@ class DriftBaselineExtractor:
     """
 
     def extract(
-        self, variety: str, run_id: str, pipeline: Any,
+        self,
+        variety: str,
+        run_id: str,
+        pipeline: Any,
     ) -> VarietyBaseline | None:
         history_df: pd.DataFrame | None = None
         scaler = None
@@ -138,7 +146,11 @@ class DriftBaselineExtractor:
                 outlier_upper = {str(k): float(v) for k, v in upper_attr.items()}
 
         numeric_baselines = self._build_numeric_baselines(
-            history_df, scaler, scaler_cols, outlier_lower, outlier_upper,
+            history_df,
+            scaler,
+            scaler_cols,
+            outlier_lower,
+            outlier_upper,
         )
         categorical_baselines = self._build_categorical_baselines(history_df)
 
@@ -148,7 +160,8 @@ class DriftBaselineExtractor:
         if not numeric_baselines and not categorical_baselines:
             logger.warning(
                 "DriftService: pipeline de '%s' no expuso baseline alguno;"
-                " drift quedará deshabilitado.", variety,
+                " drift quedará deshabilitado.",
+                variety,
             )
             return None
 
@@ -237,15 +250,15 @@ class DriftBaselineExtractor:
         ):
             values = history_df["KG/HA"].dropna().to_numpy(dtype=float)
             if len(values) >= MIN_HISTORY_SAMPLES:
-                p05, p25, p50, p75, p95 = np.percentile(
-                    values, [5, 25, 50, 75, 95]
-                )
+                p05, p25, p50, p75, p95 = np.percentile(values, [5, 25, 50, 75, 95])
                 iqr = max(float(p75 - p25), 1e-9)
                 # Sub-muestreo determinístico para K-S (cap en 50k filas).
                 if len(values) > _MAX_BASELINE_SAMPLES:
                     rng = np.random.default_rng(42)
                     samples = rng.choice(
-                        values, size=_MAX_BASELINE_SAMPLES, replace=False,
+                        values,
+                        size=_MAX_BASELINE_SAMPLES,
+                        replace=False,
                     )
                 else:
                     samples = values

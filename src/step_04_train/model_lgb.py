@@ -5,6 +5,7 @@ durante el fit (CV-safe: cap calculado en cada fold). El predict ya
 invierte al espacio original (KG/JR_H), asi que las metricas quedan
 en unidades del target.
 """
+
 from __future__ import annotations
 
 from sklearn.compose import TransformedTargetRegressor

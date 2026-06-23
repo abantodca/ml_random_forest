@@ -5,6 +5,7 @@ Backend unico: MLflow server con Postgres (metadata + Registry) + S3
 mismo URI apunta al server real. Model Registry siempre habilitado
 (Postgres lo soporta nativamente; el viejo modo file://mlruns no).
 """
+
 from __future__ import annotations
 
 import logging
@@ -187,8 +188,7 @@ def _safe_artifact_call(fn: Callable, op_name: str) -> Any:
         return fn()
     except MlflowException as exc:
         _logger.warning(
-            "MLflow %s fallo (artifact no subido; el archivo sigue en disco "
-            "local): %s",
+            "MLflow %s fallo (artifact no subido; el archivo sigue en disco local): %s",
             op_name,
             exc,
         )

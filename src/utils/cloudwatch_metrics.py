@@ -5,6 +5,7 @@ Solo se activa cuando el trainer corre dentro de AWS Batch (detectado via
 NO existe en local). En docker compose local es no-op silencioso, evitando
 contaminar el namespace prod con datos de smoke tests.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,12 +37,14 @@ def emit_mape_metric(variety: str, mape_value: float) -> None:
         cw = boto3.client("cloudwatch")
         cw.put_metric_data(
             Namespace=NAMESPACE,
-            MetricData=[{
-                "MetricName": "MAPE",
-                "Dimensions": [{"Name": "variety", "Value": variety}],
-                "Value":      float(mape_value),
-                "Unit":       "Percent",
-            }],
+            MetricData=[
+                {
+                    "MetricName": "MAPE",
+                    "Dimensions": [{"Name": "variety", "Value": variety}],
+                    "Value": float(mape_value),
+                    "Unit": "Percent",
+                }
+            ],
         )
         log.info("CloudWatch MAPE=%.4f emitido (variety=%s)", mape_value, variety)
     except Exception as exc:

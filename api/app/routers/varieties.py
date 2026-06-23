@@ -102,9 +102,7 @@ def get_variety_info(
     """
     info = mlflow.get_model_info(variety)  # {version, model_type, metrics, best_params}
     best_params = (
-        {"model_type": info.get("model_type"), **info.get("best_params", {})}
-        if info
-        else {}
+        {"model_type": info.get("model_type"), **info.get("best_params", {})} if info else {}
     )
 
     return VarietyInfo(

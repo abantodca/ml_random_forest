@@ -128,9 +128,7 @@ class MLflowService:
                     loaded += 1
             except Exception as exc:
                 failed += 1
-                logger.debug(
-                    "No se pudo cargar modelo '%s': %s", variety, exc, exc_info=True
-                )
+                logger.debug("No se pudo cargar modelo '%s': %s", variety, exc, exc_info=True)
 
         if loaded > 0:
             logger.info("✅ Precarga completada: %d modelos cargados", loaded)
@@ -168,14 +166,12 @@ class MLflowService:
                 # `experiment_prefix` debe incluir el separador final.
                 # Ej: prefix="productivity_" → "productivity_POP" -> "POP"
                 if model.name.startswith(self.experiment_prefix):
-                    variety = model.name[len(self.experiment_prefix):]
+                    variety = model.name[len(self.experiment_prefix) :]
                     available.append(variety)
 
             return sorted(available)
         except Exception as exc:
-            logger.error(
-                "Error consultando modelos disponibles: %s", exc, exc_info=True
-            )
+            logger.error("Error consultando modelos disponibles: %s", exc, exc_info=True)
             return []
 
     def is_loaded(self, variety: str) -> bool:
@@ -221,21 +217,19 @@ class MLflowService:
 
         for variety in available:
             try:
-                info = await loop.run_in_executor(
-                    None, self._reload_single_variety, variety
-                )
+                info = await loop.run_in_executor(None, self._reload_single_variety, variety)
                 models_info.append(info)
                 summary[info["status"]] += 1
             except Exception as exc:
-                logger.error(
-                    "Error recargando '%s': %s", variety, exc, exc_info=True
+                logger.error("Error recargando '%s': %s", variety, exc, exc_info=True)
+                models_info.append(
+                    {
+                        "variety": variety,
+                        "version": "N/A",
+                        "status": "failed",
+                        "message": str(exc),
+                    }
                 )
-                models_info.append({
-                    "variety": variety,
-                    "version": "N/A",
-                    "status": "failed",
-                    "message": str(exc),
-                })
                 summary["failed"] += 1
 
         self._log_reload_summary(summary)
@@ -369,14 +363,11 @@ class MLflowService:
             entries = client.list_artifacts(run_id, "winner_dashboard")
             htmls = [e.path for e in entries if e.path.lower().endswith(".html")]
             if not htmls:
-                raise FileNotFoundError(
-                    f"Sin .html en winner_dashboard del run {run_id}"
-                )
-            artifact_path = next(
-                (p for p in htmls if variety.upper() in p.upper()), htmls[0]
-            )
+                raise FileNotFoundError(f"Sin .html en winner_dashboard del run {run_id}")
+            artifact_path = next((p for p in htmls if variety.upper() in p.upper()), htmls[0])
             local = mlflow.artifacts.download_artifacts(
-                run_id=run_id, artifact_path=artifact_path,
+                run_id=run_id,
+                artifact_path=artifact_path,
             )
         except FileNotFoundError:
             raise
@@ -438,9 +429,7 @@ class MLflowService:
         run = client.get_run(latest.run_id)
         return latest, run
 
-    def get_latest_version_info(
-        self, variety: str
-    ) -> ModelVersionInfo | None:
+    def get_latest_version_info(self, variety: str) -> ModelVersionInfo | None:
         """Versión + run_id + params en una sola consulta a MLflow.
 
         Público porque colaboradores externos (p. ej. `DriftService`)
@@ -622,9 +611,7 @@ class MLflowService:
     def _log_reload_summary(self, summary: dict) -> None:
         """Registra el resumen de una operación de recarga."""
         if summary["loaded"] > 0 or summary["updated"] > 0:
-            logger.info(
-                "✅ %d nuevos, %d actualizados", summary["loaded"], summary["updated"]
-            )
+            logger.info("✅ %d nuevos, %d actualizados", summary["loaded"], summary["updated"])
         if summary["unchanged"] > 0:
             logger.info("⏭️  %d sin cambios", summary["unchanged"])
         if summary["failed"] > 0:

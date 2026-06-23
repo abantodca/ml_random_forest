@@ -18,6 +18,7 @@ inverse_transform, asi el modelo aguas abajo (XGB/LGB) recibe
 EXACTAMENTE los mismos valores que antes para filas sin NaN; solo las
 filas con NaN reciben imputaciones mas correctas.
 """
+
 from __future__ import annotations
 
 import os
@@ -60,9 +61,7 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
     # se recupera con 20.5% de error via mediana global vs 12.9% via KNN.
     # Subir IMPUTER_KNN_THRESHOLD a 0.45 mete P/BAYA al KNN (-37% error de
     # imputacion). Default 0.30 = legacy hasta validar en A/B.
-    _DEFAULT_FALLBACK_THRESHOLD = float(
-        os.environ.get("IMPUTER_KNN_THRESHOLD", "0.30")
-    )
+    _DEFAULT_FALLBACK_THRESHOLD = float(os.environ.get("IMPUTER_KNN_THRESHOLD", "0.30"))
 
     def __init__(
         self,
@@ -112,13 +111,15 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
         self.group_medians_: dict = {}
         self.fundo_medians_: dict = {}
         if (
-            IMPUTER_GROUP_MEDIAN and self.median_cols_
-            and "FUNDO" in X.columns and "FORMATO" in X.columns
+            IMPUTER_GROUP_MEDIAN
+            and self.median_cols_
+            and "FUNDO" in X.columns
+            and "FORMATO" in X.columns
         ):
             for col in self.median_cols_:
-                ff_med = X.groupby(
-                    [X["FUNDO"].astype(str), X["FORMATO"].astype(str)]
-                )[col].agg(["median", "count"])
+                ff_med = X.groupby([X["FUNDO"].astype(str), X["FORMATO"].astype(str)])[col].agg(
+                    ["median", "count"]
+                )
                 ok_ff = ff_med[ff_med["count"] >= self._GROUP_MEDIAN_MIN_OBS]
                 self.group_medians_[col] = {
                     f"{f}__{fmt}": m for (f, fmt), m in ok_ff["median"].items()
@@ -137,9 +138,7 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
             self._knn_fit_cols_ = cols
             X_knn = X[cols].copy()
             if self.median_cols_:
-                X_knn[self.median_cols_] = self.median_imputer_.transform(
-                    X[self.median_cols_]
-                )
+                X_knn[self.median_cols_] = self.median_imputer_.transform(X[self.median_cols_])
             # RobustScaler INTERNO: balancea las escalas para que la distancia
             # euclidiana del KNN no sea dominada por la columna de mayor rango
             # (KG/HA). El scaler ignora NaN al fit y mantiene NaN al transform,

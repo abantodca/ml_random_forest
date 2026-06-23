@@ -9,6 +9,7 @@ o cargarlo desde CDN segun `REPORT_PLOTLY_OFFLINE`. La constante
 `PLOTLY_JS_TAG` cachea el resultado para callers que solo necesitan el
 string ya construido.
 """
+
 from __future__ import annotations
 
 from src.config import REPORT_PLOTLY_OFFLINE
@@ -81,12 +82,11 @@ def plotly_js_tag() -> str:
         import gzip
 
         from plotly.offline import get_plotlyjs
-        b64 = base64.b64encode(
-            gzip.compress(get_plotlyjs().encode("utf-8"), 9)
-        ).decode("ascii")
+
+        b64 = base64.b64encode(gzip.compress(get_plotlyjs().encode("utf-8"), 9)).decode("ascii")
         return (
             f'<script id="plotly-gz" type="text/plain">{b64}</script>'
-            f'<script>{_GZ_LOADER_JS}</script>'
+            f"<script>{_GZ_LOADER_JS}</script>"
         )
     except Exception:
         return cdn_tag

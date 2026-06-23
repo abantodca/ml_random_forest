@@ -15,10 +15,10 @@ from app.schemas import VarietyViewModel
 # ── Umbrales de sobreajuste ───────────────────────────────────────────────────
 # MAE gap: (test_mae - train_mae) / test_mae  (positivo = train < test → sobreajuste)
 # R² gap:  train_r2 - test_r2                 (positivo = tren mejor que test)
-_OVERFIT_MAE_THR_WARN = 0.15   # gap relativo MAE > 15 % → warning
-_OVERFIT_MAE_THR_BAD = 0.30    # gap relativo MAE > 30 % → danger
-_OVERFIT_R2_THR_WARN = 0.08    # gap absoluto R² > 0.08 → warning
-_OVERFIT_R2_THR_BAD = 0.15     # gap absoluto R² > 0.15 → danger
+_OVERFIT_MAE_THR_WARN = 0.15  # gap relativo MAE > 15 % → warning
+_OVERFIT_MAE_THR_BAD = 0.30  # gap relativo MAE > 30 % → danger
+_OVERFIT_R2_THR_WARN = 0.08  # gap absoluto R² > 0.08 → warning
+_OVERFIT_R2_THR_BAD = 0.15  # gap absoluto R² > 0.15 → danger
 
 
 def short_param(key: str) -> str:
@@ -36,13 +36,11 @@ def _overfit_badge(mae_gap_rel: float | None, r2_gap: float | None) -> tuple[str
     if mae_gap_rel is None and r2_gap is None:
         return "Sin datos train", "info"
     # Combina ambos gaps: el peor determina el nivel
-    is_bad = (
-        (mae_gap_rel is not None and mae_gap_rel > _OVERFIT_MAE_THR_BAD)
-        or (r2_gap is not None and r2_gap > _OVERFIT_R2_THR_BAD)
+    is_bad = (mae_gap_rel is not None and mae_gap_rel > _OVERFIT_MAE_THR_BAD) or (
+        r2_gap is not None and r2_gap > _OVERFIT_R2_THR_BAD
     )
-    is_warn = (
-        (mae_gap_rel is not None and mae_gap_rel > _OVERFIT_MAE_THR_WARN)
-        or (r2_gap is not None and r2_gap > _OVERFIT_R2_THR_WARN)
+    is_warn = (mae_gap_rel is not None and mae_gap_rel > _OVERFIT_MAE_THR_WARN) or (
+        r2_gap is not None and r2_gap > _OVERFIT_R2_THR_WARN
     )
     if is_bad:
         return "Sobreajuste", "danger"
@@ -58,6 +56,7 @@ def _train_test_gaps(
 
     Devuelve None en cada posición cuando el metric no está disponible.
     """
+
     def _f(v: object) -> float | None:
         if v is None:
             return None
@@ -90,8 +89,8 @@ class CoverageVM:
     n_with_model: int
     pending: int
     coverage_pct: float
-    coverage_variant: str          # success / warning / danger
-    with_model_variant: str        # success / accent
+    coverage_variant: str  # success / warning / danger
+    with_model_variant: str  # success / accent
 
 
 @dataclass(frozen=True)
@@ -111,7 +110,7 @@ class GapsVM:
 @dataclass(frozen=True)
 class ParamGroupsVM:
     has_any: bool
-    reg_rows: list[dict] = field(default_factory=list)   # regresor + otros (mezclados)
+    reg_rows: list[dict] = field(default_factory=list)  # regresor + otros (mezclados)
     prep_rows: list[dict] = field(default_factory=list)  # preprocesador
 
 
@@ -153,15 +152,16 @@ def _build_gaps_vm(metrics: dict) -> GapsVM:
         test_r2=te_r2,
         r2_gap=r2_gap,
         mae_card_variant=(
-            "success" if mae_gap_rel is not None and mae_gap_rel < _OVERFIT_MAE_THR_WARN
+            "success"
+            if mae_gap_rel is not None and mae_gap_rel < _OVERFIT_MAE_THR_WARN
             else "warning"
         ),
         r2_card_variant=(
-            "success" if r2_gap is not None and r2_gap < _OVERFIT_R2_THR_WARN
-            else "warning"
+            "success" if r2_gap is not None and r2_gap < _OVERFIT_R2_THR_WARN else "warning"
         ),
         gap_card_variant=(
-            "success" if mae_gap_rel is not None and abs(mae_gap_rel) < _OVERFIT_MAE_THR_WARN
+            "success"
+            if mae_gap_rel is not None and abs(mae_gap_rel) < _OVERFIT_MAE_THR_WARN
             else "warning"
         ),
     )
@@ -172,8 +172,7 @@ def _build_params_vm(best_params: dict) -> ParamGroupsVM:
     if not params:
         return ParamGroupsVM(has_any=False)
     prep = {k: v for k, v in params.items() if k.startswith("preprocessor__")}
-    reg = {k: v for k, v in params.items()
-           if k.startswith(("regressor__", "classifier__"))}
+    reg = {k: v for k, v in params.items() if k.startswith(("regressor__", "classifier__"))}
     other = {k: v for k, v in params.items() if k not in prep and k not in reg}
 
     def _rows(d: dict) -> list[dict]:

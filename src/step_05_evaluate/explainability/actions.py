@@ -6,6 +6,7 @@ Reglas (umbrales en config.py):
   - Si full_mape > FULL_MAPE_CRITICAL_PCT -> critical.
   - Si nada de arriba aplica -> info "todo OK".
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from src.step_05_evaluate.metrics import mape_safe
 class Action:
     """Recomendacion accionable auto-generada."""
 
-    severity: str   # 'critical' | 'warning' | 'info'
+    severity: str  # 'critical' | 'warning' | 'info'
     icon: str
     title: str
     body: str
@@ -46,29 +47,33 @@ def recommended_actions(
 
     # Globales
     if full_mape > FULL_MAPE_CRITICAL_PCT:
-        actions.append(Action(
-            severity="critical",
-            icon="🚫",
-            title="Error global alto",
-            body=(
-                f"El error promedio del modelo ({full_mape:.1f}%) excede "
-                "el umbral aceptable. No usar predicciones para decisiones "
-                "operativas críticas hasta diagnosticar la causa."
-            ),
-        ))
+        actions.append(
+            Action(
+                severity="critical",
+                icon="🚫",
+                title="Error global alto",
+                body=(
+                    f"El error promedio del modelo ({full_mape:.1f}%) excede "
+                    "el umbral aceptable. No usar predicciones para decisiones "
+                    "operativas críticas hasta diagnosticar la causa."
+                ),
+            )
+        )
     if abs_gap > ABS_GAP_WARN:
-        actions.append(Action(
-            severity="warning",
-            icon="⚠",
-            title="El modelo memorizó parte del entrenamiento",
-            body=(
-                f"Hay una diferencia notable entre el error en datos vistos "
-                f"y datos nuevos (brecha = {abs_gap:.3f}). Esto suele "
-                "indicar que el modelo aprendió patrones específicos del "
-                "histórico que pueden no repetirse. Considerar reducir "
-                "complejidad o agregar más datos antes de desplegar."
-            ),
-        ))
+        actions.append(
+            Action(
+                severity="warning",
+                icon="⚠",
+                title="El modelo memorizó parte del entrenamiento",
+                body=(
+                    f"Hay una diferencia notable entre el error en datos vistos "
+                    f"y datos nuevos (brecha = {abs_gap:.3f}). Esto suele "
+                    "indicar que el modelo aprendió patrones específicos del "
+                    "histórico que pueden no repetirse. Considerar reducir "
+                    "complejidad o agregar más datos antes de desplegar."
+                ),
+            )
+        )
 
     # Subgrupos
     if X_aligned is not None and len(X_aligned) == abs_errors.size and global_mape > 0:
@@ -93,27 +98,31 @@ def recommended_actions(
                 cat_mape = mape_safe(cat_real, cat_real - cat_err)
                 if cat_mape >= warn_thr:
                     ratio = cat_mape / global_mape if global_mape > 0 else float("inf")
-                    actions.append(Action(
-                        severity="warning",
-                        icon="⚠",
-                        title=f"{col} '{cat}': error {ratio:.1f}× mayor que el promedio",
-                        body=(
-                            f"En este segmento ({int(mask.sum())} cosechas) el error "
-                            f"medio es {cat_mape:.1f}% vs {global_mape:.1f}% del global. "
-                            "Recomendamos NO automatizar predicciones aquí — usar "
-                            "criterio operativo o entrenar modelo dedicado."
-                        ),
-                    ))
+                    actions.append(
+                        Action(
+                            severity="warning",
+                            icon="⚠",
+                            title=f"{col} '{cat}': error {ratio:.1f}× mayor que el promedio",
+                            body=(
+                                f"En este segmento ({int(mask.sum())} cosechas) el error "
+                                f"medio es {cat_mape:.1f}% vs {global_mape:.1f}% del global. "
+                                "Recomendamos NO automatizar predicciones aquí — usar "
+                                "criterio operativo o entrenar modelo dedicado."
+                            ),
+                        )
+                    )
 
     if not actions:
-        actions.append(Action(
-            severity="info",
-            icon="✅",
-            title="No se detectaron problemas significativos",
-            body=(
-                "Las métricas globales y por subgrupo están dentro de rangos "
-                "esperados. Continuar con el plan de despliegue y monitoreo."
-            ),
-        ))
+        actions.append(
+            Action(
+                severity="info",
+                icon="✅",
+                title="No se detectaron problemas significativos",
+                body=(
+                    "Las métricas globales y por subgrupo están dentro de rangos "
+                    "esperados. Continuar con el plan de despliegue y monitoreo."
+                ),
+            )
+        )
 
     return actions

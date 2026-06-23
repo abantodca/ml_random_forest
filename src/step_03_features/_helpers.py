@@ -9,6 +9,7 @@ NaN donde `den <= 0` (incluye 0 y negativos) o `den is NaN`; division
 elementwise en otro caso. La unificacion preserva esa semantica
 exacta para no alterar la salida de los features que dependen de ella.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -16,9 +17,7 @@ import pandas as pd
 
 
 # Soporta tanto ndarray como Series (preservando el tipo de entrada).
-def safe_ratio[ArrayLike: (np.ndarray, pd.Series)](
-    num: ArrayLike, den: ArrayLike
-) -> ArrayLike:
+def safe_ratio[ArrayLike: (np.ndarray, pd.Series)](num: ArrayLike, den: ArrayLike) -> ArrayLike:
     """num/den retornando NaN donde den<=0 o den is NaN.
 
     Polimorfica: si la entrada es `pd.Series`, devuelve `pd.Series`

@@ -4,6 +4,7 @@ Devuelve un DataFrame con las columnas RAW (incluyendo la columna de fecha).
 La derivacion de features ciclicas y el one-hot ocurren mas adelante, en el
 preprocesador, para que `fit` solo vea train fold y no haya fugas.
 """
+
 from __future__ import annotations
 
 import logging

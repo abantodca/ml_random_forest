@@ -8,6 +8,7 @@ Las 3 preguntas que importan al lector no-tecnico:
 Cada uno devuelve un `PlainKPI` con titulo, headline corto, detail
 extendido, version tecnica y semaforo (ALTO/MEDIO/BAJO).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,11 +29,11 @@ from src.config import (
 class PlainKPI:
     """KPI ejecutivo: titulo de la pregunta + respuesta en una frase."""
 
-    question: str        # "¿Qué tan preciso es?"
-    headline: str        # "8 de 10 cosechas con error ≤ 7 kg/jornal"
-    detail: str          # "Mediana del error: 4.2 kg/jornal..."
-    technical: str       # "MAPE OOF = 17.5% (KG/JR)"
-    score_label: str     # "ALTO" | "MEDIO" | "BAJO" — semaforo opcional
+    question: str  # "¿Qué tan preciso es?"
+    headline: str  # "8 de 10 cosechas con error ≤ 7 kg/jornal"
+    detail: str  # "Mediana del error: 4.2 kg/jornal..."
+    technical: str  # "MAPE OOF = 17.5% (KG/JR)"
+    score_label: str  # "ALTO" | "MEDIO" | "BAJO" — semaforo opcional
 
 
 def kpi_precision(abs_errors: np.ndarray, mape_pct: float) -> PlainKPI:
@@ -55,7 +56,8 @@ def kpi_precision(abs_errors: np.ndarray, mape_pct: float) -> PlainKPI:
     p80 = float(np.percentile(abs_errors, 80))
 
     score = (
-        "ALTO" if mape_pct <= KPI_PRECISION_HIGH_MAPE_PCT
+        "ALTO"
+        if mape_pct <= KPI_PRECISION_HIGH_MAPE_PCT
         else ("MEDIO" if mape_pct <= KPI_PRECISION_MEDIUM_MAPE_PCT else "BAJO")
     )
 
@@ -86,10 +88,7 @@ def kpi_explanatory_power(r2: float | None) -> PlainKPI:
             score_label="—",
         )
     pct = float(r2) * 100.0
-    score = (
-        "ALTO" if pct >= KPI_R2_HIGH_PCT
-        else ("MEDIO" if pct >= KPI_R2_MEDIUM_PCT else "BAJO")
-    )
+    score = "ALTO" if pct >= KPI_R2_HIGH_PCT else ("MEDIO" if pct >= KPI_R2_MEDIUM_PCT else "BAJO")
     return PlainKPI(
         question="¿Cuánto explica?",
         headline=f"Captura el {pct:.0f}% de la variabilidad observada",
