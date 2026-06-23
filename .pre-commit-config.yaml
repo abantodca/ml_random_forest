@@ -1,0 +1,30 @@
+# Hooks de calidad que corren ANTES de cada commit (rápidos, deterministas).
+# Instalar una vez:  pip install pre-commit && pre-commit install
+# Correr a mano:      pre-commit run --all-files
+#
+# Filosofía: ruff es el único linter/formatter (replaza black+isort+flake8+
+# pyupgrade); el resto son hooks de higiene de archivos. Los tests P0 NO van
+# aquí (corren en contenedor, ver CI) — pre-commit debe ser sub-segundo.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13            # alineado con requirements-dev.txt
+    hooks:
+      - id: ruff             # lint (config en pyproject.toml)
+        args: [--fix]
+      - id: ruff-format      # formatter
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.(html|svg)$'
+      - id: end-of-file-fixer
+        exclude: '\.(html|svg|joblib)$'
+      - id: check-yaml
+        args: [--allow-multiple-documents]   # docker-compose, k8s-style
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]                 # reports/artifacts ya van en .gitignore
+      - id: mixed-line-ending
+        args: [--fix=lf]

@@ -36,3 +36,46 @@ quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
 skip-magic-trailing-comma = false
+
+# ---------------------------------------------------------------------------
+# NOTA sobre dependencias: este repo NO es un paquete pip-instalable, es un
+# monorepo de 3 servicios que corren en Docker + PYTHONPATH (no `pip install .`).
+# Por eso NO hay tabla [project]/[build-system]: las deps de RUNTIME viven
+# pinneadas en requirements.txt (trainer/ui) y api/requirements.txt — esos son
+# los locks que consumen los Dockerfiles. Las de DEV en requirements-dev.txt.
+# pyproject.toml es el hub de config de HERRAMIENTAS (ruff, mypy, pytest).
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+# Suite P0 (tests/). Correr DENTRO del contenedor (mismas versiones que prod):
+#   docker compose run --rm --entrypoint sh trainer -c \
+#     "pip install -q pytest && PYTHONPATH=/app pytest -q"
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+pythonpath = ["."]
+filterwarnings = [
+    # Silenciar ruido de libs de terceros (pyparsing/matplotlib) sin ocultar
+    # los warnings de NUESTRO código.
+    "ignore::DeprecationWarning:matplotlib.*",
+    "ignore::DeprecationWarning:pyparsing.*",
+]
+
+[tool.mypy]
+# Typing GRADUAL y opt-in: arrancamos laxo para no bloquear, endurecemos por
+# módulo con overrides a medida que se anotan. NO es gate de CI todavía.
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+ignore_missing_imports = true        # libs ML sin stubs (lightgbm, xgboost…)
+exclude = [
+    "^(artifacts|logs|reports|data|mlruns|\\.terraform)/",
+    "^notebooks/",
+    "^scripts/experiments/",
+]
+
+# A medida que un módulo quede limpio, subir su rigor aquí. Ejemplo:
+# [[tool.mypy.overrides]]
+# module = ["src.step_03_features.lag_features"]
+# disallow_untyped_defs = true

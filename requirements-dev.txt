@@ -18,3 +18,11 @@ ruff==0.15.13
 #   docker compose run --rm --entrypoint sh trainer -c \
 #     "pip install -q pytest && PYTHONPATH=/app pytest tests/ -q"
 pytest==8.4.2
+
+# Git hooks de calidad (config en .pre-commit-config.yaml).
+# Instalar una vez: pre-commit install
+pre-commit==4.4.0
+
+# Type-checker gradual/opt-in (config en pyproject.toml [tool.mypy]).
+# Aún NO es gate de CI; se endurece por módulo con overrides.
+mypy==1.18.2
