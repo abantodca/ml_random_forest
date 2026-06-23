@@ -76,9 +76,11 @@ docker compose run --rm --user root -v "$(pwd)/tests:/app/tests" --entrypoint sh
   -c "/opt/venv/bin/pip install -q pytest; cd /app && /opt/venv/bin/python -m pytest tests/test_api_conformal.py -q"
 ```
 
-No committed `.github/workflows`. CI/CD infra (GHA OIDC → ECR/ECS deploy) vive como Terraform
-pegable en `GUIA_MLOPS_AWS_V2.md` #3.10 (`modules/cicd/`); no hay carpeta `infra/` en este repo.
-Cambios estructurales se validan además con el stack (`task build` → `task train …` → UI).
+**CI** vive en `.github/workflows/ci.yml` (lint ruff + tests P0 en contenedor + build de las
+3 imágenes) y corre en push a `main` y en PRs. El **CD** (GHA OIDC → ECR/ECS deploy) es
+deliberadamente Terraform pegable en `GUIA_MLOPS_AWS_V2.md` #3.10 (`infra/modules/cicd/`), no un
+workflow committeado. Cambios estructurales se validan además con el stack
+(`task build` → `task train …` → UI).
 
 ### Running the apps standalone (rarely needed; compose is the norm)
 
