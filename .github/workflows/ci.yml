@@ -19,8 +19,8 @@ jobs:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Instalar ruff (versión pinneada)
@@ -34,7 +34,7 @@ jobs:
     name: Tests P0 (en contenedor, versiones de prod)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Construir las imágenes valida además los Dockerfiles (trainer/api/ui).
       - name: Build de imágenes
         run: docker compose build trainer api ui
