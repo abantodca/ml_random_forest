@@ -287,16 +287,21 @@ TUNING_PROFILES: dict[str, dict[str, int]] = {
 # a n_trials/final_trials/outer_folds; inner_folds queda intacto). Mecanismo
 # generico para correr algun backend a presupuesto reducido.
 #
-# xgb=0.5 (2026-06-23): XGB es backend de REFERENCIA, no candidato real a
-# campeon. Evidencia acumulada (ANALISIS_XGBOOST_SOBREAJUSTE.md + run prod_xl
-# 2026-06-22): XGB sobreajusta (gap_rel 0.42 > 0.40), FALLA el gate y pierde
-# en MAPE_oof frente a LGB de forma consistente, ademas de tardar ~2x por fit
-# (objective reg:absoluteerror + hist depthwise). Correrlo a presupuesto pleno
-# gasta ~4.6h para reconfirmar que LGB gana. A 0.5 (50 trials / 3 outer folds
-# en prod_xl) baja a ~2.3h sin perder la funcion de control (sigue dando una
-# segunda opinion). Subir a 1.0 cuando se quiera re-evaluar a XGB de tu a tu
-# (p.ej. tras activar OPTUNA_OBJECTIVE_GAP_PENALTY para que tunee honesto).
-BACKEND_BUDGET_FRACTION: dict[str, float] = {"xgb": 0.5}
+# Dict vacio (2026-06-24): TODOS los backends al perfil completo (frac=1.0),
+# o sea XGB corre el MISMO presupuesto que LGB (outer=6/inner=3/100 trials/fold/
+# final=50 en prod_xl). Antes xgb=0.5 (2026-06-23) lo corria a mitad porque XGB
+# es backend de referencia que sobreajusta (gap_rel 0.42>0.40, FALLA el gate y
+# pierde en MAPE_oof vs LGB — ver ANALISIS_XGBOOST_SOBREAJUSTE.md) y gastaba
+# ~4.6h para reconfirmar que LGB gana. Se sube a pleno ahora que hay computo
+# (c6i.4xlarge) para re-evaluar a XGB de tu a tu.
+#
+# IMPORTANTE: dar a XGB mas budget SIN tuning honesto solo lo deja sobreajustar
+# mas (mas trials => TPE memoriza el train). El lever que lo hace competir de
+# verdad es OPTUNA_OBJECTIVE_GAP_PENALTY>0 (que tunee hacia generalizacion).
+# El campeon NO puede empeorar: select_champion protege a LGB via el gate de gap
+# + MAPE_oof, asi que un XGB que sobreajuste NO desplaza a LGB.
+# Para volver a presupuesto reducido: {"xgb": 0.5}.
+BACKEND_BUDGET_FRACTION: dict[str, float] = {}
 
 DEFAULT_TUNING: str = "dev"
 
@@ -351,10 +356,15 @@ OPTUNA_OBJECTIVE_STD_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_STD
 # (select_champion). Es el lever honesto para que un backend de capacidad abierta
 # (p.ej. XGB, que quedo descalificado con gap_rel=0.42>0.40) tune hacia
 # GENERALIZACION en vez de hacia el gate por construccion: NO relaja el gate, hace
-# que el tuning lo respete. Default 0.0 = comportamiento historico bit-identico
-# (no calcula el gap, sin costo extra). Valores razonables para activar: 0.3-1.0.
-# Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
-OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0"))
+# que el tuning lo respete. Valores razonables: 0.3-1.0. Ver
+# ANALISIS_XGBOOST_SOBREAJUSTE.md.
+#
+# Default 0.5 (2026-06-24): activado junto con subir XGB a budget pleno
+# (BACKEND_BUDGET_FRACTION={}). Sin este freno, mas trials solo dejan a XGB
+# memorizar el train; con 0.5 tunea hacia generalizacion y compite honesto con
+# LGB. A LGB casi no lo toca (su gap ya es bajo). Override por env si hace falta;
+# 0.0 restaura el comportamiento historico bit-identico.
+OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.5"))
 
 # Sample weights por densidad del target (compute_sample_weights).
 # Centralizado aqui para tunear sin tocar codigo. n_bins=10 fija el valor
