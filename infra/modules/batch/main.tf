@@ -8,10 +8,15 @@ resource "aws_cloudwatch_log_group" "batch" {
 
 # infra/modules/batch/main.tf  (parte 2/4 — compute environments)
 resource "aws_batch_compute_environment" "spot" {
-  # AWS provider v6+ usa `name`. El atributo `compute_environment_name`
-  # fue deprecado en v5 y eliminado en v6 -> con `aws ~> 6.0` lockeado
-  # en #3.2.1, `terraform validate` falla si se usa el nombre viejo.
-  name         = "${var.project}-ce-spot"
+  # AWS provider v6+ usa `name`/`name_prefix` (el viejo `compute_environment_name`
+  # fue eliminado en v6). Usamos `name_prefix`: en Batch, cambiar `instance_type`
+  # (y varios compute_resources) FUERZA replace de la CE (ForceNew en el provider,
+  # update_policy NO lo evita). Con un `name` fijo + create_before_destroy, el
+  # replace choca con "Object already exists" (crea la nueva con el mismo nombre
+  # antes de borrar la vieja). `name_prefix` genera un nombre unico por CE -> el
+  # create-before-destroy no colisiona. Aplicar con la CE en 0 jobs (la vieja se
+  # borra al final, y una CE con jobs corriendo no se puede borrar).
+  name_prefix  = "${var.project}-ce-spot-"
   service_role = aws_iam_role.batch_service.arn
   type         = "MANAGED"
   state        = "ENABLED"
@@ -44,7 +49,7 @@ resource "aws_batch_compute_environment" "spot" {
 }
 
 resource "aws_batch_compute_environment" "ondemand" {
-  name         = "${var.project}-ce-ondemand" # ver nota en bloque "spot" sobre v6
+  name_prefix  = "${var.project}-ce-ondemand-" # name_prefix: ver nota en bloque "spot"
   service_role = aws_iam_role.batch_service.arn
   type         = "MANAGED"
   state        = "ENABLED"
