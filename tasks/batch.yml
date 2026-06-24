@@ -7,14 +7,21 @@
 # antes de encolar). Si necesitas bypass, llama `aws batch submit-job` directo.
 #
 # USO TIPICO:
-#   task batch:train VARIETIES=POP                    una variedad, espera
-#   task batch:train VARIETIES=POP,VENTURA            multiples en serie
+#   task batch:train VARIETIES=POP                    una variedad (background)
+#   task batch:train VARIETIES=POP,VENTURA            varias en un job
+#   task batch:train VARIETIES=all                    todas las permitidas
 #   task batch:train VARIETIES=POP TUNING=smoke       sanity check (~1 min)
-#   task batch:train VARIETIES=POP WAIT=false         fire-and-forget
-#   task batch:smoke                                  atajo: POP + smoke
+#   task batch:train VARIETIES=POP WAIT=true          bloquear hasta terminar
+#   task batch:smoke                                  atajo: POP + smoke (bloquea)
 #   task batch:eda   VARIETIES=POP                    EDA exploratorio (opcional, on-demand)
+#   task batch:watch                                  seguir el ULTIMO job hasta terminar
+#   task batch:logs                                   tail de logs del ultimo job (FOLLOW=true en vivo)
 #   task batch:status                                 jobs activos en queues
-#   task batch:cancel JOB_ID=<id>                     terminar un job
+#   task batch:cancel                                 terminar el ultimo job (o JOB_ID=<id>)
+#
+# El submit es FIRE-AND-FORGET por defecto: el job corre en AWS Batch, asi que
+# cerrar la terminal o apagar la maquina NO lo detiene. watch/logs/cancel se
+# defaultean al ultimo job submiteado (persistido en .batch-last-job).
 # =============================================================================
 
 version: "3"
@@ -27,12 +34,16 @@ vars:
   # TUNING NO va aqui: los vars globales se COMPARTEN entre el Taskfile raiz y
   # los includes, asi que un default global pisaria el del root (y viceversa).
   # Se define a nivel-tarea en `train` (default "prod_xl", igual que local).
-  WAIT:          '{{.WAIT          | default "true"}}'
+  # WAIT=false por defecto -> submit en background (el job vive en AWS Batch).
+  # batch:smoke pisa WAIT=true para que el smoke de deploy siga verificando exito.
+  WAIT:          '{{.WAIT          | default "false"}}'
+  # Grupo de logs de Batch (infra/modules/batch/main.tf: /aws/batch/<project>).
+  LOG_GROUP:     '{{.LOG_GROUP     | default (printf "/aws/batch/%s" .PROJECT)}}'
 
 tasks:
 
   train:
-    desc: "Submit via Lambda dispatcher. Vars: VARIETIES=POP[,VENTURA] (REQ), TUNING, WAIT"
+    desc: "Entrena en Batch (background). Vars: VARIETIES=POP[,VENTURA|all] (REQ), TUNING, WAIT=true para bloquear"
     vars:
       # Default prod_xl: converge con `task train` local. El dispatcher rutea
       # prod_xl -> queue On-Demand (sin interrupciones spot, para jobs de ~4-6h);
@@ -65,8 +76,28 @@ tasks:
   smoke:
     desc: "Sanity check end-to-end (~1 min). Equivalente a train VARIETIES=POP TUNING=smoke"
     cmds:
+      # WAIT=true explicito: el smoke del deploy DEBE bloquear y verificar exito
+      # (train defaultea a background/WAIT=false).
       - task: train
-        vars: { VARIETIES: POP, TUNING: smoke }
+        vars: { VARIETIES: POP, TUNING: smoke, WAIT: "true" }
+
+  watch:
+    desc: "Seguir un job hasta SUCCEEDED/FAILED. Vars: JOB_ID (default: ultimo submiteado)"
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/batch_wait.sh
+        JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
+        follow_job "$JOB_ID" "watch"   # nunca rompe la terminal (exit 0 aun en FAILED)
+
+  logs:
+    desc: "Tail de logs (CloudWatch) de un job. Vars: JOB_ID (default: ultimo), FOLLOW=true para vivo"
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/batch_wait.sh
+        JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
+        tail_job_logs "$JOB_ID" "{{.LOG_GROUP}}" "{{.FOLLOW | default \"false\"}}"
 
   status:
     desc: "Jobs activos (SUBMITTED/PENDING/RUNNABLE/STARTING/RUNNING) en ambas queues"
@@ -84,8 +115,13 @@ tasks:
         done
 
   cancel:
-    desc: "Terminar job RUNNING/PENDING. Vars: JOB_ID=<id> (REQ), REASON=<texto>"
-    requires:
-      vars: [JOB_ID]
+    desc: "Terminar un job. Vars: JOB_ID (default: ultimo submiteado), REASON=<texto>"
+    silent: true
     cmds:
-      - aws batch terminate-job --job-id "{{.JOB_ID}}" --reason "{{.REASON | default \"cancelled via task\"}}"
+      - |
+        source tasks/lib/batch_wait.sh
+        JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
+        # terminate-job es idempotente: sobre un job ya terminal es no-op.
+        aws batch terminate-job --job-id "$JOB_ID" \
+          --reason "{{.REASON | default \"cancelled via task\"}}" \
+          && echo ">>> terminate enviado a job=$JOB_ID"

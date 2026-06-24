@@ -13,6 +13,10 @@
 *.pem
 *.key
 
+# Ultimo jobId de Batch submiteado (lo escribe tasks/lib/batch_wait.sh para que
+# batch:watch / batch:logs / batch:cancel se defaulten a el). Estado local.
+.batch-last-job
+
 # ── Python ───────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

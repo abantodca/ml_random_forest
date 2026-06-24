@@ -94,7 +94,8 @@ tasks:
           ║  task rebuild           volver tras teardown (recrea NAT + servicios)   ║
           ║  task status · urls     estado del cluster · URLs publicas del ALB      ║
           ║  task smoke             deploy + 1 job Batch POP de humo                ║
-          ║  task batch:train VARIETIES=POP              entrenamiento en Batch     ║
+          ║  task batch:train VARIETIES=POP              entrenamiento en Batch (bg)║
+          ║  task batch:watch · logs · status           ver estado del entrenamiento║
           ║  task ops:promote MODEL_NAME=… VERSION=N     promover a Production      ║
           ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                 ║
           ╚════════════════════════════════════════════════════════════════════════╝

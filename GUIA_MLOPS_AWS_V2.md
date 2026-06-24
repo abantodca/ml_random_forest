@@ -7946,14 +7946,21 @@ Cada imagen se pushea con **dos tags**: el movil (`latest`/`v3.12.0`/`stable`) q
 # antes de encolar). Si necesitas bypass, llama `aws batch submit-job` directo.
 #
 # USO TIPICO:
-#   task batch:train VARIETIES=POP                    una variedad, espera
-#   task batch:train VARIETIES=POP,VENTURA            multiples en serie
+#   task batch:train VARIETIES=POP                    una variedad (background)
+#   task batch:train VARIETIES=POP,VENTURA            varias en un job
+#   task batch:train VARIETIES=all                    todas las permitidas
 #   task batch:train VARIETIES=POP TUNING=smoke       sanity check (~1 min)
-#   task batch:train VARIETIES=POP WAIT=false         fire-and-forget
-#   task batch:smoke                                  atajo: POP + smoke
+#   task batch:train VARIETIES=POP WAIT=true          bloquear hasta terminar
+#   task batch:smoke                                  atajo: POP + smoke (bloquea)
 #   task batch:eda   VARIETIES=POP                    EDA exploratorio (opcional, on-demand)
+#   task batch:watch                                  seguir el ULTIMO job hasta terminar
+#   task batch:logs                                   tail de logs del ultimo job (FOLLOW=true en vivo)
 #   task batch:status                                 jobs activos en queues
-#   task batch:cancel JOB_ID=<id>                     terminar un job
+#   task batch:cancel                                 terminar el ultimo job (o JOB_ID=<id>)
+#
+# El submit es FIRE-AND-FORGET por defecto: el job corre en AWS Batch, asi que
+# cerrar la terminal o apagar la maquina NO lo detiene. watch/logs/cancel se
+# defaultean al ultimo job submiteado (persistido en .batch-last-job).
 # =============================================================================
 
 version: "3"
@@ -7964,12 +7971,15 @@ vars:
   QUEUE_SPOT:    '{{.QUEUE_SPOT    | default (printf "%s-job-queue-spot"     .PROJECT)}}'
   QUEUE_OD:      '{{.QUEUE_OD      | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
   TUNING:        '{{.TUNING        | default "prod_xl"}}'
-  WAIT:          '{{.WAIT          | default "true"}}'
+  # WAIT=false por defecto -> submit en background (el job vive en AWS Batch).
+  # batch:smoke pisa WAIT=true para que el smoke de deploy siga verificando exito.
+  WAIT:          '{{.WAIT          | default "false"}}'
+  LOG_GROUP:     '{{.LOG_GROUP     | default (printf "/aws/batch/%s" .PROJECT)}}'
 
 tasks:
 
   train:
-    desc: "Submit via Lambda dispatcher. Vars: VARIETIES=POP[,VENTURA] (REQ), TUNING, WAIT"
+    desc: "Entrena en Batch (background). Vars: VARIETIES=POP[,VENTURA|all] (REQ), TUNING, WAIT=true para bloquear"
     requires:
       vars: [VARIETIES]
     cmds:
@@ -7991,7 +8001,12 @@ tasks:
         JOB_ID=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
                  || jq -r '.jobId' /tmp/dispatcher-out.json)
         echo ">>> Submitted  job=$JOB_ID  tuning={{.TUNING}}  varieties={{.VARIETIES}}"
-        [ "{{.WAIT}}" != "true" ] && exit 0
+        batch_record_job "$JOB_ID"
+        if [ "{{.WAIT}}" != "true" ]; then
+          echo "  El job corre en AWS Batch: podes cerrar la terminal sin afectarlo."
+          echo "  Estado: task batch:watch  |  Logs: task batch:logs  |  Cancelar: task batch:cancel"
+          exit 0
+        fi
         wait_job "$JOB_ID" "{{.VARIETIES}}"
 
   eda:
@@ -8021,8 +8036,27 @@ tasks:
   smoke:
     desc: "Sanity check end-to-end (~1 min). Equivalente a train VARIETIES=POP TUNING=smoke"
     cmds:
+      # WAIT=true explicito: el smoke del deploy DEBE bloquear y verificar exito.
       - task: train
-        vars: { VARIETIES: POP, TUNING: smoke }
+        vars: { VARIETIES: POP, TUNING: smoke, WAIT: "true" }
+
+  watch:
+    desc: "Seguir un job hasta SUCCEEDED/FAILED. Vars: JOB_ID (default: ultimo submiteado)"
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/batch_wait.sh
+        JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
+        follow_job "$JOB_ID" "watch"   # nunca rompe la terminal (exit 0 aun en FAILED)
+
+  logs:
+    desc: "Tail de logs (CloudWatch) de un job. Vars: JOB_ID (default: ultimo), FOLLOW=true para vivo"
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/batch_wait.sh
+        JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
+        tail_job_logs "$JOB_ID" "{{.LOG_GROUP}}" "{{.FOLLOW | default \"false\"}}"
 
   status:
     desc: "Jobs activos (SUBMITTED/PENDING/RUNNABLE/STARTING/RUNNING) en ambas queues"
@@ -8039,11 +8073,16 @@ tasks:
         done
 
   cancel:
-    desc: "Terminar job RUNNING/PENDING. Vars: JOB_ID=<id> (REQ), REASON=<texto>"
-    requires:
-      vars: [JOB_ID]
+    desc: "Terminar un job. Vars: JOB_ID (default: ultimo submiteado), REASON=<texto>"
+    silent: true
     cmds:
-      - aws batch terminate-job --job-id "{{.JOB_ID}}" --reason "{{.REASON | default \"cancelled via task\"}}"
+      - |
+        source tasks/lib/batch_wait.sh
+        JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
+        # terminate-job es idempotente: sobre un job ya terminal es no-op.
+        aws batch terminate-job --job-id "$JOB_ID" \
+          --reason "{{.REASON | default \"cancelled via task\"}}" \
+          && echo ">>> terminate enviado a job=$JOB_ID"
 ```
 
 Una sola via de submit (el Lambda dispatcher) — valida que la variety exista en `data/training/DB-HISTORICA.xlsx` antes de encolar y maneja hydrate desde S3. El path raw con `aws batch submit-job` queda disponible si alguna vez lo necesitas.
@@ -9200,13 +9239,23 @@ Las implementaciones viven en `tasks/*.yml` (definidas en sección 4.1.3-4.1.8).
 
 ### 4.8.1 Re-entrenar (`task batch:train`)
 
-Submit via Lambda dispatcher (valida variety + S3 key) + polling hasta `SUCCEEDED`/`FAILED`. Multi-variedad en serie. El hydrate de S3 corre dentro del trainer (`main.py::_hydrate_data_from_s3`), no en el dispatcher.
+Submit via Lambda dispatcher (valida variety + S3 key) y **fire-and-forget por defecto**: el job corre en AWS Batch, así que cerrar la terminal o apagar la máquina no lo detiene. Las varias variedades van en **un solo job** (el dispatcher las une en un `--varieties POP,JUPITER`). El hydrate de S3 corre dentro del trainer (`main.py::_hydrate_data_from_s3`), no en el dispatcher.
 
 ```bash
-task batch:train VARIETIES=POP                # espera hasta terminar
-task batch:train VARIETIES=POP,JUPITER        # N variedades, una tras otra
-task batch:train VARIETIES=POP WAIT=false     # fire-and-forget; el notifier mandara mail
+task batch:train VARIETIES=POP                # background; vuelve al prompt al instante
+task batch:train VARIETIES=POP,JUPITER        # varias variedades en un job
+task batch:train VARIETIES=all                # todas las permitidas
 task batch:train VARIETIES=POP TUNING=prod_xl # ~5-6h en On-Demand (evita kills Spot)
+task batch:train VARIETIES=POP WAIT=true      # bloquea + hace polling hasta SUCCEEDED/FAILED
+```
+
+Ver el estado de un entrenamiento (watch/logs/cancel se defaultean al último job submiteado, persistido en `.batch-last-job`):
+
+```bash
+task batch:watch                 # sigue el último job hasta SUCCEEDED/FAILED (nunca rompe la terminal)
+task batch:logs                  # tail de los logs en CloudWatch (FOLLOW=true para seguirlos en vivo)
+task batch:status                # todos los jobs activos en ambas queues
+task batch:cancel                # termina el último job (o JOB_ID=<id>)
 ```
 
 ### 4.8.1.1 EDA exploratorio on-demand (`task batch:eda`)
@@ -9216,9 +9265,9 @@ El EDA es una necesidad **aparte y opcional** del entrenamiento: lo corres cuand
 Mismo camino que `batch:train` (dispatcher → Batch → hydrate de S3), pero el dispatcher recibe `mode=eda` y arma `command=["--eda", "--varieties", ...]`. El trainer, con `--eda`, corre `src.diagnostics.eda.run_eda` por variedad en vez de entrenar y sincroniza los HTML a S3 — quedan visibles en `http://$ALB/reports/EDA_<variety>_<ts>.html`.
 
 ```bash
-task batch:eda VARIETIES=POP              # EDA de una variedad, espera a que termine
+task batch:eda VARIETIES=POP              # EDA de una variedad (background)
 task batch:eda VARIETIES=POP,JUPITER      # varias en un solo job
-task batch:eda VARIETIES=POP WAIT=false   # fire-and-forget
+task batch:eda VARIETIES=POP WAIT=true    # bloquea hasta que termina
 ```
 
 > **Equivalente local**: `task eda VARIETIES=POP` (corre el mismo `run_eda` en docker compose contra la data local). El de Batch es para correrlo contra la data ya hidratada en S3, sin levantar el stack local.
@@ -10441,7 +10490,7 @@ acumulado), o pediste un re-train porque cambiaste hiperparametros.
 
 ```bash
 # Opcion A — via Task (preferido para humanos, polling + exit-code visible)
-task batch:train VARIETIES=POP TUNING=prod
+task batch:train VARIETIES=POP TUNING=prod WAIT=true
 
 # Opcion B — via GitHub Actions UI (preferido si lo dispara alguien sin AWS CLI)
 # Actions -> Train -> Run workflow -> POP / prod / wait=true
