@@ -46,6 +46,10 @@ tasks:
       # use_lockfile=true => locking nativo S3 (reemplaza el deprecado
       # `dynamodb_table`). El lock vive como `<key>.tflock` en el mismo bucket
       # de tfstate. Requiere Terraform >= 1.10.
+      #
+      # `>&2`: todo el ruido de `init` va a stderr. `output-raw` depende de
+      # `_init` y se consume en command-substitution (`s3://$(task ... )/...`);
+      # cualquier salida de init en stdout corromperia el valor capturado.
       - |
         SUFFIX="$(bash scripts/aws-suffix.sh)"
         terraform -chdir={{.TF_DIR}} init \
@@ -53,7 +57,7 @@ tasks:
           -backend-config=key=envs/prod/terraform.tfstate \
           -backend-config=region={{.REGION}} \
           -backend-config=use_lockfile=true \
-          -reconfigure
+          -reconfigure >&2
 
   # ═══ Plan / Apply / Destroy ═════════════════════════════════════════════════
 
@@ -74,7 +78,15 @@ tasks:
     prompt: "Esto borrara TODA la infra de envs/prod (incluso S3 + ECR). Continuar?"
     deps: [_init]
     cmds:
-      - terraform -chdir={{.TF_DIR}} destroy -auto-approve
+      # El RDS tiene deletion_protection=true (default). Se levanta via AWS CLI
+      # antes del destroy y se toma un snapshot final con nombre timestamped
+      # (evita colision si destruyes varias veces). Ver tasks/lib/nuke.sh.
+      - |
+        set -euo pipefail
+        source tasks/lib/nuke.sh
+        lift_rds_protection "{{.PROJECT}}-mlflow"
+        terraform -chdir={{.TF_DIR}} destroy -auto-approve \
+          -var "rds_final_snapshot_identifier={{.PROJECT}}-mlflow-final-$(date +%Y%m%d%H%M%S)"
 
   destroy-target:
     desc: "terraform destroy parcial. Vars: TARGET=module.X (REQ)"
@@ -89,20 +101,68 @@ tasks:
 
   output:
     desc: "Mostrar outputs de envs/prod (alb_dns, ecr_urls, rds_endpoint, ...)"
+    # _init: en una checkout/maquina nueva el backend remoto existe pero falta
+    # `.terraform` local -> `terraform output` aborta con "Backend initialization
+    # required". El init (idempotente, -reconfigure) lo resuelve.
+    deps: [_init]
     cmds:
       - terraform -chdir={{.TF_DIR}} output
 
   output-raw:
     desc: "Mostrar UN output crudo (para scripts). Var: NAME=alb_dns (REQ)"
     silent: true
+    # Mismo motivo que `output`: init antes de leer el state remoto. El ruido de
+    # init va a stderr (ver `_init`), asi stdout queda limpio para `$(...)`.
+    deps: [_init]
     requires:
       vars: [NAME]
     cmds:
-      - terraform -chdir={{.TF_DIR}} output -raw {{.NAME}}
+      # Falla RUIDOSA (exit 1 + mensaje a stderr) si el output esta vacio o no
+      # existe. `terraform output -raw` de un output ausente devuelve "" con exit 0
+      # (solo un Warning a stderr); en command-substitution eso producia silencios
+      # como `s3:///...` -> error criptico de la AWS CLI. Mejor abortar explicando.
+      - |
+        VAL="$(terraform -chdir={{.TF_DIR}} output -raw {{.NAME}} 2>/dev/null)"
+        if [ -z "$VAL" ]; then
+          echo "ERROR: output '{{.NAME}}' vacio o inexistente en el state de {{.TF_DIR}}." >&2
+          echo "       La infra no esta aplicada todavia -> corre 'task deploy' primero." >&2
+          exit 1
+        fi
+        printf '%s' "$VAL"
+
+  upload-raw:
+    desc: "Setup 1ª vez: sube el Excel raw al bucket de datos de PROD (deriva el bucket del state). Var opcional: FILE=data/BD_HISTORICO_ACUMULADO.xlsx"
+    deps: [_init]
+    vars:
+      FILE: '{{.FILE | default "data/BD_HISTORICO_ACUMULADO.xlsx"}}'
+    cmds:
+      # Reemplaza el `aws s3 cp s3://$(task infra:output-raw ...)` inline del menu:
+      # ese patron tragaba fallos (bucket vacio -> `s3:///` -> error criptico). Aca
+      # validamos bucket Y archivo antes de copiar, con mensajes claros.
+      - |
+        set -euo pipefail
+        BUCKET="$(terraform -chdir={{.TF_DIR}} output -raw data_bucket 2>/dev/null || true)"
+        if [ -z "$BUCKET" ]; then
+          echo "ERROR: output 'data_bucket' vacio -> la infra no esta desplegada." >&2
+          echo "       Corre 'task deploy' antes de subir el Excel raw." >&2
+          exit 1
+        fi
+        if [ ! -f "{{.FILE}}" ]; then
+          echo "ERROR: no existe el archivo local '{{.FILE}}'." >&2
+          exit 1
+        fi
+        KEY="$(basename "{{.FILE}}")"
+        echo "==> Subiendo {{.FILE}} -> s3://${BUCKET}/${KEY} ..." >&2
+        aws s3 cp "{{.FILE}}" "s3://${BUCKET}/${KEY}" --region "{{.REGION}}"
 
   urls:
     desc: "Imprime las URLs publicas de PROD (derivadas del ALB DNS, que varia por deploy)."
     silent: true
+    # _init para que funcione en una maquina/checkout nueva (state remoto presente,
+    # `.terraform` ausente). El path graceful de abajo (ALB vacio) sigue valido: en
+    # la ventana post-bootstrap/pre-apply el bucket de tfstate ya existe -> init OK
+    # y `output -raw alb_dns` simplemente devuelve vacio.
+    deps: [_init]
     cmds:
       - |
         ALB=$(terraform -chdir={{.TF_DIR}} output -raw alb_dns 2>/dev/null)
@@ -133,7 +193,32 @@ tasks:
       - terraform -chdir={{.TF_DIR}} fmt -check -recursive
       - terraform -chdir={{.TF_DIR}} validate
 
-  # ═══ Recovery ═══════════════════════════════════════════════════════════════
+  # ═══ Fresh start / Recovery ═════════════════════════════════════════════════
+
+  reset-state:
+    desc: "ARRANCAR DE CERO: borra el tfstate remoto de envs/prod en S3 (todas las versiones + lock) y el .terraform local. El proximo init/plan/apply genera un state nuevo. NO toca recursos AWS ya creados (Terraform simplemente los 'olvida')."
+    prompt: "Esto BORRA el state remoto de envs/prod (todas las versiones + lock) y Terraform OLVIDARA toda la infra que ya tenga registrada. Si ya hay recursos vivos quedaran huerfanos (re-apply intentara recrearlos). Continuar?"
+    cmds:
+      - |
+        set -euo pipefail
+        SUFFIX="$(bash scripts/aws-suffix.sh)"
+        BUCKET="{{.PROJECT}}-tfstate-${SUFFIX}"
+        PREFIX="envs/prod/"
+        if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+          echo "==> Borrando todas las versiones bajo s3://$BUCKET/$PREFIX (state + .tflock) ..."
+          # Mismo patron version-aware que tasks/lib/nuke.sh::empty_bucket, pero
+          # acotado al prefijo de prod (no vacia todo el bucket de tfstate).
+          aws s3api delete-objects --bucket "$BUCKET" \
+            --delete "$(aws s3api list-object-versions --bucket "$BUCKET" --prefix "$PREFIX" \
+              --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' \
+              --max-items 1000)" 2>/dev/null \
+            && echo "    state remoto borrado." \
+            || echo "    (no habia state en S3, nada que borrar)"
+        else
+          echo "==> Bucket $BUCKET no existe -> nada que borrar (corre 'task infra:bootstrap' primero)."
+        fi
+        rm -rf "{{.TF_DIR}}/.terraform" "{{.TF_DIR}}/.terraform.lock.hcl"
+        echo "==> .terraform local limpiado. Siguiente paso: 'task deploy' (o 'task infra:plan') arranca de cero."
 
   force-unlock:
     desc: "Liberar state lock huerfano. Var: LOCK_ID=<id> (REQ)"

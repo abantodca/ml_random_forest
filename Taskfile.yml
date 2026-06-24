@@ -79,35 +79,63 @@ tasks:
             URLs:  UI :8501 · API :8000/docs · MLflow :5000 · Reports/Artifacts :8080
 
           ╔════════════════════════════════════════════════════════════════════════╗
-          ║  AWS · atajos high-level  (detalle: infra: / ecr: / batch: / ops:)      ║
+          ║  AWS · PRIMERA VEZ de cero (corré en este orden)                        ║
           ╠════════════════════════════════════════════════════════════════════════╣
-          ║  task deploy            stand-up completo (storage → 5 imagenes → resto) ║
-          ║  task smoke             deploy + 1 job Batch POP de humo                 ║
-          ║  task wake · sleep      encender · apagar el stack                       ║
-          ║  task status · urls     estado del cluster · URLs publicas del ALB       ║
-          ║  task batch:train VARIETIES=POP              entrenamiento en Batch      ║
-          ║  task ops:promote MODEL_NAME=… VERSION=N     promover a Production       ║
-          ║  task teardown · destroy · nuke    ⚠ destructivo (riesgo creciente)      ║
+          ║  0) aws sts get-caller-identity     valida credenciales AWS             ║
+          ║  1) task infra:bootstrap            backend S3 (1 vez/cuenta+region)    ║
+          ║  2) creá terraform.tfvars (desde el .example) y poné tu alert_email     ║
+          ║     (1 vez; sin ese archivo 'task deploy' falla — ver cp abajo)         ║
+          ║  3) task deploy                     stand-up completo → imprime URLs    ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  AWS · DÍA A DÍA (ya desplegado)    detalle: infra:/ecr:/batch:/ops:    ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  task wake · sleep      encender · apagar (pausa corta, mantiene NAT)   ║
+          ║  task teardown          apagar largo: libera NAT (~$3/mes idle)         ║
+          ║  task rebuild           volver tras teardown (recrea NAT + servicios)   ║
+          ║  task status · urls     estado del cluster · URLs publicas del ALB      ║
+          ║  task smoke             deploy + 1 job Batch POP de humo                ║
+          ║  task batch:train VARIETIES=POP              entrenamiento en Batch     ║
+          ║  task ops:promote MODEL_NAME=… VERSION=N     promover a Production      ║
+          ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                 ║
           ╚════════════════════════════════════════════════════════════════════════╝
-            Bootstrap 1ª vez por cuenta+region:  task infra:bootstrap[-oidc]
+          ╔════════════════════════════════════════════════════════════════════════════╗
+          ║  AWS · 1ª vez tras deploy (setup)                                          ║
+          ╠════════════════════════════════════════════════════════════════════════════╣
+          ║  Copiar plantilla de tfvars (Paso 2):                                      ║
+          ║  cp infra/envs/prod/terraform.tfvars.example \                             ║
+          ║     infra/envs/prod/terraform.tfvars                                       ║
+          ║  Subí el Excel raw a S3 (1 vez, DESPUES de 'task deploy'):                 ║
+          ║  task infra:upload-raw                                                     ║
+          ║    (deriva el bucket del state; valida bucket+archivo antes de copiar)     ║
+          ║  CI/CD (opcional): task infra:bootstrap-oidc + enable_cicd=true en tfvars  ║
+          ║  Empezar de cero / borrar tfstate:  task infra:reset-state                 ║
+          ╚════════════════════════════════════════════════════════════════════════════╝
 
-          ── Entrenar  (mismo default local y Batch: TUNING=prod_xl) ───────────────
-            task train VARIETIES=POP                 ~4-6 h   prod_xl · DEFAULT
-            task train VARIETIES=POP TUNING=smoke    ~1 min   sanity (no registra)
-            task train VARIETIES=POP TUNING=prod     ~2 h     modelo a promover
-            task train VARIETIES=all PARALLEL=3               todas, 3 en paralelo
-
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║  Entrenar  (mismo default local y Batch: TUNING=prod_xl)               ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  task train VARIETIES=POP                 ~4-6 h   prod_xl · DEFAULT   ║
+          ║  task train VARIETIES=POP TUNING=smoke    ~1 min   sanity (no registra)║
+          ║  task train VARIETIES=POP TUNING=prod     ~2 h     modelo a promover   ║
+          ║  task train VARIETIES=all PARALLEL=3               todas, 3 en paralelo║
+          ╚════════════════════════════════════════════════════════════════════════╝
             En Batch el dispatcher rutea por queue:  prod_xl → On-Demand (sin
             interrupciones, jobs de ~4-6 h) · resto → Spot (−70% costo).
 
-          ── Variables  (override por CLI · VAR=valor) ────────────────────────────
-            VARIETIES   POP | POP,VENTURA | all          (default POP)
-            TUNING      smoke | dev | prod | prod_xl      (default prod_xl)
-            PARALLEL    N variedades en paralelo          (default 1)
-            SEED        semilla de reproducibilidad       (default 42)
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║  Variables  (override por CLI · VAR=valor)                             ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  VARIETIES   POP | POP,VENTURA | all          (default POP)            ║
+          ║  TUNING      smoke | dev | prod | prod_xl      (default prod_xl)       ║
+          ║  PARALLEL    N variedades en paralelo          (default 1)             ║
+          ║  SEED        semilla de reproducibilidad       (default 42)            ║
+          ╚════════════════════════════════════════════════════════════════════════╝
 
-          ── Mas detalle ──────────────────────────────────────────────────────────
-            Catalogo completo:  task --list        Runbook AWS:  GUIA_MLOPS_AWS_V2.md
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║  Mas detalle                                                           ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  Catalogo completo:  task --list     Runbook AWS:  GUIA_MLOPS_AWS_V2.md║
+          ╚════════════════════════════════════════════════════════════════════════╝
 
         EOF
 
