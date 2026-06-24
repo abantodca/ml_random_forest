@@ -9,7 +9,12 @@
 #   MLFLOW_ALB_DNS (opt) si esta seteada, salta terraform output
 #   STATUS_FILE   (opt)  default /tmp/wake-status (true|false segun pre-check)
 
-source "$(dirname "${BASH_SOURCE[0]}")/mlflow_uri.sh"
+# Path relativo al repo root (CWD cuando go-task corre las tasks), igual que el
+# resto de libs (ops.yml: `source tasks/lib/mlflow_uri.sh`). NO usar
+# $(dirname "${BASH_SOURCE[0]}"): el shell embebido de go-task (mvdan/sh) no
+# puebla BASH_SOURCE -> queda vacio -> dirname=. -> buscaba ./mlflow_uri.sh en el
+# repo root y fallaba con "no such file or directory".
+source tasks/lib/mlflow_uri.sh
 
 wake_cluster() {
   local project="${PROJECT:?PROJECT requerido}"
