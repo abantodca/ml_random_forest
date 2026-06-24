@@ -7,22 +7,22 @@
 # (scipy.stats: wasserstein_distance, mannwhitneyu, kruskal, binom).
 # sklearn ya lo trae como transitiva, pero lo pineamos explicitamente
 # para que los notebooks sean reproducibles.
-scipy==1.16.3
+scipy==1.18.0
 
 # Linter + formatter (config en pyproject.toml).
 # Reemplaza Black + isort + flake8 + pyupgrade en una sola herramienta.
-ruff==0.15.13
+ruff==0.15.19
 
 # Suite P0 (tests/ — ver docs/PLAN_REFACTOR_2026-06-12.md). Correr DENTRO
 # del contenedor para usar las mismas versiones que produccion:
 #   docker compose run --rm --entrypoint sh trainer -c \
 #     "pip install -q pytest && PYTHONPATH=/app pytest tests/ -q"
-pytest==8.4.2
+pytest==9.1.1
 
 # Git hooks de calidad (config en .pre-commit-config.yaml).
 # Instalar una vez: pre-commit install
-pre-commit==4.4.0
+pre-commit==4.6.0
 
 # Type-checker gradual/opt-in (config en pyproject.toml [tool.mypy]).
 # Aún NO es gate de CI; se endurece por módulo con overrides.
-mypy==1.18.2
+mypy==2.1.0

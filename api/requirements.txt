@@ -1,35 +1,35 @@
 # Alineado con el server/trainer (src) para que el formato de modelo y el
 # registry coincidan. La API solo usa APIs estables entre 2.x↔3.x
 # (load_model models:/name/version, search_model_versions, download_artifacts).
-mlflow==3.12.0
-botocore==1.40.49
-boto3==1.40.46
-pandas==2.2.3
+mlflow==3.14.0
+botocore==1.43.36
+boto3==1.43.36
+pandas==3.0.3
 openpyxl==3.1.5  # Para lectura de archivos Excel
-numpy==2.2.3
-scikit-learn==1.6.1
+numpy==2.5.0
+scikit-learn==1.9.0
 # Pin a las versiones del entorno de training (ml_training Python 3.13.9)
 # para evitar el "model dependency mismatch" warning de mlflow.pyfunc.
 # El modelo cargado fue pickleado con cloudpickle 3.1.1 y usa scipy 1.16.3
 # como dep transitiva via scikit-learn; alinear elimina el warning sin
 # instalar paquetes opcionales (bottleneck/lz4/xarray/etc) que el backend
 # no necesita en el path de inferencia.
-cloudpickle==3.1.1
-scipy==1.16.3
-python-dotenv==1.0.1
+cloudpickle==3.1.2
+scipy==1.18.0
+python-dotenv==1.2.2
 httpx==0.28.1
-uvicorn[standard]==0.34.0
-gunicorn==23.0.0
-fastapi[standard]==0.136.3
+uvicorn[standard]==0.49.0
+gunicorn==26.0.0
+fastapi[standard]==0.138.0
 lightgbm==4.6.0
-pydantic-settings==2.7.1
-sqlalchemy[asyncio]==2.0.36
-asyncpg==0.30.0
-greenlet==3.1.1
+pydantic-settings==2.14.2
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+greenlet==3.5.2
 
 # Dependencias del training service (para cargar modelos MLflow)
-feature-engine>=1.6.0
-catboost>=1.2.0
-xgboost>=2.0.0,<4.0.0
-psutil==6.1.1
-cachetools==5.5.1
+feature-engine>=1.9.4
+catboost>=1.2.10
+xgboost>=3.3.0,<4.0.0
+psutil==7.2.2
+cachetools==7.1.4
