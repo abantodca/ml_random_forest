@@ -5,7 +5,13 @@ output "alb_listener_arn" { value = aws_lb_listener.http.arn }
 output "cluster_id" { value = aws_ecs_cluster.main.id }
 output "cluster_name" { value = aws_ecs_cluster.main.name }
 output "service_name" { value = aws_ecs_service.mlflow.name }
-output "rds_instance_id" { value = aws_db_instance.mlflow.id }
+# DB instance IDENTIFIER (ej. "ml-training-mlflow"), NO el `.id` del recurso:
+# con el provider AWS actual `aws_db_instance.id` resuelve al DbiResourceId
+# (`db-XXXX...`), pero el scheduler lo usa como DBInstanceIdentifier en
+# describe/start/stop_db_instance Y para armar el ARN `...:db:<identifier>` de su
+# IAM. Ambos exigen el identifier -> usar `.identifier` (root fix del
+# DBInstanceNotFound en `task sleep`).
+output "rds_instance_id" { value = aws_db_instance.mlflow.identifier }
 
 # --- Wiring para los modulos api / ui (Capa 4.5) ---
 output "service_discovery_namespace_id" {
