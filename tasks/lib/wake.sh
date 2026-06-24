@@ -34,12 +34,18 @@ wake_cluster() {
   fi
   echo "WAS_UP=false. Invocando $scheduler_fn (action=start)..."
   echo "false" > "$status_file"
+  # Invocacion ASINCRONA (igual que EventBridge): la Lambda bloquea hasta 15 min
+  # esperando el cold-start de RDS, mucho mas que el read-timeout de boto3 (~60s).
+  # Si la invocaramos sincrona (default) el CLI falla con "Read timeout on
+  # endpoint URL" aunque la Lambda siga corriendo bien. Aca solo disparamos el
+  # start; la espera real la hace el polling de RDS+ALB de abajo.
   aws lambda invoke \
     --function-name "$scheduler_fn" \
+    --invocation-type Event \
     --cli-binary-format raw-in-base64-out \
     --payload '{"action":"start"}' \
     /tmp/wake-start.out >/dev/null
-  cat /tmp/wake-start.out && echo ""
+  echo "    scheduler.start invocado (async, 202). Esperando readiness..."
 
   echo ">>> Esperando RDS available (24x30s = 12 min max)..."
   local status=""

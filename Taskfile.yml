@@ -65,78 +65,77 @@ tasks:
           ml_training · forecast de productividad de cosecha (KG/JR_H) por variedad
           Entrena XGBoost + LightGBM por variedad, elige campeon y registra en MLflow.
 
-          ╔════════════════════════════════════════════════════════════════════════╗
-          ║  LOCAL · docker compose (postgres · mlflow · reports · api · ui)        ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  task build             rebuild de imagenes + levanta todo el stack     ║
-          ║  task up                levanta el stack sin rebuild                     ║
-          ║  task data:split        genera data/training/DB-HISTORICA.xlsx           ║
-          ║  task train             entrena + publica el HTML del campeon            ║
-          ║  task down              apaga servicios (preserva el volumen Postgres)   ║
-          ║  task test · task lint  suite P0 en contenedores · ruff                  ║
-          ╚════════════════════════════════════════════════════════════════════════╝
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  LOCAL · docker compose (postgres · mlflow · reports · api · ui)          ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  task build             rebuild de imagenes + levanta todo el stack       ║
+          ║  task up                levanta el stack sin rebuild                      ║
+          ║  task data:split        genera data/training/DB-HISTORICA.xlsx            ║
+          ║  task train             entrena + publica el HTML del campeon             ║
+          ║  task down              apaga servicios (preserva el volumen Postgres)    ║
+          ║  task test · task lint  suite P0 en contenedores · ruff                   ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
             Setup 1ª vez:  task local:ensure-buckets  +  completar buckets en .env
             URLs:  UI :8501 · API :8000/docs · MLflow :5000 · Reports/Artifacts :8080
 
-          ╔════════════════════════════════════════════════════════════════════════╗
-          ║  AWS · PRIMERA VEZ de cero (corré en este orden)                        ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  0) aws sts get-caller-identity     valida credenciales AWS             ║
-          ║  1) task infra:bootstrap            backend S3 (1 vez/cuenta+region)    ║
-          ║  2) creá terraform.tfvars (desde el .example) y poné tu alert_email     ║
-          ║     (1 vez; sin ese archivo 'task deploy' falla — ver cp abajo)         ║
-          ║  3) task deploy                     stand-up completo → imprime URLs    ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  AWS · DÍA A DÍA (ya desplegado)    detalle: infra:/ecr:/batch:/ops:    ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  task wake · sleep      encender · apagar (pausa corta, mantiene NAT)   ║
-          ║  task teardown          apagar largo: libera NAT (~$3/mes idle)         ║
-          ║  task rebuild           volver tras teardown (recrea NAT + servicios)   ║
-          ║  task status · urls     estado del cluster · URLs publicas del ALB      ║
-          ║  task smoke             deploy + 1 job Batch POP de humo                ║
-          ║  task batch:train VARIETIES=POP              entrenamiento en Batch (bg)║
-          ║  task batch:watch · logs · status           ver estado del entrenamiento║
-          ║  task ops:promote MODEL_NAME=… VERSION=N     promover a Production      ║
-          ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                 ║
-          ╚════════════════════════════════════════════════════════════════════════╝
-          ╔════════════════════════════════════════════════════════════════════════════╗
-          ║  AWS · 1ª vez tras deploy (setup)                                          ║
-          ╠════════════════════════════════════════════════════════════════════════════╣
-          ║  Copiar plantilla de tfvars (Paso 2):                                      ║
-          ║  cp infra/envs/prod/terraform.tfvars.example \                             ║
-          ║     infra/envs/prod/terraform.tfvars                                       ║
-          ║  Subí el Excel raw a S3 (1 vez, DESPUES de 'task deploy'):                 ║
-          ║  task infra:upload-raw                                                     ║
-          ║    (deriva el bucket del state; valida bucket+archivo antes de copiar)     ║
-          ║  CI/CD (opcional): task infra:bootstrap-oidc + enable_cicd=true en tfvars  ║
-          ║  Empezar de cero / borrar tfstate:  task infra:reset-state                 ║
-          ╚════════════════════════════════════════════════════════════════════════════╝
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  AWS · PRIMERA VEZ de cero  ·  corré los pasos EN ESTE ORDEN              ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  0) aws sts get-caller-identity        valida tus credenciales AWS        ║
+          ║  1) task infra:bootstrap               crea el backend S3 de tfstate      ║
+          ║                                        (UNA sola vez por cuenta+region)   ║
+          ║  2) cp infra/envs/prod/terraform.tfvars.example \                         ║
+          ║        infra/envs/prod/terraform.tfvars                                   ║
+          ║     ...y editá alert_email.  SIN este archivo, 'task deploy' falla.       ║
+          ║  3) task deploy                        stand-up completo → imprime URLs   ║
+          ║  4) task infra:upload-raw             sube el Excel raw a S3 (tras deploy)║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  Opcional CI/CD (deploy por GitHub Actions, 3 pasos):                     ║
+          ║    a) task infra:bootstrap-oidc       crea el rol IAM (UNA vez)           ║
+          ║    b) poné  enable_cicd = true  en infra/envs/prod/terraform.tfvars       ║
+          ║    c) task infra:apply                aplica el cambio                    ║
+          ║  Reempezar de cero (borra el tfstate):  task infra:reset-state            ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
 
-          ╔════════════════════════════════════════════════════════════════════════╗
-          ║  Entrenar  (mismo default local y Batch: TUNING=prod_xl)               ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  task train VARIETIES=POP                 ~4-6 h   prod_xl · DEFAULT   ║
-          ║  task train VARIETIES=POP TUNING=smoke    ~1 min   sanity (no registra)║
-          ║  task train VARIETIES=POP TUNING=prod     ~2 h     modelo a promover   ║
-          ║  task train VARIETIES=all PARALLEL=3               todas, 3 en paralelo║
-          ╚════════════════════════════════════════════════════════════════════════╝
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  AWS · DÍA A DÍA (ya desplegado)        detalle: infra:/ecr:/batch:/ops:  ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  task wake · sleep      encender · apagar (pausa corta, mantiene NAT)     ║
+          ║  task teardown          apagar largo: libera NAT (~$3/mes idle)           ║
+          ║  task rebuild           volver tras teardown (recrea NAT + servicios)     ║
+          ║  task status · urls     estado del cluster · URLs publicas del ALB        ║
+          ║  task smoke             deploy + 1 job Batch POP de humo                  ║
+          ║  task batch:train VARIETIES=POP            entrenamiento en Batch (bg)    ║
+          ║  task batch:watch · logs · status          ver estado del entrenamiento   ║
+          ║  task ops:promote MODEL_NAME=… VERSION=N   promover a Production          ║
+          ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                   ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
+
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  Entrenar  (mismo default local y Batch: TUNING=prod_xl)                  ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  task train VARIETIES=POP                 ~4-6 h   prod_xl · DEFAULT      ║
+          ║  task train VARIETIES=POP TUNING=smoke    ~1 min   sanity (no registra)   ║
+          ║  task train VARIETIES=POP TUNING=prod     ~2 h     modelo a promover      ║
+          ║  task train VARIETIES=all PARALLEL=3               todas, 3 en paralelo   ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
             En Batch el dispatcher rutea por queue:  prod_xl → On-Demand (sin
             interrupciones, jobs de ~4-6 h) · resto → Spot (−70% costo).
 
-          ╔════════════════════════════════════════════════════════════════════════╗
-          ║  Variables  (override por CLI · VAR=valor)                             ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  VARIETIES   POP | POP,VENTURA | all          (default POP)            ║
-          ║  TUNING      smoke | dev | prod | prod_xl      (default prod_xl)       ║
-          ║  PARALLEL    N variedades en paralelo          (default 1)             ║
-          ║  SEED        semilla de reproducibilidad       (default 42)            ║
-          ╚════════════════════════════════════════════════════════════════════════╝
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  Variables  (override por CLI · VAR=valor)                                ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  VARIETIES   POP | POP,VENTURA | all          (default POP)               ║
+          ║  TUNING      smoke | dev | prod | prod_xl      (default prod_xl)          ║
+          ║  PARALLEL    N variedades en paralelo          (default 1)                ║
+          ║  SEED        semilla de reproducibilidad       (default 42)               ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
 
-          ╔════════════════════════════════════════════════════════════════════════╗
-          ║  Mas detalle                                                           ║
-          ╠════════════════════════════════════════════════════════════════════════╣
-          ║  Catalogo completo:  task --list     Runbook AWS:  GUIA_MLOPS_AWS_V2.md║
-          ╚════════════════════════════════════════════════════════════════════════╝
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  Mas detalle                                                              ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  Catalogo completo:  task --list     Runbook AWS:  GUIA_MLOPS_AWS_V2.md   ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
 
         EOF
 

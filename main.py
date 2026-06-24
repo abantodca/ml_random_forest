@@ -256,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         failed_varieties,
         varieties,
         models,
-        total_dt,
+        total_dt
     )
 
     logger.info("=" * 78)

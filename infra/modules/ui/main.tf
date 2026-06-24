@@ -98,8 +98,14 @@ resource "aws_ecs_service" "ui" {
   cluster         = var.ecs_cluster_id
   task_definition = aws_ecs_task_definition.ui.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
   propagate_tags  = "SERVICE"
+
+  # Fargate Spot: ~70% mas barato. La UI (Streamlit) es stateless; si Spot la
+  # reclama, el usuario recarga. El capacity provider se habilita en el cluster.
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE_SPOT"
+    weight            = 1
+  }
 
   network_configuration {
     subnets          = var.private_subnet_ids

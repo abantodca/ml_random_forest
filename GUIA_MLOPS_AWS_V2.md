@@ -202,7 +202,7 @@ puede auditar end-to-end sin inspeccionar el código del trainer:
 | **Tramo Local (laptop + 2 buckets sandbox)** | **~$0.05** (sólo storage S3) |
 | Tramo II — Scheduler L-V 08-12 PET (default, incluye API + UI) | ~$75 |
 | Tramo II — Sin scheduler (24/7) | ~$195 |
-| Tramo II — Hibernado (tear-down: NAT GW permanente + storage) | ~$35 |
+| Tramo II — Hibernado (tear-down: NAT liberado en teardown vía `enable_nat=false`, solo storage) | ~$3 |
 
 Detalle en Parte 9 (costos por servicio y por modo de lifecycle).
 
@@ -2010,7 +2010,7 @@ Cada uno responde a una pregunta concreta:
 | Modo | Pregunta que responde | Tiempo | Costo despues |
 |---|---|---|---|
 | **STAND-UP** | "Es la primera vez, parto de cero" | 2-3 horas | ~$75/mes (operando) |
-| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15 min | ~$8/mes (solo storage) |
+| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15 min | ~$3/mes (solo storage; NAT liberado) |
 | **REBUILD** | "Volvi y quiero levantar otra vez sin perder modelos/data" | 20-30 min | ~$75/mes |
 | **DESTROY** | "Termine el proyecto / migro a otra cuenta, borra TODO" | 30-45 min | $0/mes |
 
@@ -2018,13 +2018,13 @@ Diagrama de transiciones:
 
 ```
                           stand-up
-            (vacio) ─────────────────► OPERATING (64$/mes)
+            (vacio) ─────────────────► OPERATING (~$75/mes)
                                           │  ▲
                                           │  │
                                   tear-down  rebuild
                                           │  │
                                           ▼  │
-                                       HIBERNATED (8$/mes)
+                                       HIBERNATED (~$3/mes)
                                           │
                                        destroy
                                           │
@@ -2103,8 +2103,8 @@ Estos modos son operaciones del runbook (ya tenes el sistema construido),
 no del stand-up inicial. En tu primera lectura no los necesitas — saltalos
 y volve cuando ya estes operando. Estan documentados en Parte 8:
 
-- **#8.5 — TEAR-DOWN**: apagar todo preservando state + datos (~$8/mes
-  hibernado, reversible con rebuild).
+- **#8.5 — TEAR-DOWN**: apagar todo preservando state + datos (~$3/mes
+  hibernado — NAT liberado vía `enable_nat=false` —, reversible con rebuild).
 - **#8.6 — REBUILD**: volver despues de un tear-down (cambia solo el ALB
   DNS).
 - **#8.7 — DESTROY**: eliminar TODO de la cuenta AWS (requiere 3 backups
@@ -2510,7 +2510,7 @@ v5 vs v4 del provider AWS).
 
 ```hcl
 terraform {
-  required_version = ">= 1.6.0, < 2.0.0"
+  required_version = ">= 1.10.0, < 2.0.0" # ≥1.10 obligatorio: el backend usa use_lockfile=true (ignorado en silencio en 1.6–1.9)
 
   required_providers {
     aws = {
@@ -2601,14 +2601,46 @@ variable "alert_email" {
   type        = string
 }
 
+variable "enable_cicd" {
+  description = "Activa CI/CD (OIDC + module.cicd). Default false: el stand-up completo corre sin bootstrap-oidc.sh ni github_org/repo. Poner true tras #2.5 + re-apply."
+  type        = bool
+  default     = false
+}
+
 variable "github_org" {
-  description = "Organizacion / usuario GitHub que aloja el repo (para OIDC trust)."
+  description = "Organizacion / usuario GitHub que aloja el repo (para OIDC trust). Solo requerido con enable_cicd=true."
   type        = string
+  default     = ""
 }
 
 variable "github_repo" {
-  description = "Nombre del repo (sin la org). Para trust policy OIDC."
+  description = "Nombre del repo (sin la org). Para trust policy OIDC. Solo requerido con enable_cicd=true."
   type        = string
+  default     = ""
+}
+
+variable "enable_nat" {
+  description = "Gate del NAT gateway + EIP + ruta privada default (modulo network). Default true. `task teardown` lo pone en false para LIBERAR el NAT (~$33/mes idle) preservando VPC/subnets/SGs; rebuild/deploy lo recrean."
+  type        = bool
+  default     = true
+}
+
+variable "rds_deletion_protection" {
+  description = "deletion_protection del RDS MLflow. Default true (protectivo). teardown/destroy lo levantan via AWS CLI antes del destroy."
+  type        = bool
+  default     = true
+}
+
+variable "rds_skip_final_snapshot" {
+  description = "skip_final_snapshot del RDS MLflow. Default false: toma snapshot final por default. destroy/teardown lo manejan con un identifier timestamped."
+  type        = bool
+  default     = false
+}
+
+variable "rds_final_snapshot_identifier" {
+  description = "Identificador del snapshot final del RDS (cuando rds_skip_final_snapshot=false). teardown/destroy pasan uno timestamped."
+  type        = string
+  default     = ""
 }
 
 variable "varieties_allowed" {
@@ -2820,12 +2852,16 @@ Pegar **solo** este contenido inicial:
 
 ```hcl
 # OIDC provider de GitHub (creado en Parte 2.5, NO creado por Terraform).
-# Si saltaste #2.5, este `data` falla con "no resource found" en plan.
-# Pre-check antes de `terraform plan`:
+# Gateado por `var.enable_cicd` (default false): con CI/CD apagado el `data`
+# tiene count=0 y NO se evalua → el stand-up completo (storage→network→mlflow
+# →batch→api/ui) corre SIN `bash infra/bootstrap-oidc.sh` y sin github_org/repo.
+# Solo si activas CI/CD (enable_cicd=true, tras #2.5) este `data` debe resolver.
+# Pre-check antes de `terraform plan` (solo con enable_cicd=true):
 #   aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[?contains(Arn,`token.actions.githubusercontent.com`)]'
 # Si devuelve [], correr `bash infra/bootstrap-oidc.sh` (#2.5).
 data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+  count = var.enable_cicd ? 1 : 0
+  url   = "https://token.actions.githubusercontent.com"
 }
 ```
 
@@ -2833,7 +2869,7 @@ data "aws_iam_openid_connect_provider" "github" {
 >
 > | Recurso Terraform | Servicio | Que harias click-a-click |
 > |---|---|---|
-> | `data "aws_iam_openid_connect_provider"` | **IAM** | `IAM > Identity providers` → veras `token.actions.githubusercontent.com` (creado por `bootstrap-oidc.sh` en #2.5). El `data` lo "lee" para que `module.cicd` (#3.11) pueda asignar trust policies a los roles GHA sin hardcodear el ARN. |
+> | `data "aws_iam_openid_connect_provider"` | **IAM** | `IAM > Identity providers` → veras `token.actions.githubusercontent.com` (creado por `bootstrap-oidc.sh` en #2.5). El `data` lo "lee" para que `module.cicd` (#3.11) pueda asignar trust policies a los roles GHA sin hardcodear el ARN. Con `enable_cicd=false` (default) este `data` no se evalua y no necesitas haber corrido `bootstrap-oidc.sh`. |
 >
 > **Nota**: el root `main.tf` ya **no** declara `data "aws_caller_identity"` ni
 > `data "aws_region"` compartidos — quedaron sin uso al nivel de composicion.
@@ -2927,13 +2963,13 @@ output "sns_topic_arn" {
 }
 
 output "gha_deploy_role_arn" {
-  description = "Role que asume GitHub Actions para `terraform apply`."
-  value       = module.cicd.gha_deploy_role_arn
+  description = "Role que asume GitHub Actions para `terraform apply`. null si enable_cicd=false."
+  value       = var.enable_cicd ? module.cicd[0].gha_deploy_role_arn : null
 }
 
 output "gha_train_role_arn" {
-  description = "Role que asume GitHub Actions para invocar Lambda dispatcher."
-  value       = module.cicd.gha_train_role_arn
+  description = "Role que asume GitHub Actions para invocar Lambda dispatcher. null si enable_cicd=false."
+  value       = var.enable_cicd ? module.cicd[0].gha_train_role_arn : null
 }
 
 # Patch 13.5
@@ -3057,6 +3093,8 @@ es el item caro** (~$32/mes); HA exigiria 2 NATs = $64/mes.
 > **Conceptualmente — por qué IGW Y NAT**: hacen cosas opuestas. **IGW** = tráfico **bidireccional** (sirve al ALB). **NAT** = **solo saliente** (Fargate/Batch en private salen a `docker pull`/CloudWatch sin aceptar conexiones entrantes). Sin NAT, Batch no podría pullear de ECR ni postear runs.
 >
 > **Por qué NAT es el item caro**: ~$32/mes encendida + $0.045/GB procesado (~$0.27 por job que baja 6 GB). Reemplazable con **VPC Endpoints** (gratis para S3/ECR) → casi cero (hardening, futuro).
+>
+> **Toggle `enable_nat`** (default `true`): el NAT gateway + EIP + la ruta privada default van gateados por `var.enable_nat`. `task teardown` corre `terraform apply -target=module.network -var enable_nat=false` tras destruir los volátiles → **libera el NAT (~$33/mes idle)** preservando VPC/subnets/SGs. `task rebuild`/`deploy` lo recrean (default `true`).
 
 ```hcl
 resource "aws_internet_gateway" "igw" {
@@ -3065,12 +3103,14 @@ resource "aws_internet_gateway" "igw" {
 }
 
 resource "aws_eip" "nat" {
+  count  = var.enable_nat ? 1 : 0
   domain = "vpc"
   tags   = { Name = "${var.project}-nat-eip" }
 }
 
 resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
+  count         = var.enable_nat ? 1 : 0
+  allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public[0].id
   tags          = { Name = "${var.project}-nat" }
   depends_on    = [aws_internet_gateway.igw]
@@ -3110,9 +3150,13 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
+  # Ruta default solo si enable_nat=true; con NAT liberado la RT queda sin 0.0.0.0/0.
+  dynamic "route" {
+    for_each = var.enable_nat ? [1] : []
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[0].id
+    }
   }
   tags = { Name = "${var.project}-rt-private" }
 }
@@ -3984,11 +4028,14 @@ borrar los otros — Terraform los procesa igual.
 
 `random_password` + Secrets Manager evita escribir el password en
 tfstate (queda solo en SM). `subnet_group` en private subnets x2
-porque RDS exige 2 AZs aunque sea single-AZ. `skip_final_snapshot=true`
-+ `deletion_protection=false` son **inseguros para prod con datos
-reales**: nos los dejamos asi mientras hay solo experimentos
-descartables. Al primer modelo que importe en Production, ambos
-flags **deben cambiarse** (hardening, futuro).
+porque RDS exige 2 AZs aunque sea single-AZ. `skip_final_snapshot` y
+`deletion_protection` ahora son **variables con defaults protectivos**
+(`deletion_protection=true`, `skip_final_snapshot=false` → toma snapshot
+final): el RDS arranca protegido por default. `task destroy`/`task teardown`
+levantan la protección automáticamente vía AWS CLI
+(`aws rds modify-db-instance --no-deletion-protection`, helper
+`lift_rds_protection` en `tasks/lib/nuke.sh`) y pasan un
+`rds_final_snapshot_identifier` timestamped antes del destroy.
 
 > **Equivalente en AWS Console**:
 >
@@ -4003,7 +4050,7 @@ flags **deben cambiarse** (hardening, futuro).
 > - **RDS** = Postgres **managed** (backups, parches, replicación a cargo de AWS); vos solo usás la endpoint que te da.
 > - **Por qué Postgres acá**: MLflow lo usa como **backend store** (metadata de runs: params, metrics, tags). Los artifacts pesados (`.joblib`, `.html`) van a **S3**, no a Postgres — así la DB no crece a TB.
 > - **Por qué Secrets Manager y no env var**: el password queda **rotable** sin re-deploy y no aparece en plano en `terraform.tfstate` (solo el ARN).
-> - **`skip_final_snapshot=true` + `deletion_protection=false`**: dejan destruir el lab sin fricción. **Cambialos a `false`/`true` antes de meter datos reales** (hardening, futuro).
+> - **`skip_final_snapshot` + `deletion_protection`**: ahora son variables con defaults protectivos (`deletion_protection=true`, `skip_final_snapshot=false`) → el RDS arranca protegido y toma snapshot final. No hay que tocarlos a mano: `task teardown`/`task destroy` levantan la protección por CLI (`lift_rds_protection`) y pasan un `rds_final_snapshot_identifier` timestamped antes del destroy.
 
 ```hcl
 # infra/modules/mlflow/rds.tf
@@ -4042,9 +4089,10 @@ resource "aws_db_instance" "mlflow" {
   db_subnet_group_name    = aws_db_subnet_group.mlflow.name
   vpc_security_group_ids  = [var.sg_rds_id]
   publicly_accessible     = false
-  skip_final_snapshot     = true # OK para prod single-AZ; ajustar en Parte 10.4
-  apply_immediately       = true
-  deletion_protection     = false # cambiar a true cuando hay datos productivos
+  skip_final_snapshot       = var.rds_skip_final_snapshot       # default false: toma snapshot final
+  final_snapshot_identifier = var.rds_final_snapshot_identifier != "" ? var.rds_final_snapshot_identifier : null
+  apply_immediately         = true
+  deletion_protection       = var.rds_deletion_protection       # default TRUE (protectivo)
   backup_retention_period = 7
   backup_window           = "06:00-07:00"
   maintenance_window      = "Mon:07:00-Mon:08:00"
@@ -6643,13 +6691,22 @@ de `module "scheduler"` de #3.10.5):
 # -------------------------------------------------------------------------
 module "cicd" {
   source = "../../modules/cicd"
+  count  = var.enable_cicd ? 1 : 0
 
   project           = var.project
   github_org        = var.github_org
   github_repo       = var.github_repo
-  oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
+  oidc_provider_arn = data.aws_iam_openid_connect_provider.github[0].arn
 }
 ```
+
+> **Nota CI/CD opcional**: tanto el `data "aws_iam_openid_connect_provider"` (#3.2.5)
+> como `module.cicd` van gateados por `var.enable_cicd` (default `false`). Con el
+> default, el stand-up completo (storage→network→mlflow→batch→api/ui) corre **sin**
+> `bash infra/bootstrap-oidc.sh` y **sin** `github_org`/`github_repo`. Los outputs
+> `gha_*_role_arn` devuelven `null` con CI/CD apagado. Para activarlo: corré
+> `bootstrap-oidc.sh` (#2.5), poné `enable_cicd=true` (+ `github_org`/`github_repo`)
+> y re-aplicá.
 
 > **Checkpoint final**: con este bloque pegado, el `main.tf` esta
 > **completo** (los 9 modulos + el `data` source del OIDC provider). La validación
@@ -6741,7 +6798,9 @@ module "consumer_iam" {
 
   project              = var.project
   artifacts_bucket_arn = module.storage.artifacts_bucket_arn
-  consumer_oidc_arn    = data.aws_iam_openid_connect_provider.github.arn
+  # Reusa el `data` del OIDC provider de GitHub (gateado por enable_cicd):
+  # este modulo OPCIONAL requiere enable_cicd=true (+ bootstrap-oidc en #2.5).
+  consumer_oidc_arn    = data.aws_iam_openid_connect_provider.github[0].arn
   consumer_org         = var.consumer_org
   consumer_repo        = var.consumer_repo
 }
@@ -7659,6 +7718,7 @@ tasks/
 #   task infra:validate                               fmt -check + validate (pre-commit)
 #   task infra:destroy                                DESTRUCTIVO: todo
 #   task infra:destroy-target TARGET=module.X         DESTRUCTIVO: parcial
+#   task infra:reset-state                            borra tfstate remoto + .terraform (fresh start; no toca AWS)
 # =============================================================================
 
 version: "3"
@@ -7787,6 +7847,20 @@ tasks:
     deps: [_init]
     cmds:
       - terraform -chdir={{.TF_DIR}} force-unlock -force {{.LOCK_ID}}
+
+  reset-state:
+    desc: "Borra el tfstate remoto de envs/prod en S3 (todas las versiones + .tflock) y el .terraform local, para arrancar de cero. NO toca recursos AWS vivos: solo hace que Terraform los 'olvide'. Util al re-empezar en una cuenta con state viejo."
+    prompt: "Esto borra el tfstate remoto de envs/prod (Terraform 'olvidara' los recursos, que SEGUIRAN vivos en AWS). Continuar?"
+    cmds:
+      # Borra todas las versiones del objeto tfstate + su .tflock en el bucket de state.
+      - |
+        export BUCKET="{{.PROJECT}}-tfstate-{{.SUFFIX}}"
+        for KEY in envs/prod/terraform.tfstate envs/prod/terraform.tfstate.tflock; do
+          aws s3api list-object-versions --bucket "$BUCKET" --prefix "$KEY" \
+            --query '[Versions,DeleteMarkers][].{Key:Key,VersionId:VersionId}' --output json 2>/dev/null \
+          | python3 -c 'import sys,json,subprocess,os; b=os.environ["BUCKET"]; [subprocess.run(["aws","s3api","delete-object","--bucket",b,"--key",o["Key"],"--version-id",o["VersionId"]]) for o in (json.load(sys.stdin) or [])]'
+        done
+      - rm -rf {{.TF_DIR}}/.terraform {{.TF_DIR}}/.terraform.lock.hcl
 ```
 
 `_init` es `internal: true` (no aparece en `task --list`) y se dispara via `deps:` cuando hace falta. `SUFFIX` se resuelve dinamicamente con `aws sts get-caller-identity` — si cambias de cuenta AWS, el backend bucket name cambia con vos.
@@ -8296,7 +8370,7 @@ tasks:
 
 - `ops:up` es **idempotente**: pre-check `/health` y solo invoca `scheduler.start` si esta DOWN. Lo usan tanto el operador manual como el flujo CI auto-train (el `wake.sh` escribe el estado previo a `/tmp/wake-status` para que el workflow decida si tiene que apagar al final).
 - `ops:down` con `COOLDOWN=N` (default 0) cubre el "down ahora" manual y el "espera N seg y apaga" del CI post-train con una sola task.
-- `ops:teardown` preserva `module.network` y `module.storage`. El NAT Gateway en network cuesta $32/mes encendido pero su create tarda 5+ min — si vas a teardown >1 vez/mes, conservarlo es net-positivo. Para hibernar largo: `task infra:destroy-target TARGET=module.network`.
+- `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$3/mes (solo storage), sin tener que destruir toda la red.
 - `ops:promote` delega en `scripts/promote_model.py` (Python con `MlflowClient`) — 3 gates: MAPE absoluto, A/B contra Production actual, transition con `archive_existing_versions=True`.
 
 ### 4.1.7 Helpers `tasks/lib/*.sh`
@@ -9117,7 +9191,7 @@ en el primer recurso roto.
 
 > **Gotchas #4.5**:
 > - **C2 (RDS)**: subnet group requiere 2 AZs. Si la VPC solo tiene 1 subnet privada → `DBSubnetGroupDoesNotCoverEnoughAZs`. Agregar segunda AZ a `module.network`.
-> - **C3 (CI/CD)**: si el OIDC provider de #2.5 no existe, `data "aws_iam_openid_connect_provider"` falla. Bootstrapear OIDC antes de `module.cicd`.
+> - **C3 (CI/CD)**: con `enable_cicd=false` (default) este chequeo NO aplica — el `data "aws_iam_openid_connect_provider"` tiene count=0 y el plan no lo evalua. Solo con `enable_cicd=true`: si el OIDC provider de #2.5 no existe, el `data` falla → bootstrapear OIDC antes de re-aplicar `module.cicd`.
 > - **Tiempo**: C1 ~2m + C2 ~10m (RDS domina) + C3 ~3m + C4 ~2m = ~17m total.
 
 ## 4.6 Smoke test — entrenar 1 variedad end-to-end
@@ -10051,7 +10125,7 @@ Trigger: **solo `workflow_dispatch`**.
 
 | Modo | Que destruye | Que preserva | Reversible con |
 |---|---|---|---|
-| **TEAR-DOWN** | Modulos volatiles (mlflow, reports, batch, lambdas, monitoring, scheduler, cicd, consumer_iam) | S3 + ECR + network + tfstate + OIDC | `task rebuild` (~20 min, modelos intactos). Costo restante: ~$8/mes (S3). |
+| **TEAR-DOWN** | Modulos volatiles (mlflow, reports, batch, lambdas, monitoring, scheduler, cicd, consumer_iam) + libera el NAT (`enable_nat=false`) | S3 + ECR + network (VPC/subnets/SGs, sin NAT) + tfstate + OIDC | `task rebuild` (~20 min, modelos intactos). Costo restante: ~$3/mes (S3). |
 | **DESTROY** | TODOS los modulos administrados (incluye storage). Vacia buckets versionados + purga ECR antes del `terraform destroy`. | tfstate bucket + OIDC provider | Re-crear via `task deploy`. Costo: $0/mes. |
 | **NUKE** | DESTROY + tfstate bucket + OIDC provider. Cuenta limpia. | Nada | Re-bootstrap desde cero (Parte 2). |
 
@@ -10081,8 +10155,9 @@ Trigger: **solo `workflow_dispatch`**.
 name: Destroy
 
 # Tres modos via input `modo`:
-#   TEAR-DOWN -> destroy volatiles. Preserva S3 + ECR + network + tfstate + OIDC.
-#                Reversible con `task rebuild`. Costo restante: ~$8/mes (S3).
+#   TEAR-DOWN -> destroy volatiles + libera NAT (enable_nat=false). Preserva
+#                S3 + ECR + network (sin NAT) + tfstate + OIDC.
+#                Reversible con `task rebuild`. Costo restante: ~$3/mes (S3).
 #   DESTROY   -> terraform destroy de TODOS los modulos (incluye storage). Vacia
 #                buckets versionados + purga ECR antes. Preserva tfstate + OIDC.
 #   NUKE      -> DESTROY + borra tfstate bucket + OIDC. Cuenta limpia.
@@ -10850,10 +10925,10 @@ gasto, evento de costo inesperado, pausar el proyecto.
   arrancar)
 - Batch compute environments: `desired_vcpus = 0` (no hay EC2 corriendo)
 - ALB + listener: borrados (se recrean en rebuild — el DNS cambia)
-- NAT Gateway: borrado ($32/mes ahorro)
-- Subnets/VPC: se preservan o borran segun el flag (default: preservar)
+- NAT Gateway + EIP: **liberados** vía `enable_nat=false` (~$33/mes ahorro), sin destruir el resto de la red
+- Subnets/VPC/SGs: se preservan (el toggle `enable_nat` baja solo el NAT, no `module.network` entero)
 
-**Costo despues del tear-down**: ~$35/mes (NAT GW $32 permanente + S3 ~$3). El tear-down preserva `module.network`; para eliminar el NAT GW usar `task destroy` o destruir `module.network` aparte.
+**Costo despues del tear-down**: ~$3/mes (solo S3). El tear-down preserva `module.network` (VPC/subnets/SGs) pero **libera el NAT** vía `enable_nat=false` (`terraform apply -target=module.network -var enable_nat=false`), eliminando el ~$33/mes idle. `task rebuild`/`deploy` lo recrean.
 
 ### Comando `task teardown`
 
@@ -10865,7 +10940,10 @@ task teardown
 #     ml-training-scheduler (action=stop) para apagar RDS + Fargate.
 #  2. Loop `terraform destroy -target=$mod` sobre los modulos VOLATILES, en orden:
 #     scheduler -> lambdas -> monitoring -> batch -> reports -> api -> ui -> mlflow -> cicd -> consumer_iam
-#  network y storage son PERMANENTES: NO se destruyen (el NAT GW sigue vivo).
+#  3. Antes (o despues) levanta la proteccion del RDS via AWS CLI
+#     (lift_rds_protection en tasks/lib/nuke.sh) y pasa rds_final_snapshot_identifier timestamped.
+#  4. `terraform apply -target=module.network -var enable_nat=false` -> LIBERA el NAT (~$33/mes).
+#  storage es PERMANENTE: NO se destruye. network se preserva pero con el NAT liberado.
 ```
 
 ### Periodo de gracia de RDS
@@ -11021,7 +11099,7 @@ flowchart TD
     end
 
     subgraph Alt[Escenarios alternativos]
-        A1["Hibernado (tear-down) ≈ $35/m<br/>(NAT GW permanente)<br/>→ 9.2"]
+        A1["Hibernado (tear-down) ≈ $3/m<br/>(NAT liberado en teardown)<br/>→ 9.2"]
         A2["24/7 ≈ $195/m<br/>→ 9.2"]
         A3["No-NAT (VPC endpoints) ≈ $36/m<br/>→ 9.2"]
         A4["Multi-AZ RDS +$13/m<br/>→ 9.2"]
@@ -11047,7 +11125,7 @@ flowchart TD
 **Notas clave:**
 
 - Los números son estimados con asunciones específicas (10 trainings/mes, 5 GB S3, 80h/mes scheduler). Tus números reales se desvían según variedades, frecuencia de re-train y tráfico ALB+NAT.
-- El item que más pesa: NAT GW $32/mes 24×7. Si te molesta, ir a 9.4.1 (VPC endpoints, hardening futuro). Aplica si tráfico NAT > 80 GB/mes.
+- El item que más pesa estando operando: NAT GW $32/mes 24×7. En hibernado ya no pesa: `task teardown` lo libera (`enable_nat=false`), no solo los VPC endpoints. Para bajarlo también mientras operás, ir a 9.4.1 (VPC endpoints, hardening futuro). Aplica si tráfico NAT > 80 GB/mes.
 - Los "(futuro)" en 9.4 son intencionales: cada optimización cuesta horas de ingeniería. Re-leer a los 60 días de operación real.
 
 > **Gotcha Parte 9**: confundir "operando normal" con "24/7". El default lockeado es scheduler L-V 08-12 = 80h/mes de Fargate; pasar a 24/7 (scheduler OFF) duplica el número. Validar con `aws events describe-rule --name ml-training-start` y comparar con Cost Explorer (±20% de #9.1).
@@ -11066,9 +11144,9 @@ prende/apaga MLflow + Reports + **API + UI** juntos), 10 trainings/mes promedio
 | RDS db.t4g.small (80h/mes; hostea MLflow + forecasts) | 80 × $0.032 | $2.56 |
 | RDS storage (20 GB gp3) | 20 × $0.115 | $2.30 |
 | Fargate MLflow (2 vCPU, 4 GB, 80h) | 80 × ($0.04048 × 2 + $0.004445 × 4) | $7.90 |
-| Fargate Reports (0.5 vCPU, 1 GB, 80h) | 80 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.97 |
+| Fargate Reports (0.5 vCPU, 1 GB, 80h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 80 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.97 |
 | Fargate API (1 vCPU, 2 GB, 80h) | 80 × ($0.04048 × 1 + $0.004445 × 2) | $3.95 |
-| Fargate UI (0.5 vCPU, 1 GB, 80h) | 80 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.97 |
+| Fargate UI (0.5 vCPU, 1 GB, 80h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 80 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.97 |
 | ALB (24/7) | 720h × $0.0225 | $16.20 |
 | ALB LCU | <0.5 LCU promedio | $0.50 |
 | NAT Gateway (24/7) | 720h × $0.045 | $32.40 |
@@ -11111,7 +11189,7 @@ $75 es realista con el monorepo completo (training + serving) del V2.
 
 | Escenario | Cambio vs default | Costo total/mes | Cuando elegirlo |
 |---|---|---|---|
-| **Hibernado** | tear-down (sección 8.5; NAT GW queda) | ~$35 | Pausa de 1+ semana |
+| **Hibernado** | tear-down (sección 8.5; libera NAT vía `enable_nat=false`) | ~$3 | Pausa de 1+ semana |
 | **Default (lockeado)** | Scheduler L-V 08-12 PET | **~$75** | Operacion normal |
 | **24/7** | Scheduler OFF, stack (MLflow+Reports+API+UI) + RDS siempre on | ~$195 | Equipo distribuido multi-timezone |
 | **No-NAT** | VPC endpoints en vez de NAT GW (hardening, futuro) | ~$36 | Trafico NAT < 10 GB/mes |
@@ -11136,7 +11214,7 @@ documentados en secciones 8.5 a 8.7).
 | ECS Fargate API (1 vCPU, 2 GB, 80h/mes) | $3.95 | $0 | $0 |
 | ECS Fargate UI (0.5 vCPU, 1 GB, 80h/mes) | $1.97 | $0 | $0 |
 | ALB | $16 | $0 (borrado) | $0 |
-| NAT Gateway (24/7) | $32 | $0 (borrado) | $0 |
+| NAT Gateway (24/7) | $32 | $0 (liberado vía `enable_nat=false`) | $0 |
 | Batch EC2 (Spot c6i.2xlarge, ~10 jobs/mes × 1h) | $3 | $0 | $0 |
 | Lambdas (negligible) | $0.10 | $0.10 | $0 |
 | EventBridge / SNS / CloudWatch | $0.30 | $0.30 | $0 |
@@ -11149,6 +11227,10 @@ documentados en secciones 8.5 a 8.7).
 > hibernado NO cambia con el App stack: el scheduler escala API+UI a 0 igual
 > que MLflow/Reports. Tabla pensada como **delta entre modos**, no como suma
 > auditable — para esa ver sección 9.1.
+>
+> **NAT $0 en hibernado ya no es aspiracional**: `task teardown` lo libera con
+> `enable_nat=false` (`terraform apply -target=module.network`), preservando
+> VPC/subnets/SGs; `task rebuild`/`deploy` lo recrean (default `true`).
 
 Si queres bajar mas el modo operando, ver sección 9.4 (S3 lifecycle +
 Intelligent Tiering, ECR scan policies). Los VPC endpoints eliminan el
@@ -11182,9 +11264,13 @@ en semanas). Aplicar despues de la primera vuelta.
 
 ### 9.4.4 Fargate Spot para MLflow
 
-50-70% off Fargate, pero interrupcion = MLflow caido. **Por que no
-dia 1**: MLflow es path-critical para CI/CD; downtime mid-day rompe
-tu workflow. Usar solo en envs/dev.
+**Reports y UI YA corren en FARGATE_SPOT** (~70% más baratos; son stateless,
+una interrupción solo reinicia la task). El cluster expone capacity providers
+`FARGATE` + `FARGATE_SPOT`. **MLflow y API quedan on-demand a propósito**:
+MLflow es crítico durante runs largos de training — si Spot lo reclama mid-run,
+se pierde el run. 50-70% off Fargate, pero interrupcion = MLflow caido.
+**Por que no día 1 para MLflow**: es path-critical para CI/CD; downtime mid-day
+rompe tu workflow. Mover MLflow a Spot solo en envs/dev.
 
 ---
 

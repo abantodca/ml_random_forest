@@ -4,7 +4,8 @@
 # Incluido por Taskfile.yml raiz con namespace "ops:".
 #
 # Modulos VOLATILES (teardown los destruye, ~10-15 min para recrear):
-#   scheduler, lambdas, monitoring, batch, reports, mlflow, cicd, consumer_iam
+#   scheduler, lambdas, monitoring, batch, reports, api, ui, mlflow, cicd
+#   (cicd solo existe si enable_cicd=true; con 0 instancias el destroy es no-op)
 # Modulos PERMANENTES (NO se tocan en teardown):
 #   network (VPC + NAT), storage (S3 + ECR), backend state
 #
@@ -27,7 +28,7 @@ vars:
   # convencion de nombres, compartida con batch:). Ver includes en Taskfile.yml.
   MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
   # Orden reverso de apply: importante para destroy con dependencias.
-  VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd module.consumer_iam"
+  VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd"
 
 tasks:
 
@@ -195,14 +196,26 @@ tasks:
       - task: down
       - 'echo ">>> Destroy modulos volatiles (orden reverso de apply)..."'
       - |
+        set -euo pipefail
+        source tasks/lib/nuke.sh
+        # module.mlflow incluye el RDS con deletion_protection=true -> levantarla
+        # antes del destroy. El snapshot final usa nombre timestamped (sin colision).
+        lift_rds_protection "{{.PROJECT}}-mlflow"
+        SNAP="{{.PROJECT}}-mlflow-final-$(date +%Y%m%d%H%M%S)"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"
-          terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve || {
+          terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve \
+            -var "rds_final_snapshot_identifier=$SNAP" || {
             echo "FAIL destroy de $mod fallo. Revisar manualmente."
             exit 1
           }
         done
-      - 'echo "OK teardown completo. Para volver: task ops:rebuild"'
+      # Libera el NAT gateway + EIP (~$33/mes idle) sin tocar VPC/subnets/SGs.
+      # Ya no queda nada en subnets privadas (los volatiles se destruyeron arriba).
+      # `task rebuild`/deploy lo recrean (enable_nat default true).
+      - 'echo ">>> Liberando NAT gateway (enable_nat=false)..."'
+      - terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
+      - 'echo "OK teardown completo (NAT liberado). Para volver: task ops:rebuild"'
 
   rebuild:
     desc: "Re-apply de modulos volatiles + up"

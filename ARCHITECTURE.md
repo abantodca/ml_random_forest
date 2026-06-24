@@ -246,9 +246,22 @@ graph TB
 ```
 
 Módulos Terraform: `network · storage · mlflow · api · ui · reports · batch ·
-scheduler · lambdas · monitoring · cicd · _shared`. CI/CD (GHA OIDC → ECR/ECS)
-en `GUIA_MLOPS_AWS_V2.md #3.10`. `task wake/sleep` apaga/enciende el bloque
-(RDS+MLflow+reports+api+ui) como modelo de costo.
+scheduler · lambdas · monitoring · cicd · _shared`. El módulo **`cicd` es
+opcional**: `enable_cicd=false` (default) levanta todo el stack **sin** depender
+del bootstrap OIDC (`task infra:bootstrap-oidc`); se activa después con
+`enable_cicd=true`. Detalle CI/CD en `GUIA_MLOPS_AWS_V2.md #3.10`.
+
+**Modelo de costo (dos palancas, sin cambiar la topología):**
+- **`task wake/sleep`** — para pausas cortas: el scheduler escala Fargate a 0 y
+  para el RDS, pero **mantiene NAT + ALB** (wake instantáneo). Piso ~$50/mes.
+- **`task teardown`** — para idle largo: destruye los módulos volátiles **y
+  libera el NAT** (`enable_nat=false`, ~$33/mes idle) preservando VPC/storage.
+  Piso ~$3/mes; `task rebuild`/`deploy` lo recrean.
+- **Fargate Spot** en `reports` + `ui` (stateless, ~70% más baratos); MLflow y
+  API quedan on-demand a propósito (MLflow es crítico durante runs largos).
+- **RDS** `db.t4g.small` (no `micro`): hostea MLflow + `forecasts`, con
+  `deletion_protection` + snapshot final por default (las tareas de teardown lo
+  levantan vía AWS CLI para permitir el destroy).
 
 ---
 

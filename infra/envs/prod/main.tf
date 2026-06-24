@@ -1,19 +1,22 @@
 # OIDC provider de GitHub (creado en Parte 2.5, NO creado por Terraform).
-# Si saltaste #2.5, este `data` falla con "no resource found" en plan.
-# Pre-check antes de `terraform plan`:
+# Solo se lee si enable_cicd=true; con el flag en false (default) el `count=0`
+# evita que un OIDC inexistente rompa el plan -> el stand-up sin CI/CD funciona
+# sin correr `bash infra/bootstrap-oidc.sh` (#2.5).
+# Pre-check (solo si enable_cicd=true):
 #   aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[?contains(Arn,`token.actions.githubusercontent.com`)]'
-# Si devuelve [], correr `bash infra/bootstrap-oidc.sh` (#2.5).
 data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+  count = var.enable_cicd ? 1 : 0
+  url   = "https://token.actions.githubusercontent.com"
 }
 
 # -------------------------------------------------------------------------
 # Capa 1: Red (VPC + subnets + NAT + SGs)
 # -------------------------------------------------------------------------
 module "network" {
-  source   = "../../modules/network"
-  project  = var.project
-  vpc_cidr = var.vpc_cidr
+  source     = "../../modules/network"
+  project    = var.project
+  vpc_cidr   = var.vpc_cidr
+  enable_nat = var.enable_nat
 }
 
 # -------------------------------------------------------------------------
@@ -42,6 +45,10 @@ module "mlflow" {
   artifacts_bucket     = module.storage.artifacts_bucket
   artifacts_bucket_arn = module.storage.artifacts_bucket_arn
   log_retention_days   = var.log_retention_days
+
+  rds_deletion_protection       = var.rds_deletion_protection
+  rds_skip_final_snapshot       = var.rds_skip_final_snapshot
+  rds_final_snapshot_identifier = var.rds_final_snapshot_identifier
 }
 
 # -------------------------------------------------------------------------
@@ -60,6 +67,10 @@ module "reports" {
   artifacts_bucket_arn = module.storage.artifacts_bucket_arn
   reports_image        = "${module.storage.ecr_reports_url}:${var.reports_image_tag}"
   log_retention_days   = var.log_retention_days
+
+  # reports corre en FARGATE_SPOT -> el capacity provider debe estar asociado al
+  # cluster antes (vive en module.mlflow).
+  depends_on = [module.mlflow]
 }
 
 # -------------------------------------------------------------------------
@@ -89,12 +100,15 @@ module "batch" {
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  project              = var.project
-  alert_email          = var.alert_email
-  batch_job_queue_name = module.batch.job_queue_spot
-  alb_arn_suffix       = module.mlflow.alb_arn_suffix
-  varieties            = var.varieties_allowed
-  mape_alarm_threshold = var.mape_alarm_threshold
+  project               = var.project
+  alert_email           = var.alert_email
+  batch_job_queue_names = {
+    spot     = module.batch.job_queue_spot
+    ondemand = module.batch.job_queue_ondemand
+  }
+  alb_arn_suffix        = module.mlflow.alb_arn_suffix
+  varieties             = var.varieties_allowed
+  mape_alarm_threshold  = var.mape_alarm_threshold
 }
 
 # -------------------------------------------------------------------------
@@ -140,14 +154,17 @@ module "scheduler" {
 
 # -------------------------------------------------------------------------
 # Capa 9: CI/CD (GHA IAM roles confiando en OIDC)
+# Opcional: enable_cicd=false (default) la omite por completo -> el stand-up del
+# resto del stack no depende del bootstrap OIDC ni de github_org/github_repo.
 # -------------------------------------------------------------------------
 module "cicd" {
+  count  = var.enable_cicd ? 1 : 0
   source = "../../modules/cicd"
 
   project           = var.project
   github_org        = var.github_org
   github_repo       = var.github_repo
-  oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
+  oidc_provider_arn = data.aws_iam_openid_connect_provider.github[0].arn
 }
 
 # -------------------------------------------------------------------------
@@ -194,4 +211,7 @@ module "ui" {
   cpu                = var.ui_cpu
   memory             = var.ui_memory
   log_retention_days = var.log_retention_days
+
+  # ui corre en FARGATE_SPOT -> capacity provider asociado primero (module.mlflow).
+  depends_on = [module.mlflow]
 }

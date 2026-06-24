@@ -19,6 +19,20 @@ empty_bucket() {
   fi
 }
 
+# lift_rds_protection <db-instance-id>
+#   Quita deletion_protection del RDS para permitir un terraform destroy.
+#   Idempotente: si el RDS no existe, no hace nada. AWS aplica el cambio de
+#   deletion_protection al instante (no requiere instancia available ni reboot).
+lift_rds_protection() {
+  local id="$1"
+  if ! aws rds describe-db-instances --db-instance-identifier "$id" >/dev/null 2>&1; then
+    echo "  RDS $id no existe, skip lift"; return 0
+  fi
+  echo "  Levantando deletion_protection de $id (para permitir destroy)..."
+  aws rds modify-db-instance --db-instance-identifier "$id" \
+    --no-deletion-protection --apply-immediately >/dev/null
+}
+
 # purge_ecr <repo>
 #   Borra TODAS las imagenes de un repo ECR (no borra el repo).
 purge_ecr() {

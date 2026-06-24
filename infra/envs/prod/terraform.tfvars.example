@@ -1,0 +1,19 @@
+# terraform.tfvars.example — plantilla de variables de prod.
+# Copia a `terraform.tfvars` (gitignored) y completa. Terraform lo carga
+# automaticamente en plan/apply (`task deploy`, `task infra:apply`).
+#
+#   cp infra/envs/prod/terraform.tfvars.example infra/envs/prod/terraform.tfvars
+#
+# ── Requerido ────────────────────────────────────────────────────────────────
+# Email que recibe alertas SNS (job Batch FAILED, MAPE alto). Confirmas la
+# suscripcion via el mail de AWS la primera vez.
+alert_email = "tu-email@ejemplo.com"
+
+# ── CI/CD: dejalo en false por ahora ─────────────────────────────────────────
+# El stand-up completo (storage -> network -> mlflow -> batch -> api/ui) NO
+# necesita CI/CD. Pon enable_cicd=true SOLO despues de `task infra:bootstrap-oidc`
+# y completar github_org/github_repo; entonces re-corre `task infra:apply` para
+# sumar los roles GHA sin tocar el resto.
+enable_cicd = false
+# github_org  = "tu-usuario-u-org"
+# github_repo = "ml_random_forest"

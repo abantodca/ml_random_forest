@@ -55,9 +55,17 @@ resource "aws_iam_role_policy" "job_cloudwatch" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
+      # PutMetricData no soporta resource-level, pero si la condicion de
+      # namespace -> se acota a las metricas de este proyecto (no puede escribir
+      # en AWS/* ni en namespaces de otros sistemas).
       Effect   = "Allow"
       Action   = ["cloudwatch:PutMetricData"]
       Resource = "*"
+      Condition = {
+        StringEquals = {
+          "cloudwatch:namespace" = "${var.project}/Training"
+        }
+      }
     }]
   })
 }

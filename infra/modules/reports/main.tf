@@ -101,7 +101,14 @@ resource "aws_ecs_service" "reports" {
   cluster         = var.ecs_cluster_id
   task_definition = aws_ecs_task_definition.reports.arn
   desired_count   = 1
-  launch_type     = "FARGATE"
+
+  # Fargate Spot: ~70% mas barato. reports es stateless (sirve HTML de S3), una
+  # interrupcion solo reinicia el task. El capacity provider se habilita en el
+  # cluster (modulo mlflow).
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE_SPOT"
+    weight            = 1
+  }
 
   network_configuration {
     subnets          = var.private_subnet_ids

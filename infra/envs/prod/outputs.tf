@@ -72,11 +72,11 @@ output "sns_topic_arn" {
 }
 
 output "gha_deploy_role_arn" {
-  description = "Role que asume GitHub Actions para `terraform apply`."
-  value       = module.cicd.gha_deploy_role_arn
+  description = "Role que asume GitHub Actions para `terraform apply`. null si enable_cicd=false."
+  value       = var.enable_cicd ? module.cicd[0].gha_deploy_role_arn : null
 }
 
 output "gha_train_role_arn" {
-  description = "Role que asume GitHub Actions para invocar Lambda dispatcher."
-  value       = module.cicd.gha_train_role_arn
+  description = "Role que asume GitHub Actions para invocar Lambda dispatcher. null si enable_cicd=false."
+  value       = var.enable_cicd ? module.cicd[0].gha_train_role_arn : null
 }

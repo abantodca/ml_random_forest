@@ -22,8 +22,9 @@ resource "aws_iam_role_policy" "dispatcher" {
     Statement = [
       {
         Effect = "Allow"
-        # TagResource: SubmitJob pasa tags={...}, lo cual requiere batch:TagResource
-        Action = ["batch:SubmitJob", "batch:DescribeJobs", "batch:TagResource"]
+        # TagResource: SubmitJob pasa tags={...}, lo cual requiere batch:TagResource.
+        # DescribeJobs removido: el dispatcher solo hace submit_job (ver dispatcher.py).
+        Action = ["batch:SubmitJob", "batch:TagResource"]
         Resource = [
           var.job_queue_spot_arn,
           var.job_queue_ondemand_arn,

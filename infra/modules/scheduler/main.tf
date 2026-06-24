@@ -1,6 +1,22 @@
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
 locals {
   start_hour_utc = (var.work_start_hour_local - var.tz_offset_hours + 24) % 24
   stop_hour_utc  = (var.work_end_hour_local - var.tz_offset_hours + 24) % 24
+
+  # ARNs concretos para acotar las acciones IAM destructivas (least-privilege):
+  # antes el rol usaba Resource="*" -> podia parar CUALQUIER RDS / tocar CUALQUIER
+  # ECS service de la cuenta. Ahora se limita a los recursos de este proyecto.
+  acct    = data.aws_caller_identity.current.account_id
+  region  = data.aws_region.current.region
+  rds_arn = "arn:aws:rds:${local.region}:${local.acct}:db:${var.rds_instance_id}"
+  ecs_svc_arns = [
+    for s in [
+      var.ecs_service_name_mlflow, var.ecs_service_name_reports,
+      var.ecs_service_name_api, var.ecs_service_name_ui
+    ] : "arn:aws:ecs:${local.region}:${local.acct}:service/${var.ecs_cluster_name}/${s}"
+  ]
 }
 
 data "archive_file" "scheduler" {
@@ -23,18 +39,24 @@ resource "aws_iam_role_policy" "scheduler" {
       {
         Effect   = "Allow"
         Action   = ["ecs:UpdateService", "ecs:DescribeServices"]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "rds:StartDBInstance", "rds:StopDBInstance", "rds:DescribeDBInstances"
-        ]
-        Resource = "*"
+        Resource = local.ecs_svc_arns
       },
       {
         Effect   = "Allow"
-        Action   = ["batch:ListJobs", "batch:DescribeJobs"]
+        Action   = ["rds:StartDBInstance", "rds:StopDBInstance"]
+        Resource = local.rds_arn
+      },
+      {
+        # DescribeDBInstances NO soporta permisos a nivel de recurso -> requiere "*".
+        Effect   = "Allow"
+        Action   = ["rds:DescribeDBInstances"]
+        Resource = "*"
+      },
+      {
+        # ListJobs tampoco soporta resource-level. DescribeJobs se removio: el
+        # scheduler solo llama list_jobs (ver infra/lambdas/scheduler.py).
+        Effect   = "Allow"
+        Action   = ["batch:ListJobs"]
         Resource = "*"
       },
       {

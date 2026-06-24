@@ -118,6 +118,18 @@ El **scheduler** (Lambda + EventBridge) enciende/apaga RDS + MLflow + Reports +
 el patrón on/off existente. No hay instancia extra que gestionar: la API reusa
 el RDS de MLflow.
 
+**Palancas de costo aplicadas (sin cambiar la arquitectura):**
+
+| Palanca | Qué hace | Ahorro |
+|---|---|---|
+| **`task sleep`** (pausa corta) | Scheduler escala Fargate a 0 + para RDS. **Mantiene NAT + ALB** → wake instantáneo. Piso ~$50/mes. | cómputo Fargate/RDS |
+| **`task teardown`** (idle largo) | Destruye volátiles **y libera el NAT** (`enable_nat=false`, ~$33/mes idle) preservando VPC + storage. `task rebuild` lo recrea. Piso **~$3/mes**. | NAT + ALB + cómputo |
+| **Fargate Spot** | `reports` + `ui` corren en `FARGATE_SPOT` (~70% más baratos, stateless). MLflow + API quedan on-demand a propósito (MLflow es crítico durante runs largos de training). | ~70% en reports+ui |
+| **RDS `db.t4g.small`** | No se baja a `micro`: hostea MLflow + `forecasts` y, con 32 variedades + training en paralelo, micro queda justo en RAM/conexiones (ahorro de solo ~$1.4/mes). `deletion_protection` + snapshot final por default; las tareas de teardown levantan la protección vía AWS CLI para permitir el destroy. | — (decisión consciente) |
+
+Detalle completo por servicio y por modo de lifecycle en `GUIA_MLOPS_AWS_V2.md`
+#9 (Costos detallados).
+
 ## CLI directa (sin Taskfile, sin Docker — requiere venv + MLflow server)
 
 ```bash

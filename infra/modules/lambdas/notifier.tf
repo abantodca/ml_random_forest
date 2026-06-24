@@ -20,11 +20,8 @@ resource "aws_iam_role_policy" "notifier" {
         Action   = ["sns:Publish"]
         Resource = var.sns_topic_arn
       },
-      {
-        Effect   = "Allow"
-        Action   = ["batch:DescribeJobs"]
-        Resource = "*"
-      },
+      # (batch:DescribeJobs removido: el notifier lee todo del evento EventBridge,
+      #  nunca llama DescribeJobs — ver infra/lambdas/notifier.py)
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]

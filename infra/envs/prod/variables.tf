@@ -16,19 +16,33 @@ variable "vpc_cidr" {
   default     = "10.20.0.0/16"
 }
 
+variable "enable_nat" {
+  description = "true (default): NAT gateway + EIP activos. `task teardown` lo pone en false para liberar el NAT (~$33/mes) cuando el stack queda idle; deploy/rebuild lo recrean."
+  type        = bool
+  default     = true
+}
+
 variable "alert_email" {
   description = "Email que recibe notificaciones SNS (job FAILED, MAPE high)."
   type        = string
 }
 
+variable "enable_cicd" {
+  description = "Crea la capa CI/CD (roles IAM GHA + data source OIDC). DEFAULT false: el stand-up completo (storage->...->api/ui) NO necesita CI/CD ni el bootstrap OIDC. Poner true DESPUES de `task infra:bootstrap-oidc` para sumar CI/CD sin tocar el resto. Ver main.tf #Capa 9."
+  type        = bool
+  default     = false
+}
+
 variable "github_org" {
-  description = "Organizacion / usuario GitHub que aloja el repo (para OIDC trust)."
+  description = "Organizacion / usuario GitHub que aloja el repo (para OIDC trust). Solo se usa si enable_cicd=true."
   type        = string
+  default     = ""
 }
 
 variable "github_repo" {
-  description = "Nombre del repo (sin la org). Para trust policy OIDC."
+  description = "Nombre del repo (sin la org). Para trust policy OIDC. Solo se usa si enable_cicd=true."
   type        = string
+  default     = ""
 }
 
 variable "varieties_allowed" {
@@ -59,6 +73,25 @@ variable "rds_instance_class" {
   description = "Clase RDS. Hostea DOS bases: MLflow backend + `forecasts` de la API (Capa 4.5). db.t4g.small da holgura de RAM/conexiones para el stack completo; db.t4g.micro alcanza a muy bajo trafico."
   type        = string
   default     = "db.t4g.small"
+}
+
+# ── Proteccion del RDS ───────────────────────────────────────────────────────
+# Defaults protectivos. Las tareas destroy/teardown las sobreescriben con -var
+# (y levantan deletion_protection via AWS CLI) para permitir el fresh-start.
+variable "rds_deletion_protection" {
+  description = "true (default): el RDS no se puede borrar accidentalmente. Las tareas de teardown lo levantan automaticamente."
+  type        = bool
+  default     = true
+}
+variable "rds_skip_final_snapshot" {
+  description = "false (default): cada destroy del RDS toma un snapshot final. Las tareas de teardown pasan un nombre timestamped."
+  type        = bool
+  default     = false
+}
+variable "rds_final_snapshot_identifier" {
+  description = "Nombre del snapshot final (lo inyectan las tareas de destroy, timestamped). Vacio = <project>-mlflow-final."
+  type        = string
+  default     = ""
 }
 
 variable "mlflow_image_tag" {

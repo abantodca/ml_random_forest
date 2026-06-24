@@ -9,10 +9,16 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alert_email
 }
 
-# ----- Alarma 1: Batch job FAILED -------------------------------------
+# ----- Alarma 1: Batch job FAILED (una por cola) ----------------------
 # CloudWatch publica metricas de Batch (FailedJobs por queue) cada 5 min.
+# for_each sobre spot + on-demand: antes solo se vigilaba spot, asi un fallo
+# en la cola on-demand (jobs prod_xl) no disparaba alarma.
 resource "aws_cloudwatch_metric_alarm" "batch_failed" {
-  alarm_name          = "${var.project}-batch-job-failed"
+  # Mapa (no toset de una lista): las claves spot/ondemand se conocen en plan
+  # aunque each.value (el nombre real de la cola) sea apply-time en deploy desde cero.
+  for_each = var.batch_job_queue_names
+
+  alarm_name          = "${var.project}-batch-job-failed-${each.key}"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   metric_name         = "FailedJobs"
@@ -20,10 +26,10 @@ resource "aws_cloudwatch_metric_alarm" "batch_failed" {
   period              = 300
   statistic           = "Sum"
   threshold           = 1
-  alarm_description   = "Al menos un Batch job fallo (no por Spot interrupt)"
+  alarm_description   = "Al menos un Batch job fallo en la cola ${each.key} (no por Spot interrupt)"
   treat_missing_data  = "notBreaching"
   dimensions = {
-    JobQueue = var.batch_job_queue_name
+    JobQueue = each.value
   }
   alarm_actions = [aws_sns_topic.alerts.arn]
   ok_actions    = [aws_sns_topic.alerts.arn]

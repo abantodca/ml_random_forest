@@ -7,6 +7,19 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
+# Habilita FARGATE + FARGATE_SPOT en el cluster. reports/ui corren en Spot (~70%
+# mas barato, stateless: una interrupcion es un parpadeo). mlflow/api se quedan
+# en FARGATE on-demand (default) porque mlflow es critico durante runs largos.
+resource "aws_ecs_cluster_capacity_providers" "main" {
+  cluster_name       = aws_ecs_cluster.main.name
+  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
+
+  default_capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    weight            = 1
+  }
+}
+
 # Service discovery namespace para que reports/batch resuelvan "mlflow.local"
 resource "aws_service_discovery_private_dns_namespace" "main" {
   name        = "${var.project}.local"
