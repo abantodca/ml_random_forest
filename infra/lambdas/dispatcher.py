@@ -3,12 +3,12 @@
 Payload aceptado:
 {
   "varieties": "POP,JUPITER",      # CSV o "all"
-  "tuning":    "prod",             # smoke|dev|prod|prod_xl
+  "tuning":    "prod_xl",          # smoke|dev|prod|prod_xl (default prod_xl, igual que local)
   "s3_data_key": "BD_HISTORICO_ACUMULADO.xlsx"   # opcional, default = ese mismo
 }
 
 Contrato del trainer (main.py):
-- CMD ["--varieties","POP,JUPITER","--tuning","prod"]
+- CMD ["--varieties","POP,JUPITER","--tuning","prod_xl"]
 - ENV S3_DATA_BUCKET, S3_DATA_KEY (para _hydrate_data_from_s3)
 - ENV MLFLOW_TRACKING_URI, S3_ARTIFACTS_BUCKET, ... (ya en job-def)
 """
@@ -77,7 +77,7 @@ def handler(event, _context):
 
     try:
         varieties = _normalize_varieties(payload.get("varieties", ""))
-        tuning    = _validate_tuning(payload.get("tuning", "prod"))
+        tuning    = _validate_tuning(payload.get("tuning", "prod_xl"))
         s3_key    = _validate_key(payload.get("s3_data_key", "BD_HISTORICO_ACUMULADO.xlsx"))
         mode      = _validate_mode(payload.get("mode", "train"))
     except ValueError as exc:

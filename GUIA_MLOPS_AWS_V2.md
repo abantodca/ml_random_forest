@@ -216,7 +216,7 @@ alguna implica un ADR previo y reescritura de las secciones afectadas.
 | Decisión | Elección | Por qué | Cambia a futuro |
 |---|---|---|---|
 | Región AWS | `us-east-1` | Latencia razonable desde Perú, todos los servicios disponibles, mejor precio Spot. | `us-east-2` o `sa-east-1` por compliance. |
-| Compute training | Batch + EC2 c6i.2xlarge, queues Spot (default) + On-Demand (sólo `prod_xl`), `retry=2`. | −70% costo con Spot; retry cubre interrupciones (~5-10% en c6i.2xlarge). | Fargate Spot, o `g5.xlarge` si pasás a DL. |
+| Compute training | Batch + EC2 c6i.2xlarge, queues Spot + On-Demand, `retry=2`. El dispatcher rutea `prod_xl` → On-Demand (sin interrupciones para jobs de ~4-6h) y el resto (`smoke`/`dev`/`prod`) → Spot. El default de `task batch:train` es `prod_xl` (converge con local) → On-Demand; usá `TUNING=prod` para Spot (−70% costo). | −70% costo con Spot; retry cubre interrupciones (~5-10% en c6i.2xlarge). | Fargate Spot, o `g5.xlarge` si pasás a DL. |
 | Compute serving | ECS Fargate | Sin gestión de host, autoscale, integración nativa con ALB. | EC2 con AMI custom para aceleración. |
 | Backend MLflow | Postgres + S3 (artifacts) | Estándar industria; soporta concurrencia. | Filesystem sólo en dev. |
 | RDS | Postgres 15, `db.t4g.small`, single-AZ | ~$23/mes 24/7 (mucho menos con scheduler); hostea MLflow + la base `forecasts` de la API. | Multi-AZ (hardening, futuro). |
@@ -1092,7 +1092,8 @@ includes:
       REGION: '{{.REGION}}'
 
 vars:
-  TUNING:    '{{.TUNING    | default "prod"}}'
+  # TUNING se define a nivel-tarea (default "prod_xl"), NO como var global:
+  # un default global pisaria el del include batch: (ver tasks/batch.yml).
   VARIETIES: '{{.VARIETIES | default "POP"}}'
   PARALLEL:  '{{.PARALLEL  | default "1"}}'
   PROJECT:   '{{.PROJECT   | default "ml-training"}}'
@@ -1129,16 +1130,16 @@ tasks:
           task down               apaga servicios al terminar
 
         Ejemplos de entrenamiento (TUNING × VARIETIES × PARALLEL):
+          task train VARIETIES=POP                   overnight (DEFAULT) ~4-6 h prod_xl
           task train VARIETIES=POP TUNING=smoke      sanity check    ~1 min
           task train VARIETIES=POP TUNING=dev        baseline        ~20 min
           task train VARIETIES=POP TUNING=prod       produccion      ~2 h
-          task train VARIETIES=POP TUNING=prod_xl    overnight       ~6 h
           task train VARIETIES=POP,VENTURA           multiples variedades
           task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
 
         Variables (override por CLI, formato VAR=valor):
           VARIETIES   POP (default) | POP,VENTURA,... | all
-          TUNING      smoke ~1m | dev ~20m | prod ~2h (default) | prod_xl ~6h
+          TUNING      smoke ~1m | dev ~20m | prod ~2h | prod_xl ~4-6h (default)
           PARALLEL    1 (default) | N variedades en paralelo
           SEED        42 (default) | reproducibilidad
 
@@ -1292,7 +1293,7 @@ tasks:
 | Variable | Default | Override por CLI |
 |---|---|---|
 | `VARIETIES` | `POP` | `task train VARIETIES=POP,VENTURA` |
-| `TUNING` | `prod` | `task train TUNING=smoke` (`smoke` / `dev` / `prod` / `prod_xl`) |
+| `TUNING` | `prod_xl` | `task train TUNING=smoke` (`smoke` / `dev` / `prod` / `prod_xl`) |
 | `PARALLEL` | `1` | `task train VARIETIES=all PARALLEL=3` |
 | `SEED` | `42` (decisión Cap 2) | `task train SEED=1337` (reproducibilidad — el código del trainer la lee de `os.environ["SEED"]`) |
 
@@ -7962,7 +7963,7 @@ vars:
   JOBDEF:        '{{.JOBDEF        | default (printf "%s-trainer" .PROJECT)}}'
   QUEUE_SPOT:    '{{.QUEUE_SPOT    | default (printf "%s-job-queue-spot"     .PROJECT)}}'
   QUEUE_OD:      '{{.QUEUE_OD      | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
-  TUNING:        '{{.TUNING        | default "prod"}}'
+  TUNING:        '{{.TUNING        | default "prod_xl"}}'
   WAIT:          '{{.WAIT          | default "true"}}'
 
 tasks:
@@ -8520,7 +8521,8 @@ includes:
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
 
 vars:
-  TUNING:    '{{.TUNING    | default "prod"}}'
+  # TUNING se define a nivel-tarea (default "prod_xl"), NO como var global:
+  # un default global pisaria el del include batch: (ver tasks/batch.yml).
   VARIETIES: '{{.VARIETIES | default "POP"}}'
   PARALLEL:  '{{.PARALLEL  | default "1"}}'
   PROJECT:   '{{.PROJECT   | default "ml-training"}}'
@@ -8714,7 +8716,7 @@ El `default` de Tramo I sección 4.6 lista solo el pipeline local. En Tramo II s
 
         ▸ Variables  (override por CLI: VAR=valor)
             VARIETIES   POP (default) | POP,VENTURA,... | all
-            TUNING      smoke ~1m | dev ~20m | prod ~2h (default) | prod_xl ~6h
+            TUNING      smoke ~1m | dev ~20m | prod ~2h | prod_xl ~4-6h (default)
             PARALLEL    1 (default) | N variedades en paralelo
             SEED        42 (default)
 

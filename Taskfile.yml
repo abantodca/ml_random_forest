@@ -62,41 +62,53 @@ tasks:
       - |
         cat <<'EOF'
 
-          ml_training · forecast KG/JR_H por variedad
-          ════════════════════════════════════════════════════════════════════
+          ml_training · forecast de productividad de cosecha (KG/JR_H) por variedad
+          Entrena XGBoost + LightGBM por variedad, elige campeon y registra en MLflow.
 
-          LOCAL (docker compose)
-            task build              rebuild imagenes + levanta el stack
-            task up                 levanta el stack sin rebuild
-            task data:split         genera data/training/DB-HISTORICA.xlsx
-            task train              entrena + HTML en reports/
-            task down               apaga (preserva volumen Postgres)
-            task test · task lint   suite P0 en contenedores · ruff
-            Setup 1ª vez: task local:ensure-buckets + completar buckets en .env
-            URLs: UI :8501 · API :8000/docs · MLflow :5000 · Reports/Artifacts :8080
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║  LOCAL · docker compose (postgres · mlflow · reports · api · ui)        ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  task build             rebuild de imagenes + levanta todo el stack     ║
+          ║  task up                levanta el stack sin rebuild                     ║
+          ║  task data:split        genera data/training/DB-HISTORICA.xlsx           ║
+          ║  task train             entrena + publica el HTML del campeon            ║
+          ║  task down              apaga servicios (preserva el volumen Postgres)   ║
+          ║  task test · task lint  suite P0 en contenedores · ruff                  ║
+          ╚════════════════════════════════════════════════════════════════════════╝
+            Setup 1ª vez:  task local:ensure-buckets  +  completar buckets en .env
+            URLs:  UI :8501 · API :8000/docs · MLflow :5000 · Reports/Artifacts :8080
 
-          AWS (atajos high-level · detalle en namespaces infra:/ecr:/batch:/ops:)
-            task deploy             stand-up completo (storage → 5 imagenes → resto)
-            task smoke              deploy + 1 job Batch POP smoke
-            task wake · task sleep  encender · apagar el stack
-            task status · task urls estado del cluster · URLs publicas del ALB
-            task batch:train VARIETIES=POP        entrenamiento en Batch
-            task ops:promote MODEL_NAME=... VERSION=N   promover a Production
-            task teardown · destroy · nuke   ⚠ progresivamente destructivos
-            Bootstrap 1ª vez por cuenta+region: task infra:bootstrap[-oidc]
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║  AWS · atajos high-level  (detalle: infra: / ecr: / batch: / ops:)      ║
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║  task deploy            stand-up completo (storage → 5 imagenes → resto) ║
+          ║  task smoke             deploy + 1 job Batch POP de humo                 ║
+          ║  task wake · sleep      encender · apagar el stack                       ║
+          ║  task status · urls     estado del cluster · URLs publicas del ALB       ║
+          ║  task batch:train VARIETIES=POP              entrenamiento en Batch      ║
+          ║  task ops:promote MODEL_NAME=… VERSION=N     promover a Production       ║
+          ║  task teardown · destroy · nuke    ⚠ destructivo (riesgo creciente)      ║
+          ╚════════════════════════════════════════════════════════════════════════╝
+            Bootstrap 1ª vez por cuenta+region:  task infra:bootstrap[-oidc]
 
-          Ejemplos train (TUNING × VARIETIES × PARALLEL)
-            task train VARIETIES=POP TUNING=smoke      ~1 min   sanity
-            task train VARIETIES=POP                   ~4-6 h   prod_xl (DEFAULT)
-            task train VARIETIES=POP TUNING=prod       ~2 h     produccion
-            task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
-          >> TUNING por defecto = prod_xl (overnight, el mas exhaustivo).
+          ── Entrenar  (mismo default local y Batch: TUNING=prod_xl) ───────────────
+            task train VARIETIES=POP                 ~4-6 h   prod_xl · DEFAULT
+            task train VARIETIES=POP TUNING=smoke    ~1 min   sanity (no registra)
+            task train VARIETIES=POP TUNING=prod     ~2 h     modelo a promover
+            task train VARIETIES=all PARALLEL=3               todas, 3 en paralelo
 
-          Variables (override por CLI · VAR=valor)
-            VARIETIES POP|POP,VENTURA|all · TUNING smoke|dev|prod|prod_xl
-            PARALLEL N · SEED 42
+            En Batch el dispatcher rutea por queue:  prod_xl → On-Demand (sin
+            interrupciones, jobs de ~4-6 h) · resto → Spot (−70% costo).
 
-          Detalle por tarea:  task --list      Runbook AWS:  GUIA_MLOPS_AWS_V2.md
+          ── Variables  (override por CLI · VAR=valor) ────────────────────────────
+            VARIETIES   POP | POP,VENTURA | all          (default POP)
+            TUNING      smoke | dev | prod | prod_xl      (default prod_xl)
+            PARALLEL    N variedades en paralelo          (default 1)
+            SEED        semilla de reproducibilidad       (default 42)
+
+          ── Mas detalle ──────────────────────────────────────────────────────────
+            Catalogo completo:  task --list        Runbook AWS:  GUIA_MLOPS_AWS_V2.md
+
         EOF
 
   build:

@@ -26,7 +26,7 @@ vars:
   # convencion de nombres, compartida con ops:). Ver includes en Taskfile.yml.
   # TUNING NO va aqui: los vars globales se COMPARTEN entre el Taskfile raiz y
   # los includes, asi que un default global pisaria el del root (y viceversa).
-  # Se define a nivel-tarea en `train` (default "prod" para Batch).
+  # Se define a nivel-tarea en `train` (default "prod_xl", igual que local).
   WAIT:          '{{.WAIT          | default "true"}}'
 
 tasks:
@@ -34,7 +34,10 @@ tasks:
   train:
     desc: "Submit via Lambda dispatcher. Vars: VARIETIES=POP[,VENTURA] (REQ), TUNING, WAIT"
     vars:
-      TUNING: '{{.TUNING | default "prod"}}'
+      # Default prod_xl: converge con `task train` local. El dispatcher rutea
+      # prod_xl -> queue On-Demand (sin interrupciones spot, para jobs de ~4-6h);
+      # cualquier otro tuning va a Spot. Override con TUNING=prod para Spot/barato.
+      TUNING: '{{.TUNING | default "prod_xl"}}'
     requires:
       vars: [VARIETIES]
     cmds:
