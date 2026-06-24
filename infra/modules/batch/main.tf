@@ -120,8 +120,8 @@ resource "aws_batch_job_definition" "trainer" {
 
   container_properties = jsonencode({
     image            = "${var.ecr_trainer_url}:${var.trainer_image_tag}"
-    vcpus            = 8     # c6i.2xlarge tiene 8 vCPU
-    memory           = 14000 # de los 16 GB, dejamos ~2 GB para kernel + Batch agent
+    vcpus            = 16    # c6i.4xlarge tiene 16 vCPU (ocupa la instancia entera por job)
+    memory           = 30000 # de los 32 GB, dejamos ~2 GB para kernel + Batch agent
     jobRoleArn       = aws_iam_role.job.arn
     executionRoleArn = aws_iam_role.exec.arn
     # networkConfiguration (assignPublicIp) es solo Fargate; en EC2 la IP

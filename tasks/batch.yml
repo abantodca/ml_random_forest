@@ -8,7 +8,8 @@
 #
 # USO TIPICO:
 #   task batch:train VARIETIES=POP                    una variedad (background)
-#   task batch:train VARIETIES=POP,VENTURA            varias en un job
+#   task batch:train VARIETIES=POP,VENTURA            varias en un job (secuencial)
+#   task batch:train VARIETIES=A,B,C,D PARALLEL=4     varias EN PARALELO (1 job)
 #   task batch:train VARIETIES=all                    todas las permitidas
 #   task batch:train VARIETIES=POP TUNING=smoke       sanity check (~1 min)
 #   task batch:train VARIETIES=POP WAIT=true          bloquear hasta terminar
@@ -43,22 +44,26 @@ vars:
 tasks:
 
   train:
-    desc: "Entrena en Batch (background). Vars: VARIETIES=POP[,VENTURA|all] (REQ), TUNING, WAIT=true para bloquear"
+    desc: "Entrena en Batch (background). Vars: VARIETIES=POP[,VENTURA|all] (REQ), TUNING, PARALLEL=N (variedades a la vez), WAIT=true para bloquear"
     vars:
       # Default prod_xl: converge con `task train` local. El dispatcher rutea
       # prod_xl -> queue On-Demand (sin interrupciones spot, para jobs de ~4-6h);
       # cualquier otro tuning va a Spot. Override con TUNING=prod para Spot/barato.
       TUNING: '{{.TUNING | default "prod_xl"}}'
+      # PARALLEL=N entrena N variedades en paralelo (main.py reparte
+      # cores=cpu//N). Solo aporta con varias VARIETIES; con una sola main.py lo
+      # ignora. PARALLEL es var GLOBAL del Taskfile raiz (default "1"), por eso
+      # NO la redefinimos aqui: solo la referenciamos en el payload.
     requires:
       vars: [VARIETIES]
     cmds:
       - |
         set -e
         source tasks/lib/batch_wait.sh
-        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" --arg t "{{.TUNING}}" \
-          '{varieties: $v, tuning: $t}')
+        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" --arg t "{{.TUNING}}" --argjson p "{{.PARALLEL | default 1}}" \
+          '{varieties: $v, tuning: $t, parallel: $p}')
         dispatch_job "{{.JOBDEF}}" "{{.REGION}}" "{{.DISPATCHER_FN}}" "$PAYLOAD" \
-          "train {{.VARIETIES}} tuning={{.TUNING}}" "{{.WAIT}}"
+          "train {{.VARIETIES}} tuning={{.TUNING}} parallel={{.PARALLEL | default 1}}" "{{.WAIT}}"
 
   eda:
     desc: "EDA exploratorio en Batch (opcional, standalone, on-demand). Vars: VARIETIES=POP[,VENTURA] (REQ), WAIT"
@@ -97,7 +102,7 @@ tasks:
       - |
         source tasks/lib/batch_wait.sh
         JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
-        tail_job_logs "$JOB_ID" "{{.LOG_GROUP}}" "{{.FOLLOW | default \"false\"}}"
+        tail_job_logs "$JOB_ID" "{{.LOG_GROUP}}" "{{.FOLLOW | default "false"}}"
 
   status:
     desc: "Jobs activos (SUBMITTED/PENDING/RUNNABLE/STARTING/RUNNING) en ambas queues"
@@ -123,5 +128,5 @@ tasks:
         JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
         # terminate-job es idempotente: sobre un job ya terminal es no-op.
         aws batch terminate-job --job-id "$JOB_ID" \
-          --reason "{{.REASON | default \"cancelled via task\"}}" \
+          --reason "{{.REASON | default "cancelled via task"}}" \
           && echo ">>> terminate enviado a job=$JOB_ID"

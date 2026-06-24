@@ -4,11 +4,12 @@ Payload aceptado:
 {
   "varieties": "POP,JUPITER",      # CSV o "all"
   "tuning":    "prod_xl",          # smoke|dev|prod|prod_xl (default prod_xl, igual que local)
+  "parallel":  1,                  # opcional, N variedades en paralelo (default 1 = secuencial)
   "s3_data_key": "BD_HISTORICO_ACUMULADO.xlsx"   # opcional, default = ese mismo
 }
 
 Contrato del trainer (main.py):
-- CMD ["--varieties","POP,JUPITER","--tuning","prod_xl"]
+- CMD ["--varieties","POP,JUPITER","--tuning","prod_xl"]  (+ "--parallel-varieties","N" si parallel>1)
 - ENV S3_DATA_BUCKET, S3_DATA_KEY (para _hydrate_data_from_s3)
 - ENV MLFLOW_TRACKING_URI, S3_ARTIFACTS_BUCKET, ... (ya en job-def)
 """
@@ -69,6 +70,22 @@ def _validate_mode(mode: str) -> str:
     return mode
 
 
+# Tope defensivo: main.py reparte cores=inner_n_jobs=cpu//parallel, asi que un
+# parallel mayor que los vCPU del contenedor (16 en c6i.4xlarge) no aporta y solo
+# fragmenta. 16 deja margen sin permitir valores absurdos por payload.
+_MAX_PARALLEL = 16
+
+
+def _validate_parallel(raw) -> int:
+    try:
+        p = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"parallel invalido: {raw!r} (entero >= 1)")
+    if not (1 <= p <= _MAX_PARALLEL):
+        raise ValueError(f"parallel invalido: {p} (rango 1..{_MAX_PARALLEL})")
+    return p
+
+
 def handler(event, _context):
     log.info("event: %s", json.dumps(event)[:1000])
 
@@ -78,6 +95,7 @@ def handler(event, _context):
     try:
         varieties = _normalize_varieties(payload.get("varieties", ""))
         tuning    = _validate_tuning(payload.get("tuning", "prod_xl"))
+        parallel  = _validate_parallel(payload.get("parallel", 1))
         s3_key    = _validate_key(payload.get("s3_data_key", "BD_HISTORICO_ACUMULADO.xlsx"))
         mode      = _validate_mode(payload.get("mode", "train"))
     except ValueError as exc:
@@ -89,11 +107,15 @@ def handler(event, _context):
     # sanitize: Batch acepta [a-zA-Z0-9_-], max 128
     job_name = re.sub(r"[^a-zA-Z0-9_-]", "-", job_name)[:128]
 
-    # EDA: standalone, no entrena -> ignora tuning/modelo. Training: como siempre.
+    # EDA: standalone, no entrena -> ignora tuning/modelo (y parallel). Training:
+    # parallel>1 reparte variedades en procesos (main.py::run_parallel); con una
+    # sola variedad main.py lo ignora, asi que solo lo anexamos cuando aporta.
     if mode == "eda":
         command = ["--eda", "--varieties", ",".join(varieties)]
     else:
         command = ["--varieties", ",".join(varieties), "--tuning", tuning]
+        if parallel > 1:
+            command += ["--parallel-varieties", str(parallel)]
 
     response = batch.submit_job(
         jobName=job_name,
@@ -106,10 +128,18 @@ def handler(event, _context):
                 {"name": "S3_DATA_KEY",    "value": s3_key},
             ],
         },
-        tags={"variety": ",".join(varieties), "tuning": tuning, "mode": mode},
+        tags={
+            "variety": ",".join(varieties),
+            "tuning": tuning,
+            "mode": mode,
+            "parallel": str(parallel),
+        },
     )
 
-    log.info("submit OK: jobId=%s queue=%s mode=%s", response["jobId"], queue, mode)
+    log.info(
+        "submit OK: jobId=%s queue=%s mode=%s parallel=%s",
+        response["jobId"], queue, mode, parallel,
+    )
     return {
         "statusCode": 200,
         "body": {
@@ -118,6 +148,7 @@ def handler(event, _context):
             "queue":    queue,
             "varieties": varieties,
             "tuning":   tuning,
+            "parallel": parallel,
             "mode":     mode,
         },
     }

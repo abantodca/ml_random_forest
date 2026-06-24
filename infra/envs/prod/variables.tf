@@ -66,7 +66,10 @@ variable "ondemand_max_vcpus" {
 variable "batch_instance_type" {
   description = "Tipo de instancia EC2 que arranca Batch."
   type        = string
-  default     = "c6i.2xlarge"
+  # c6i.4xlarge (16 vCPU / 32 GB): permite PARALLEL=4 con 4 cores por variedad
+  # en jobs prod_xl multi-variedad. Antes c6i.2xlarge (8 vCPU). El job-def
+  # (modules/batch: vcpus=16) ocupa la instancia completa por job.
+  default     = "c6i.4xlarge"
 }
 
 variable "rds_instance_class" {
