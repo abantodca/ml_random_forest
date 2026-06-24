@@ -96,6 +96,10 @@ tasks:
           ║    c) task infra:apply                aplica el cambio                    ║
           ║  Reempezar de cero (borra el tfstate):  task infra:reset-state            ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
+            ⚠ Tras el 1er 'task deploy', AWS manda un mail "Subscription
+            Confirmation" a alert_email: ABRELO y confirma. Sin ese clic la
+            suscripcion queda PendingConfirmation y NO llegan alertas de Batch
+            (FAILED/SUCCEEDED). Si cambias alert_email, repites la confirmacion.
 
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║  AWS · DÍA A DÍA (ya desplegado)        detalle: infra:/ecr:/batch:/ops:  ║
