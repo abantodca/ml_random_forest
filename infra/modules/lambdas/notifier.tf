@@ -56,21 +56,24 @@ resource "aws_lambda_function" "notifier" {
   depends_on = [aws_cloudwatch_log_group.notifier]
 }
 
-# EventBridge rule: Batch Job State Change FAILED -> notifier
-resource "aws_cloudwatch_event_rule" "batch_failed" {
-  name        = "${var.project}-batch-failed"
-  description = "Captura Batch jobs en estado FAILED"
+# EventBridge rule: Batch Job State Change FAILED/SUCCEEDED -> notifier.
+# Captura ambos estados terminales: FAILED para alertar errores y SUCCEEDED
+# para avisar que un entrenamiento (ej. POP) termino OK. El notifier.py
+# distingue el estado via detail.status y arma el asunto/cuerpo segun el caso.
+resource "aws_cloudwatch_event_rule" "batch_terminal" {
+  name        = "${var.project}-batch-terminal"
+  description = "Captura Batch jobs en estado FAILED o SUCCEEDED"
   event_pattern = jsonencode({
     source        = ["aws.batch"]
     "detail-type" = ["Batch Job State Change"]
     detail = {
-      status = ["FAILED"]
+      status = ["FAILED", "SUCCEEDED"]
     }
   })
 }
 
 resource "aws_cloudwatch_event_target" "notifier" {
-  rule      = aws_cloudwatch_event_rule.batch_failed.name
+  rule      = aws_cloudwatch_event_rule.batch_terminal.name
   target_id = "notifier"
   arn       = aws_lambda_function.notifier.arn
 }
@@ -80,5 +83,5 @@ resource "aws_lambda_permission" "notifier_eventbridge" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.notifier.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.batch_failed.arn
+  source_arn    = aws_cloudwatch_event_rule.batch_terminal.arn
 }

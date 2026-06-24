@@ -1,4 +1,4 @@
-"""Lambda notifier: traduce un evento de Batch FAILED a un email SNS legible."""
+"""Lambda notifier: traduce un evento de Batch FAILED/SUCCEEDED a un email SNS legible."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ def handler(event, _context):
     if not job_id:
         return {"statusCode": 400, "body": "no jobId in event"}
 
+    status     = detail.get("status", "?")
     job_name   = detail.get("jobName", "?")
     queue_arn  = detail.get("jobQueue", "?")
     reason     = detail.get("statusReason", "?")
@@ -55,16 +56,22 @@ def handler(event, _context):
             f"{_cw_url_encode(log_stream)}"
         )
 
-    subject = f"[ml-training] Job FAILED: {job_name}"
-    body = "\n".join([
+    subject = f"[ml-training] Job {status}: {job_name}"
+    lines = [
+        f"Estado:    {status}",
         f"Job ID:    {job_id}",
         f"Job name:  {job_name}",
         f"Queue:     {queue_arn.rsplit('/', 1)[-1]}",
-        f"Exit code: {exit_code}",
-        f"Reason:    {reason}",
-        f"Logs:      {log_url}",
-    ])
+    ]
+    # exit_code/reason solo aportan en fallo; en SUCCEEDED suelen venir vacios.
+    if status != "SUCCEEDED":
+        lines += [
+            f"Exit code: {exit_code}",
+            f"Reason:    {reason}",
+        ]
+    lines.append(f"Logs:      {log_url}")
+    body = "\n".join(lines)
 
     sns.publish(TopicArn=SNS_TOPIC_ARN, Subject=subject[:100], Message=body)
-    log.info("notified jobId=%s", job_id)
+    log.info("notified jobId=%s status=%s", job_id, status)
     return {"statusCode": 200, "body": "notified"}
