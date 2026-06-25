@@ -149,6 +149,40 @@ resource "aws_cloudwatch_event_target" "rds_keepstop" {
   input     = jsonencode({ action = "keepstop" })
 }
 
+# ----- EventBridge: fin de job Batch (SUCCEEDED/FAILED) -> autostop --
+# Apaga el stack en cuanto termina un entrenamiento, sin esperar al cron stop.
+# Regla independiente de la del notifier (module.lambdas): ambas matchean el
+# mismo evento y disparan en paralelo (email + apagado). El _autostop solo
+# apaga fuera de la ventana laboral y si no quedan otros jobs activos -> seguro
+# ante smoke/eda diurnos y entrenamientos multi-variedad. Conserva RDS+S3
+# (es un stop, no un teardown): al dia siguiente `task wake` retoma con todo.
+resource "aws_cloudwatch_event_rule" "batch_autostop" {
+  name        = "${var.project}-batch-autostop"
+  description = "Fin de job Batch (SUCCEEDED/FAILED) -> scheduler autostop"
+  event_pattern = jsonencode({
+    source        = ["aws.batch"]
+    "detail-type" = ["Batch Job State Change"]
+    detail = {
+      status = ["FAILED", "SUCCEEDED"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "batch_autostop" {
+  rule      = aws_cloudwatch_event_rule.batch_autostop.name
+  target_id = "scheduler-autostop"
+  arn       = aws_lambda_function.scheduler.arn
+  input     = jsonencode({ action = "autostop" })
+}
+
+resource "aws_lambda_permission" "batch_autostop" {
+  statement_id  = "AllowBatchAutostop"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.scheduler.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.batch_autostop.arn
+}
+
 resource "aws_lambda_permission" "start" {
   statement_id  = "AllowStart"
   action        = "lambda:InvokeFunction"

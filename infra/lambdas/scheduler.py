@@ -5,6 +5,11 @@ Acciones:
 - stop:     baja ECS services a 0 + para RDS. Antes chequea Batch jobs RUNNING.
 - keepstop: cada 6h. Si RDS quedo RUNNING fuera de ventana, lo re-para.
             Ventana parametrizada via WORKDAYS_CRON + WORK_START_UTC + WORK_END_UTC.
+- autostop: disparado por EventBridge al terminar un job Batch (SUCCEEDED/FAILED).
+            Apaga el stack completo (= stop) solo fuera de la ventana laboral y
+            si no quedan otros jobs activos. Para que un entrenamiento que termina
+            de noche no deje el cluster encendido hasta el cron stop del dia
+            siguiente, sin tumbarlo tras un smoke/eda diurno.
 """
 
 from __future__ import annotations
@@ -45,6 +50,22 @@ def _parse_workdays(cron_token: str) -> set[int]:
         ia, ib = _WEEKDAY_MAP[a.strip()], _WEEKDAY_MAP[b.strip()]
         return set(range(ia, ib + 1))
     return {_WEEKDAY_MAP[tok.strip()] for tok in cron_token.split(",") if tok.strip()}
+
+
+def _in_work_window() -> bool:
+    """True si el instante actual (UTC) cae en la ventana laboral configurada.
+
+    Ventana = WORKDAYS_CRON (dias) x [WORK_START_UTC, WORK_END_UTC). Dentro de
+    ella el cron start/stop gobierna el on/off; fuera de ella el cluster debe
+    estar abajo, asi que keepstop (cron 6h) y autostop (fin de job) solo actuan
+    cuando esto devuelve False.
+    """
+    workdays = _parse_workdays(os.environ.get("WORKDAYS_CRON", "MON-FRI"))
+    start_utc = int(os.environ.get("WORK_START_UTC", "13"))
+    end_utc = int(os.environ.get("WORK_END_UTC", "17"))
+    utc_hour = time.gmtime().tm_hour
+    weekday = time.gmtime().tm_wday  # 0=lunes
+    return (weekday in workdays) and (start_utc <= utc_hour < end_utc)
 
 
 def _running_jobs() -> list[str]:
@@ -140,16 +161,8 @@ def _stop():
 def _keepstop():
     """Defense: si RDS quedo RUNNING fuera de ventana, re-pararlo (Patch 13.1)."""
     log.info("=== KEEPSTOP ===")
-    workdays = _parse_workdays(os.environ.get("WORKDAYS_CRON", "MON-FRI"))
-    start_utc = int(os.environ.get("WORK_START_UTC", "13"))
-    end_utc = int(os.environ.get("WORK_END_UTC", "17"))
-
-    utc_hour = time.gmtime().tm_hour
-    weekday = time.gmtime().tm_wday   # 0=lunes
-    in_window = (weekday in workdays) and (start_utc <= utc_hour < end_utc)
-    if in_window:
-        log.info("dentro de ventana (UTC=%02d:00, weekday=%d, workdays=%s), skip",
-                 utc_hour, weekday, sorted(workdays))
+    if _in_work_window():
+        log.info("dentro de ventana laboral, skip keepstop")
         return
 
     db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]
@@ -165,6 +178,24 @@ def _keepstop():
         log.info("rds en estado %s (skip)", state)
 
 
+def _autostop():
+    """Disparado al terminar un job Batch (SUCCEEDED/FAILED) via EventBridge.
+
+    Apaga el stack completo (delega en _stop: ECS a 0 + RDS stop) para no
+    dejarlo encendido toda la noche tras un entrenamiento. Dos guardas evitan
+    apagados indeseados:
+    - solo fuera de la ventana laboral: dentro de ella el cron stop ya gobierna
+      el apagado; no queremos tumbar el cluster tras un smoke/eda diurno.
+    - _stop() ademas pospone si quedan otros jobs activos (otra variedad aun
+      entrenando) -> no apaga a media corrida multi-variedad.
+    """
+    log.info("=== AUTOSTOP (trigger: Batch job terminal) ===")
+    if _in_work_window():
+        log.info("dentro de ventana laboral, skip autostop (probable job diurno)")
+        return
+    _stop()
+
+
 def handler(event, _context):
     action = (event or {}).get("action", "stop")
     if action == "start":
@@ -173,6 +204,8 @@ def handler(event, _context):
         _stop()
     elif action == "keepstop":
         _keepstop()
+    elif action == "autostop":
+        _autostop()
     else:
         raise ValueError(f"action desconocida: {action}")
     return {"statusCode": 200, "body": action}
