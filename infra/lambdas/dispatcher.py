@@ -129,7 +129,10 @@ def handler(event, _context):
             ],
         },
         tags={
-            "variety": ",".join(varieties),
+            # Batch tags solo aceptan [letras numeros espacios _.:/=+-@]: la coma
+            # NO esta permitida, asi que separamos con "-" (y capamos al limite de
+            # 256 chars del value, relevante con varieties=all).
+            "variety": "-".join(varieties)[:256],
             "tuning": tuning,
             "mode": mode,
             "parallel": str(parallel),
