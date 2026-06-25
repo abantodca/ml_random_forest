@@ -1,70 +1,43 @@
-<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8">
-<title>Decisión de clustering — 2026-06-25 10:50</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#f8fafc; color:#0f172a; }
-  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
-  h1 { margin: 0 0 4px; font-size: 26px; }
-  .sub { color:#64748b; margin-bottom: 24px; }
-  .verdict { display:inline-block; padding:4px 14px; border-radius:999px; color:white; font-weight:700; background:#dc2626; margin-left:8px; font-size:14px; vertical-align:middle; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 12px; margin-bottom: 28px; }
-  .kpi { background:white; border:1px solid #e2e8f0; border-radius: 10px; padding:16px; text-align:center; }
-  .kpi-v { font-size: 22px; font-weight: 700; }
-  .kpi-l { font-size: 12px; color:#64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-top:4px; }
-  .card { background:white; border:1px solid #e2e8f0; border-radius: 10px; padding:16px; margin-bottom: 24px; }
-  h2 { font-size: 18px; margin: 0 0 12px; }
-  table.tbl { width:100%; border-collapse: collapse; font-size: 14px; }
-  table.tbl th, table.tbl td { text-align:left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
-  table.tbl th { background:#f1f5f9; font-weight: 600; font-size:12px; text-transform:uppercase; letter-spacing: 0.03em; }
-  .pill { color:white; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; text-transform:capitalize; }
-  code { background:#f1f5f9; padding: 1px 6px; border-radius:4px; font-size: 12px; }
-  small { color:#64748b; }
-  .foot { color:#64748b; font-size:12px; margin-top:24px; line-height: 1.8; }
-</style></head><body>
-<div class="wrap">
-  <h1>Decisión de clustering <span class="verdict">REVISAR</span></h1>
-  <div class="sub">Generado el 2026-06-25 10:50 · Wasserstein sobre 5 features · Bootstrap 100× · Holm-Bonferroni · Silhouette sobre 16,047 obs</div>
-
-  <div class="kpis"><div class='kpi'><div class='kpi-v'>23</div><div class='kpi-l'>Variedades totales</div></div><div class='kpi'><div class='kpi-v'>11</div><div class='kpi-l'>Anclas (entrenan)</div></div><div class='kpi'><div class='kpi-v'>2</div><div class='kpi-l'>Robustas (bootstrap ≥90%)</div></div><div class='kpi'><div class='kpi-v'>9</div><div class='kpi-l'>Frágiles (bootstrap <60%)</div></div><div class='kpi'><div class='kpi-v'>7</div><div class='kpi-l'>MW-Holm ≥40.0%</div></div><div class='kpi'><div class='kpi-v'>-0.112</div><div class='kpi-l'>Silhouette global</div></div><div class='kpi'><div class='kpi-v'>3/4</div><div class='kpi-l'>Tests globales OK</div></div><div class='kpi'><div class='kpi-v'>REVISAR</div><div class='kpi-l'>Veredicto</div></div></div>
-
-  <div class="card">
-    <h2>Validación global (4 tests) + Silhouette reforzado</h2>
-    <table class="tbl">
-      <thead><tr><th></th><th>Test</th><th>Resultado</th></tr></thead>
-      <tbody><tr><td><span style='color:#dc2626;font-weight:700'>FAIL</span></td><td>Silhouette Score</td><td>Centroides: -0.0440 — Global (todas obs): -0.1120</td></tr><tr><td><span style='color:#10b981;font-weight:700'>OK</span></td><td>Ratio intra/inter</td><td>Ratio: 0.6299 (Bueno)</td></tr><tr><td><span style='color:#10b981;font-weight:700'>OK</span></td><td>Kruskal-Wallis</td><td>5/5 features significativas</td></tr><tr><td><span style='color:#10b981;font-weight:700'>OK</span></td><td>PERMANOVA</td><td>F=4.17 · p=0.0010 · R²=0.776</td></tr></tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>Tabla de decisión — 23 variedades</h2>
-    <p style="color:#64748b;font-size:13px;margin:0 0 12px">
-      <b>MW raw</b>: Mann-Whitney sin corregir · <b>MW Holm</b>: con corrección de tests múltiples ·
-      <b>Stability</b>: % de 100 bootstraps que confirman la asignación canónica ·
-      <b>Top alt</b>: segunda ancla más probable en el bootstrap
-    </p>
-    <table class="tbl">
-      <thead><tr>
-        <th>Variedad</th><th>Entrena con</th><th>n</th>
-        <th>Dist. Wass.</th><th>MW raw</th><th>MW Holm</th>
-        <th>Stability</th><th>Top alt</th><th>Decisión</th>
-      </tr></thead>
-      <tbody><tr><td><code>RAYMI</code></td><td><code>ARANA</code></td><td>319</td><td>0.2276</td><td>40%</td><td>60%</td><td>100%</td><td><small>POP (0%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ARANA</code></td><td><code>ARANA</code></td><td>546</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>MASIRAH</code></td><td><code>ATLAS</code></td><td>188</td><td>0.2405</td><td>60%</td><td>60%</td><td>17%</td><td><small>BIANCA (49%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>STELLA</code></td><td><code>ATLAS</code></td><td>151</td><td>0.3403</td><td>0%</td><td>0%</td><td>0%</td><td><small>JUPITER (100%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ATLAS</code></td><td><code>ATLAS</code></td><td>2755</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BEAUTY</code></td><td><code>BEAUTY</code></td><td>4125</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>AZRA</code></td><td><code>BELLA</code></td><td>131</td><td>0.3423</td><td>0%</td><td>0%</td><td>18%</td><td><small>ROSITA (68%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BELLA</code></td><td><code>BELLA</code></td><td>664</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>TERRAPIN</code></td><td><code>BIANCA</code></td><td>105</td><td>0.2330</td><td>40%</td><td>60%</td><td>1%</td><td><small>JUPITER (79%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BIANCA</code></td><td><code>BIANCA</code></td><td>3347</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>EMERALD</code></td><td><code>EMERALD</code></td><td>803</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>JUPITER</code></td><td><code>JUPITER</code></td><td>1668</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BONITA</code></td><td><code>JUPITER</code></td><td>235</td><td>0.1622</td><td>40%</td><td>40%</td><td>99%</td><td><small>BIANCA (1%)</small></td><td><span class='pill' style='background:#059669'>robusto</span></td></tr><tr><td><code>KIRRA</code></td><td><code>JUPITER</code></td><td>844</td><td>0.1525</td><td>20%</td><td>20%</td><td>86%</td><td><small>BIANCA (13%)</small></td><td><span class='pill' style='background:#059669'>robusto</span></td></tr><tr><td><code>MAGICA</code></td><td><code>MAGICA</code></td><td>1152</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>POP</code></td><td><code>POP</code></td><td>9990</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>FCM17-132</code></td><td><code>POP</code></td><td>116</td><td>0.6410</td><td>40%</td><td>40%</td><td>2%</td><td><small>BEAUTY (76%)</small></td><td><span class='pill' style='background:#f59e0b'>revisar</span></td></tr><tr><td><code>MAGNUS</code></td><td><code>ROSITA</code></td><td>132</td><td>0.3443</td><td>60%</td><td>60%</td><td>42%</td><td><small>POP (29%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ROSITA</code></td><td><code>ROSITA</code></td><td>588</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>MADEIRA</code></td><td><code>VENTURA</code></td><td>167</td><td>0.2277</td><td>0%</td><td>0%</td><td>56%</td><td><small>BIANCA (44%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>VENTURA</code></td><td><code>VENTURA</code></td><td>4656</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BILOXI</code></td><td><code>VENTURA</code></td><td>400</td><td>0.4048</td><td>20%</td><td>20%</td><td>0%</td><td><small>JUPITER (100%)</small></td><td><span class='pill' style='background:#dc2626'>fragil</span></td></tr><tr><td><code>MALIBU</code></td><td><code>VENTURA</code></td><td>230</td><td>0.2621</td><td>40%</td><td>40%</td><td>0%</td><td><small>JUPITER (100%)</small></td><td><span class='pill' style='background:#f59e0b'>revisar</span></td></tr></tbody>
-    </table>
-  </div>
-
-  <div class="foot">
-    <b>Leyenda de decisión reforzada:</b><br>
-    <span class='pill' style='background:#0ea5e9'>ancla</span> entrena modelo propio ·
-    <span class='pill' style='background:#059669'>robusto</span> efecto pequeño (|Cliff|&lt;0.33) y estable ·
-    <span class='pill' style='background:#84cc16'>aceptable</span> efecto ≤ moderado (|Cliff|&lt;0.474) ·
-    <span class='pill' style='background:#f59e0b'>revisar</span> claramente distinta (0.474≤|Cliff|&lt;0.60) ·
-    <span class='pill' style='background:#dc2626'>fragil</span> muy distinta (|Cliff|≥0.60) — considerar ancla propia ·
-    <span class='pill' style='background:#94a3b8'>insuficiente</span> n&lt;3 filas
-    <br><br>
-    <b>Cómo leer la tabla:</b> para decidir si una asignación es confiable, mira <b>stability</b> antes que MW raw.
-    Una variedad puede tener MW raw 80% pero stability 50% → significa que la similitud marginal es casual y
-    el ancla nearest es inestable al resamplear. La decisión reforzada ya integra ambos criterios.
-  </div>
-</div>
-</body></html>
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<title>Ruteo a anclas — 2026-06-25 11:44</title><style>
+ * { box-sizing:border-box } body { font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin:0; background:#f8fafc; color:#0f172a }
+ .wrap { max-width:1200px; margin:0 auto; padding:32px 24px }
+ h1 { margin:0 0 4px; font-size:25px } .sub { color:#64748b; margin-bottom:22px; font-size:13px }
+ .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:24px }
+ .kpi { background:white; border:1px solid #e2e8f0; border-radius:10px; padding:16px; text-align:center }
+ .kpi-v { font-size:20px; font-weight:700 } .kpi-l { font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; margin-top:4px }
+ .card { background:white; border:1px solid #e2e8f0; border-radius:10px; padding:16px; margin-bottom:22px }
+ h2 { font-size:17px; margin:0 0 10px } table { width:100%; border-collapse:collapse; font-size:14px }
+ th,td { text-align:left; padding:8px 10px; border-bottom:1px solid #e2e8f0 }
+ th { background:#f1f5f9; font-size:12px; text-transform:uppercase; letter-spacing:.03em }
+ .pill { color:white; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; text-transform:capitalize }
+ code { background:#f1f5f9; padding:1px 6px; border-radius:4px; font-size:12px } small { color:#64748b }
+ .foot { color:#64748b; font-size:12px; margin-top:18px; line-height:1.7 }
+</style></head><body><div class="wrap">
+ <h1>Decisión de ruteo a anclas (donante)</h1>
+ <div class="sub">Generado el 2026-06-25 11:44 · <b>metodología: transferencia / ruteo a donante</b> (no clustering) ·
+  decisión por <b>MAPE out-of-sample</b> · 11 anclas · features proxy (sin lags)</div>
+ <div class="kpis"><div class='kpi'><div class='kpi-v'>23</div><div class='kpi-l'>Variedades</div></div><div class='kpi'><div class='kpi-v'>11</div><div class='kpi-l'>Anclas (modelo propio)</div></div><div class='kpi'><div class='kpi-v'>12</div><div class='kpi-l'>Ruteadas</div></div><div class='kpi'><div class='kpi-v'>21/23</div><div class='kpi-l'>Confiables</div></div><div class='kpi'><div class='kpi-v'>2</div><div class='kpi-l'>A revisar</div></div><div class='kpi'><div class='kpi-v'>+10.2 pp</div><div class='kpi-l'>Ganancia media al heredar</div></div><div class='kpi'><div class='kpi-v'>14.5%</div><div class='kpi-l'>MAPE típico ancla (proxy)</div></div><div class='kpi'><div class='kpi-v'>sin clusters</div><div class='kpi-l'>Estructura (diagnóstico)</div></div></div>
+ <div class="card">
+  <h2>Ruteo variedad → ancla (decisión por error de pronóstico)</h2>
+  <p style="color:#64748b;font-size:13px;margin:0 0 10px">
+   <b>MAPE OOS</b>: error del modelo del ancla sobre la variedad · <b>MAPE propio</b>: error de su modelo
+   individual (CV) · <b>Ganancia</b>: puntos de MAPE que se ahorran al heredar (▲ = heredar mejora) ·
+   <b>×baseline</b>: veces el MAPE típico de un ancla (14.5%) · <b>|Cliff|</b>: diagnóstico distribucional</p>
+  <table><thead><tr><th>Variedad</th><th>Entrena con</th><th>n</th><th>MAPE OOS</th>
+   <th>MAPE propio</th><th>Ganancia</th><th>×baseline</th><th>|Cliff|</th><th>Decisión</th></tr></thead>
+   <tbody><tr><td><code>MASIRAH</code></td><td><code>VENTURA</code></td><td>56</td><td>24.6%</td><td>32.6%</td><td><span style='color:#059669;font-weight:600'>▲ 7.9 pp</span></td><td>1.70×</td><td><small>0.29</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BELLA</code></td><td><code>JUPITER</code></td><td>195</td><td>24.7%</td><td>21.6%</td><td><span style='color:#dc2626;font-weight:600'>▼ 3.1 pp</span></td><td>1.70×</td><td><small>—</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>MADEIRA</code></td><td><code>BEAUTY</code></td><td>66</td><td>25.2%</td><td>27.0%</td><td><span style='color:#059669;font-weight:600'>▲ 1.8 pp</span></td><td>1.74×</td><td><small>0.29</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>RAYMI</code></td><td><code>POP</code></td><td>258</td><td>25.3%</td><td>22.8%</td><td><span style='color:#dc2626;font-weight:600'>▼ 2.5 pp</span></td><td>1.74×</td><td><small>0.39</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>FCM17-132</code></td><td><code>KIRRA</code></td><td>48</td><td>26.0%</td><td>35.2%</td><td><span style='color:#059669;font-weight:600'>▲ 9.2 pp</span></td><td>1.79×</td><td><small>0.56</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>AZRA</code></td><td><code>POP</code></td><td>78</td><td>26.0%</td><td>33.6%</td><td><span style='color:#059669;font-weight:600'>▲ 7.6 pp</span></td><td>1.79×</td><td><small>0.32</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ARANA</code></td><td><code>JUPITER</code></td><td>311</td><td>27.8%</td><td>27.0%</td><td><span style='color:#dc2626;font-weight:600'>▼ 0.8 pp</span></td><td>1.92×</td><td><small>—</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BONITA</code></td><td><code>BILOXI</code></td><td>39</td><td>28.1%</td><td>31.9%</td><td><span style='color:#059669;font-weight:600'>▲ 3.8 pp</span></td><td>1.94×</td><td><small>0.23</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BILOXI</code></td><td><code>BILOXI</code></td><td>180</td><td>4.6%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>0.61</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>MAGICA</code></td><td><code>MAGICA</code></td><td>509</td><td>5.7%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>KIRRA</code></td><td><code>KIRRA</code></td><td>375</td><td>6.3%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>0.14</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>ROSITA</code></td><td><code>ROSITA</code></td><td>305</td><td>7.3%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>JUPITER</code></td><td><code>JUPITER</code></td><td>662</td><td>7.4%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>EMERALD</code></td><td><code>EMERALD</code></td><td>354</td><td>8.5%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>VENTURA</code></td><td><code>VENTURA</code></td><td>2174</td><td>8.9%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BIANCA</code></td><td><code>BIANCA</code></td><td>1612</td><td>10.2%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BEAUTY</code></td><td><code>BEAUTY</code></td><td>2422</td><td>11.0%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>POP</code></td><td><code>POP</code></td><td>5760</td><td>14.0%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>ATLAS</code></td><td><code>ATLAS</code></td><td>1296</td><td>75.6%</td><td>—</td><td><small>—</small></td><td>—</td><td><small>—</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>STELLA</code></td><td><code>POP</code></td><td>35</td><td>21.3%</td><td>43.0%</td><td><span style='color:#059669;font-weight:600'>▲ 21.8 pp</span></td><td>1.47×</td><td><small>0.46</small></td><td><span class='pill' style='background:#059669'>bueno</span></td></tr><tr><td><code>MALIBU</code></td><td><code>POP</code></td><td>67</td><td>21.4%</td><td>18.5%</td><td><span style='color:#dc2626;font-weight:600'>▼ 2.8 pp</span></td><td>1.47×</td><td><small>0.58</small></td><td><span class='pill' style='background:#059669'>bueno</span></td></tr><tr><td><code>MAGNUS</code></td><td><code>MAGICA</code></td><td>37</td><td>29.2%</td><td>41.8%</td><td><span style='color:#059669;font-weight:600'>▲ 12.6 pp</span></td><td>2.01×</td><td><small>0.42</small></td><td><span class='pill' style='background:#f59e0b'>revisar</span></td></tr><tr><td><code>TERRAPIN</code></td><td><code>JUPITER</code></td><td>60</td><td>29.7%</td><td>97.2%</td><td><span style='color:#059669;font-weight:600'>▲ 67.5 pp</span></td><td>2.05×</td><td><small>0.23</small></td><td><span class='pill' style='background:#f59e0b'>revisar</span></td></tr></tbody></table>
+ </div>
+ <div class="foot">
+  <b>Qué se gana (columna Ganancia):</b> cuánto baja el error al usar el modelo del ancla en vez del
+  modelo propio de la variedad. Las chicas casi siempre ganan porque su data sola no alcanza para un
+  modelo bueno.<br><br>
+  <b>Leyenda:</b>
+  <span class='pill' style='background:#0ea5e9'>ancla</span> modelo propio ·
+  <span class='pill' style='background:#059669'>bueno</span> MAPE ≤ 1.5× baseline ·
+  <span class='pill' style='background:#84cc16'>aceptable</span> ≤ 2.0× ·
+  <span class='pill' style='background:#f59e0b'>revisar</span> &gt; 2.0× (distinta + poca data → mejores features / más datos)
+  <br><br><b>Estructura:</b> silhouette -0.112 sobre 16,047 obs → no hay clusters naturales
+  (esperado: es ruteo a donante, no clustering). MAPE proxy (sin lag features); con el pipeline real baja.
+ </div>
+</div></body></html>

@@ -1,6 +1,6 @@
-"""Core del experimento de agrupación de variedades a anclas.
+"""Core del experimento de ruteo de variedades a anclas (donante).
 
-Lógica estable y testeable extraída del notebook `experiment_cluster_varieties_new.ipynb`
+Lógica estable y testeable extraída del notebook `experiment_variety_anchor_routing.ipynb`
 (el notebook conserva solo orquestación + visualización). Estructura:
 
     Configuración        ExperimentConfig, constantes de viabilidad y de efecto
@@ -23,8 +23,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 from scipy.stats import binom, kruskal, mannwhitneyu, wasserstein_distance
-from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import HistGradientBoostingRegressor, IsolationForest
 from sklearn.metrics import silhouette_samples, silhouette_score
+from sklearn.model_selection import KFold
 from sklearn.preprocessing import RobustScaler
 
 try:
@@ -812,17 +813,81 @@ def compute_group_summary(anchors: list, assignment_df: pd.DataFrame, all_data: 
     return pd.DataFrame(rows).sort_values("total", ascending=False)
 
 
-def export_results(final_result: pd.DataFrame, output_dir: str):
-    """Exporta CSV de asignación completa y mapping simplificado."""
-    export_df = final_result[
-        ["variedad", "n_filas", "zona", "entrena_con", "distancia_wass", "nota"]
-    ].copy()
-    export_df.to_csv(f"{output_dir}/variety_anchor_assignment.csv", index=False)
-    print(f"✓ Exportado a {output_dir}/variety_anchor_assignment.csv")
+# ══════════════════════════════════════════════════════════════════
+# RUTEO PREDICTIVO (la decisión accionable — transferencia, no clustering)
+# ══════════════════════════════════════════════════════════════════
+def route_to_anchors_predictive(
+    all_data: dict,
+    anchors: list,
+    predictors: list,
+    target: str,
+    *,
+    random_state: int = RANDOM_STATE,
+    max_iter: int = 200,
+    min_own_n: int = 25,
+) -> tuple[pd.DataFrame, float]:
+    """Rutea cada variedad al ancla cuyo MODELO la pronostica mejor (MAPE OOS).
 
-    mapping = (
-        final_result[["variedad", "entrena_con"]].copy().sort_values("variedad")
-    )
-    mapping.to_csv(f"{output_dir}/variety_training_mapping.csv", index=False)
-    print(f"✓ Exportado a {output_dir}/variety_training_mapping.csv")
-    return export_df, mapping
+    Decisión por error predictivo, no por distribución. Devuelve
+    `(routing_df, baseline)` donde `baseline` es el MAPE típico de un ancla.
+    Columnas de `routing_df`:
+      - mape_oos    : MAPE del modelo del ancla sobre la variedad (out-of-sample;
+                      el ancla nunca vio esa data → honesto).
+      - mape_propio : MAPE del modelo propio de la variedad (5-fold CV);
+                      NaN si n < `min_own_n` (no hay data para uno fiable).
+      - ganancia    : mape_propio − mape_oos = puntos % que se GANAN al heredar
+                      en vez de entrenar propio (>0 ⇒ heredar reduce el error).
+      - ratio       : mape_oos / baseline.
+      - decision    : ancla · bueno (≤1.5×) · aceptable (≤2.0×) · revisar (>2.0×).
+
+    El modelo es HistGradientBoosting sobre `predictors` (proxy sin lag features);
+    fija el RUTEO, no el MAPE de producción.
+    """
+    def _clean(v):
+        df = all_data[v][predictors + [target]].dropna()
+        return df[df[target] > 0]
+
+    def _mape(y, y_hat):
+        return float(np.mean(np.abs((y - y_hat) / y)) * 100)
+
+    def _fit(df, it=max_iter):
+        m = HistGradientBoostingRegressor(random_state=random_state, max_iter=it)
+        m.fit(df[predictors].values, df[target].values)
+        return m
+
+    anchor_models, anchor_own = {}, {}
+    for a in anchors:
+        d = _clean(a)
+        anchor_models[a] = _fit(d)
+        anchor_own[a] = _mape(d[target].values, anchor_models[a].predict(d[predictors].values))
+    baseline = float(np.mean(list(anchor_own.values())))
+
+    kf = KFold(5, shuffle=True, random_state=random_state)
+    rows = []
+    for v in sorted(all_data):
+        d = _clean(v)
+        if len(d) == 0:
+            continue
+        if v in anchors:
+            rows.append({"variedad": v, "entrena_con": v, "n": len(d),
+                         "mape_oos": anchor_own[v], "mape_propio": anchor_own[v],
+                         "ganancia": 0.0, "ratio": 1.0, "decision": "ancla"})
+            continue
+        y, X = d[target].values, d[predictors].values
+        errs = {a: _mape(y, anchor_models[a].predict(X)) for a in anchors}
+        best = min(errs, key=errs.get)
+        mape_oos, ratio = errs[best], errs[best] / baseline
+        if len(d) >= min_own_n:
+            own = float(np.mean([
+                _mape(d.iloc[te][target].values,
+                      _fit(d.iloc[tr], it=120).predict(d.iloc[te][predictors].values))
+                for tr, te in kf.split(d)
+            ]))
+            ganancia = own - mape_oos
+        else:
+            own, ganancia = float("nan"), float("nan")
+        decision = "bueno" if ratio <= 1.5 else "aceptable" if ratio <= 2.0 else "revisar"
+        rows.append({"variedad": v, "entrena_con": best, "n": len(d),
+                     "mape_oos": mape_oos, "mape_propio": own, "ganancia": ganancia,
+                     "ratio": ratio, "decision": decision})
+    return pd.DataFrame(rows).sort_values(["decision", "mape_oos"]), baseline

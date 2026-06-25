@@ -8,7 +8,7 @@ Si vas a editar el modelo de producción, hacelo en `src/step_04_train/` o
 
 ## Inventario
 
-- **`experiment_cluster_varieties_new.ipynb`** — decide qué variedades
+- **`experiment_variety_anchor_routing.ipynb`** — decide qué variedades
   entrenan modelo propio (**anclas**) y a cuál ancla rutear las de poca data.
   - No es clustering: la data no tiene estructura de clusters natural
     (silhouette negativo a todo k; los clusters reales están en k=2-3). Es
@@ -16,12 +16,12 @@ Si vas a editar el modelo de producción, hacelo en `src/step_04_train/` o
   - Validación **robusta**: tamaño de efecto (Cliff's delta) en vez de
     p-valores (que saturan a n grande), bootstrap stability, Holm-Bonferroni,
     silhouette sobre todas las observaciones.
-  - **Sección 7 — ruteo predictivo:** la decisión accionable. Rutea cada
-    variedad al ancla cuyo modelo la **pronostica** mejor (menor MAPE OOS),
-    no a la más parecida por distribución.
+  - **Sección 6 — tablero de ruteo predictivo:** la decisión accionable.
+    Rutea cada variedad al ancla cuyo modelo la **pronostica** mejor (menor
+    MAPE OOS), no a la más parecida por distribución. No es clustering.
   - Salida: `variety_predictive_routing.csv/.yaml` (mapping `variedad →
     ancla`) + `decision_table.html` (tablero) en `../data/`.
-- **`variety_clustering.py`** — módulo con la lógica estable del notebook
+- **`variety_routing.py`** — módulo con la lógica estable del notebook
   (config, distancias, validación, estadística). Importable y testeable.
 
 ## Cómo correrlo
@@ -29,7 +29,7 @@ Si vas a editar el modelo de producción, hacelo en `src/step_04_train/` o
 ```bash
 # entorno con numpy/pandas/scipy/scikit-learn/statsmodels/openpyxl
 cd notebooks
-jupyter nbconvert --to notebook --execute --inplace experiment_cluster_varieties_new.ipynb
+jupyter nbconvert --to notebook --execute --inplace experiment_variety_anchor_routing.ipynb
 ```
 
 El mapping generado se enchufa al pipeline real; el notebook **no** toca
