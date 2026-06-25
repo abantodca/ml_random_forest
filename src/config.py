@@ -226,6 +226,24 @@ CHAMPION_MAX_GAP: float = float(os.environ.get("CHAMPION_MAX_GAP", "18.0"))
 # actual da 0.30 -> pasa igual que antes (sin cambio de decision).
 CHAMPION_MAX_GAP_REL: float = float(os.environ.get("CHAMPION_MAX_GAP_REL", "0.40"))
 
+# CHAMPION_WARN_TEMPORAL_MAPE: umbral de AVISO (no bloqueante) sobre el MAPE del
+# chequeo honesto temporal (forecast de anio no visto, _temporal_honesty_check).
+#   El MAPE_oof stratified mide INTERPOLACION (mezcla anios vistos) y es
+#   optimista; el temporal mide EXTRAPOLACION a un anio nuevo. En el run del
+#   2026-06-25 las 4 variedades pasaron el gate stratified (13-15%) pero el
+#   temporal salio 22-34% (BEAUTY con R2 negativo). Este umbral NO rechaza ni
+#   degrada el registro — solo emite un WARNING para dar visibilidad al riesgo
+#   de drift en produccion. Mantener el registro intacto es deliberado: no
+#   rompe los campeones ya entrenados. 30.0 = ~2x el MAPE stratified tipico.
+CHAMPION_WARN_TEMPORAL_MAPE: float = float(
+    os.environ.get("CHAMPION_WARN_TEMPORAL_MAPE", "30.0")
+)
+# Piso de R2 temporal por debajo del cual el modelo practicamente no extrapola
+# mejor que la media del anio nuevo (BEAUTY dio -0.11 en el run citado).
+CHAMPION_WARN_TEMPORAL_R2: float = float(
+    os.environ.get("CHAMPION_WARN_TEMPORAL_R2", "0.20")
+)
+
 # ---------------------------------------------------------------------------
 # Decision lex-order del champion (champion.select_champion)
 # ---------------------------------------------------------------------------
@@ -339,20 +357,30 @@ OOF_ENSEMBLE_K: int = 5
 # (robustez del tuning, 2026-06-13): score = mean(MAE) + lambda * std(MAE).
 # Con lambda>0, TPE prefiere configs ESTABLES sobre configs con buen
 # promedio pero alta dispersion entre folds (que generalizan peor).
-# Default 0.0 = comportamiento historico bit-identico (solo media).
-# Valores razonables para activar: 0.5-1.0.
+#
+# Default 0.0 (MAE PURO): se mantiene en 0. Evaluado y DESCARTADO el 2026-06-25
+# como palanca anti-overfit: cualquier lambda>0 desvia el objetivo de minimizar
+# MAE (lo paga en MAE_val, ya observado historicamente). El anti-overfit de este
+# proyecto vive en la GRILLA (TREE_MAX_DEPTH/TREE_MAX_LEAVES en search_spaces) y
+# en el gate del campeon (select_champion), NO en el objetivo. Activar (0.5-1.0)
+# solo si se acepta explicitamente negociar MAE por estabilidad.
 OPTUNA_OBJECTIVE_STD_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_STD_PENALTY", "0.0"))
 
 # Penalizacion por GAP train->val en el objective de Optuna (anti-overfit del
 # tuning): score = mean(MAE_val) + std_penalty + lambda * mean(max(0, MAE_val - MAE_train)).
 # Con lambda>0, TPE EVITA configs que memorizan el train (gap alto) aunque tengan
 # buen MAE_val — exactamente las que luego falla el gate de gap del campeon
-# (select_champion). Es el lever honesto para que un backend de capacidad abierta
-# (p.ej. XGB, que quedo descalificado con gap_rel=0.42>0.40) tune hacia
-# GENERALIZACION en vez de hacia el gate por construccion: NO relaja el gate, hace
-# que el tuning lo respete. Default 0.0 = comportamiento historico bit-identico
-# (no calcula el gap, sin costo extra). Valores razonables para activar: 0.3-1.0.
-# Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
+# (select_champion). NO relaja el gate, hace que el tuning lo respete. Valores
+# razonables si se activa: 0.3-1.0. Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
+#
+# Default 0.0 (MAE PURO): se mantiene en 0. Evaluado y DESCARTADO el 2026-06-25
+# como palanca anti-overfit para las 4 variedades nuevas. Razon: con lambda>0 el
+# objetivo deja de minimizar MAE (negocia MAE_val por menor gap), efecto que ya
+# se observo al cambiarlo antes. La decision es atacar el overfit por CAPACIDAD
+# (grilla: TREE_MAX_DEPTH=7 / TREE_MAX_LEAVES=40 en search_spaces) manteniendo el
+# objetivo en MAE puro: el optimo de MAE dentro de una grilla mas chica ya cae en
+# zona menos sobreajustada, sin sacrificar MAE. El gap-penalty queda disponible
+# como palanca SOLO para rescatar a XGB si se quisiera (no es el plan actual).
 OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0"))
 
 # Sample weights por densidad del target (compute_sample_weights).
@@ -574,6 +602,17 @@ MLFLOW_EXPERIMENT_PREFIX: str = os.environ.get("MLFLOW_EXPERIMENT_PREFIX", "")
 # server con backend SQL (Postgres en local + AWS), por lo que el Registry
 # esta disponible incondicionalmente.
 MODEL_REGISTRY_PREFIX: str = os.environ.get("MODEL_REGISTRY_PREFIX", "rnd-forest-")
+
+# Warm-start de Optuna desde el campeon registrado (2026-06-25,
+# step_04_train/warm_start.py). Si hay un `rnd-forest-<variety>` previo del
+# MISMO backend, se siembran sus best_params como primer trial del estudio
+# (study.enqueue_trial) para arrancar desde la zona ya-buena y solo mejorarla,
+# en vez de re-explorar a ciegas. Si no hay modelo previo -> arranque en frio.
+# Lee solo run.data.params (strings), nunca el .joblib -> sin riesgo de pickle.
+# Default ON; apagar con WARM_START_FROM_REGISTRY=0 (sin rebuild).
+WARM_START_FROM_REGISTRY: bool = bool(
+    int(os.environ.get("WARM_START_FROM_REGISTRY", "1"))
+)
 
 # Guard de registro (incidente 2026-06-13): un run dev con EXANTE_MODE=1
 # paso el quality gate (20.8% < 25%) y registro su campeon experimental

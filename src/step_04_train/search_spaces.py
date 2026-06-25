@@ -17,7 +17,28 @@ porque el pipeline final tiene la forma:
 
 from __future__ import annotations
 
+import os
+
 import optuna
+
+# ---------------------------------------------------------------------------
+# Topes de capacidad del arbol (anti-overfit directo, 2026-06-25)
+# ---------------------------------------------------------------------------
+# Profundidad y nº de hojas/ramas son las palancas mas directas de overfitting
+# en boosting de arboles. El run prod_xl 2026-06-25 mostro que las variedades
+# con gap alto eligieron justo el extremo de la grilla (BEAUTY/VENTURA depth=8;
+# VENTURA num_leaves=54), mientras las limpias se quedaron holgadas dentro
+# (JUPITER depth=5/leaves=29; BIANCA depth=7/leaves=36).
+#
+# Bajar el tope 8->7 (depth) y 64->40 (hojas) es QUIRURGICO: deja intactas a
+# JUPITER y BIANCA (sus configs ganadoras siguen DENTRO de la grilla) y solo
+# recorta el extremo memorizador de BEAUTY/VENTURA. NO es el subajuste de rev.6
+# (depth<=5/leaves<=18): a depth 7 / 40 hojas hay capacidad de sobra para ~1.6-4.6k
+# filas. Env-overridable: para volver a la grilla vieja exportar
+# TREE_MAX_DEPTH=8 TREE_MAX_LEAVES=64 (sin rebuild).
+TREE_MAX_DEPTH: int = int(os.environ.get("TREE_MAX_DEPTH", "7"))
+TREE_MAX_LEAVES: int = int(os.environ.get("TREE_MAX_LEAVES", "40"))
+
 
 # ---------------------------------------------------------------------------
 # Preprocesador (compartido para todos los backends)
@@ -78,7 +99,8 @@ def suggest_xgb_params(trial: optuna.Trial) -> dict[str, object]:
       era exactamente "sin early stopping no se cortan").
     - Limites inferiores de regularizacion bajados a ~0 (log): Optuna decide
       cuanta regularizacion necesita, en vez de forzarla por construccion.
-    - max_depth 3-8: deja explorar interacciones de mayor orden.
+    - max_depth 3-TREE_MAX_DEPTH (tope 8->7 en 2026-06-25; ver constantes del
+      modulo): deja explorar interacciones sin el extremo memorizador.
 
     Se mantiene de rev. 6.x lo que si estaba justificado: colsample_bylevel/
     bynode fuera (multiplicaban agresividad), max_delta_step fuera (marginal
@@ -95,12 +117,12 @@ def suggest_xgb_params(trial: optuna.Trial) -> dict[str, object]:
     grow_policy = trial.suggest_categorical(
         "regressor__regressor__grow_policy", ["depthwise", "lossguide"]
     )
-    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, 8)
-    # max_leaves acoplado a depth y SIEMPRE tuneado: 8 .. min(2^depth, 64),
-    # espejando el num_leaves de suggest_lgb_params (7 .. min(2^depth-1, 64)).
-    # En depth bajos la formula acota sola; el cap absoluto 64 evita arboles
-    # degenerados en depth 7-8.
-    max_leaves_max = max(8, min(2**max_depth, 64))
+    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, TREE_MAX_DEPTH)
+    # max_leaves acoplado a depth y SIEMPRE tuneado: 8 .. min(2^depth, TREE_MAX_LEAVES),
+    # espejando el num_leaves de suggest_lgb_params (7 .. min(2^depth-1, TREE_MAX_LEAVES)).
+    # En depth bajos la formula acota sola; el cap absoluto (anti-overfit 2026-06-25,
+    # 64->40) evita arboles anchos memorizadores en depth 6-7.
+    max_leaves_max = max(8, min(2**max_depth, TREE_MAX_LEAVES))
     params = {
         "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__learning_rate": trial.suggest_float(
@@ -159,9 +181,9 @@ def suggest_lgb_params(trial: optuna.Trial) -> dict[str, object]:
       select_champion como restriccion.
     - n_estimators REMOVIDO del search: fijo en N_ESTIMATORS_MAX, el early
       stopping decide el corte real.
-    - num_leaves acoplado a depth: 7 .. min(2^depth - 1, 64). En depth bajos
-      la formula limita sola; el cap absoluto 64 evita arboles degenerados
-      en depth 7-8.
+    - num_leaves acoplado a depth: 7 .. min(2^depth - 1, TREE_MAX_LEAVES). En
+      depth bajos la formula limita sola; el cap absoluto (64->40 en 2026-06-25,
+      ver constantes del modulo) evita arboles anchos memorizadores en depth 6-7.
     - min_child_samples 5-100 (log), regularizacion con piso ~0 (log):
       Optuna decide cuanta necesita.
 
@@ -170,8 +192,8 @@ def suggest_lgb_params(trial: optuna.Trial) -> dict[str, object]:
     `path_smooth` (rev. 7.3) que son ortogonales y Optuna puede apagar.
     Notas: objective='regression_l1' (ver model_lgb.py) -> MAE nativo.
     """
-    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, 8)
-    num_leaves_max = max(7, min(2**max_depth - 1, 64))
+    max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, TREE_MAX_DEPTH)
+    num_leaves_max = max(7, min(2**max_depth - 1, TREE_MAX_LEAVES))
     return {
         "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__num_leaves": trial.suggest_int(

@@ -76,13 +76,25 @@ def _build_model(model_type: str):
 # ---------------------------------------------------------------------------
 
 
-def _make_study(seed: int) -> optuna.Study:
+def _make_study(seed: int, warm_start_params: dict | None = None) -> optuna.Study:
     """TPE multivariado. Sin pruner: cada trial devuelve UN solo score
-    (CV ya hecho), no hay valores intermedios que prunir."""
+    (CV ya hecho), no hay valores intermedios que prunir.
+
+    `warm_start_params` (opcional): config del campeon registrado a evaluar
+    como PRIMER trial (study.enqueue_trial). El resto de los trials parte de
+    ahi via TPE. `skip_if_exists=True` lo hace idempotente ante resume. La
+    siembra nunca rompe el estudio: si enqueue falla, se sigue en frio.
+    """
     sampler = optuna.samplers.TPESampler(
         seed=seed, multivariate=True, warn_independent_sampling=False
     )
-    return optuna.create_study(direction="minimize", sampler=sampler)
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+    if warm_start_params:
+        try:
+            study.enqueue_trial(warm_start_params, skip_if_exists=True)
+        except Exception:  # noqa: BLE001 — la siembra es best-effort, nunca rompe
+            pass
+    return study
 
 
 def _build_pipeline(preprocessor: Pipeline, model_type: str) -> Pipeline:
@@ -385,6 +397,11 @@ def _run_outer_cv_loop(
 
     Acumula metricas por fold y predicciones OOF. El refit por fold es
     necesario para evaluar gap (MAE_test - MAE_train) honestamente.
+
+    NO se hace warm-start aqui a proposito: el campeon registrado se entreno
+    sobre datos que solapan con el test de cada fold, asi que sembrar sus
+    params SESGARIA optimistamente la estimacion honesta de gap/MAPE_oof. El
+    warm-start vive solo en la ronda final (_pick_final_params).
     """
     n = len(y)
     res = _OuterFoldResults(
@@ -566,12 +583,15 @@ def _pick_final_params(
     skip_final_tuning: bool,
     random_state: int,
     logger,
+    warm_start_params: dict | None = None,
 ) -> dict[str, object]:
     """Devuelve los params para el refit final.
 
     Dos modos:
       - `skip_final_tuning=True`: argmin sobre los outer folds (rapido).
       - `False` (default): ronda extra de Optuna sobre TODO el dataset.
+
+    `warm_start_params`: siembra la ronda final con el campeon registrado.
     """
     if skip_final_tuning:
         # Fold MEDIANO por MAE_test, no argmin (2026-06-13): el argmin
@@ -586,7 +606,7 @@ def _pick_final_params(
         return fold_results.best_params[best_idx]
 
     logger.info(f"Ronda final | trials={final_trials} sobre dataset completo...")
-    final_study = _make_study(random_state)
+    final_study = _make_study(random_state, warm_start_params=warm_start_params)
     final_study.optimize(
         lambda trial: _objective(
             trial,
@@ -713,6 +733,18 @@ def perform_nested_cv(
         X=X,
         high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
     )
+
+    # Warm-start (2026-06-25): sembrar la RONDA FINAL con el campeon ya
+    # registrado de esta variedad+backend para que los params de produccion
+    # arranquen desde la zona buena (no a ciegas) y solo mejoren. Los outer
+    # folds NO se siembran (preserva la honestidad del gap/MAPE_oof; ver
+    # _run_outer_cv_loop). None si no hay modelo previo o el flag esta apagado.
+    from src.step_04_train.warm_start import build_warm_start_params
+
+    warm_start_params = build_warm_start_params(
+        getattr(variety_cfg, "variety", None), model_type, logger
+    )
+
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     t0 = time.perf_counter()
 
@@ -755,6 +787,7 @@ def perform_nested_cv(
         skip_final_tuning=skip_final_tuning,
         random_state=random_state,
         logger=logger,
+        warm_start_params=warm_start_params,
     )
 
     # Reporte dual (Fase A.2): si el outer fue stratified, anadir el chequeo

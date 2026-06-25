@@ -25,7 +25,14 @@ from pathlib import Path
 import mlflow
 from mlflow.exceptions import MlflowException
 
-from src.config import ARTIFACTS_DIR, CHAMPION_MAX_GAP, CHAMPION_MAX_MAPE, REPORTS_DIR
+from src.config import (
+    ARTIFACTS_DIR,
+    CHAMPION_MAX_GAP,
+    CHAMPION_MAX_MAPE,
+    CHAMPION_WARN_TEMPORAL_MAPE,
+    CHAMPION_WARN_TEMPORAL_R2,
+    REPORTS_DIR,
+)
 from src.orchestration.cleanup import cleanup_residual_reports, cleanup_state
 from src.orchestration.single_run import train_model
 from src.step_01_load.data_loader import load_business_columns, load_data
@@ -227,6 +234,34 @@ def _run_model_loop(
     return results, failures
 
 
+def _warn_temporal_generalization(champion: ModelResult, variety: str, logger) -> None:
+    """Emite un WARNING si el chequeo honesto temporal salio pobre.
+
+    NO bloquea el registro: el MAPE_oof stratified (gate operativo) ya
+    confirmo calidad de interpolacion. Esto solo da visibilidad a que el
+    forecast de un anio NO visto generaliza peor (riesgo de drift). Si las
+    metricas temporales no estan en champion.metrics (DUAL_CV_REPORT=0 o
+    outer ya temporal), no hace nada.
+    """
+    t_mape = champion.metrics.get("temporal_mape_oof")
+    t_r2 = champion.metrics.get("temporal_r2_oof")
+    if t_mape is None and t_r2 is None:
+        return
+    mape_bad = t_mape is not None and t_mape > CHAMPION_WARN_TEMPORAL_MAPE
+    r2_bad = t_r2 is not None and t_r2 < CHAMPION_WARN_TEMPORAL_R2
+    if not (mape_bad or r2_bad):
+        return
+    logger.warning(
+        f"[{variety}] AVISO de generalizacion temporal (NO bloquea registro) | "
+        f"temporal_MAPE_oof={t_mape:.2f}% (aviso>{CHAMPION_WARN_TEMPORAL_MAPE}%) | "
+        f"temporal_R2_oof={t_r2:.4f} (aviso<{CHAMPION_WARN_TEMPORAL_R2}). "
+        f"El MAPE_oof del gate mide INTERPOLACION (anios mezclados); este mide "
+        f"forecast de un anio NO visto. Brecha grande = riesgo de drift en "
+        f"produccion: revisar reentrenos frecuentes o CV_OUTER_STRATEGY=temporal_year "
+        f"para esta variedad."
+    )
+
+
 def _apply_quality_gate(
     champion: ModelResult,
     args: argparse.Namespace,
@@ -290,6 +325,13 @@ def _apply_quality_gate(
             f"con todos sus artifacts para diagnostico."
         )
         return False
+
+    # Aviso temporal NO bloqueante (2026-06-25): el gate de arriba usa el MAPE
+    # stratified (interpolacion, optimista). Si el chequeo honesto temporal
+    # (forecast de anio no visto) salio pobre, lo avisamos para visibilidad de
+    # drift — sin tocar la decision de registro (no rompe campeones existentes).
+    _warn_temporal_generalization(champion, variety, logger)
+
     if not gap_ok:
         logger.warning(
             f"[{variety}] CAMPEON registra con WARNING de overfitting | "
