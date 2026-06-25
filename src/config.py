@@ -287,16 +287,15 @@ TUNING_PROFILES: dict[str, dict[str, int]] = {
 # a n_trials/final_trials/outer_folds; inner_folds queda intacto). Mecanismo
 # generico para correr algun backend a presupuesto reducido.
 #
-# xgb=0.5 (2026-06-23): XGB es backend de REFERENCIA, no candidato real a
-# campeon. Evidencia acumulada (ANALISIS_XGBOOST_SOBREAJUSTE.md + run prod_xl
-# 2026-06-22): XGB sobreajusta (gap_rel 0.42 > 0.40), FALLA el gate y pierde
-# en MAPE_oof frente a LGB de forma consistente, ademas de tardar ~2x por fit
-# (objective reg:absoluteerror + hist depthwise). Correrlo a presupuesto pleno
-# gasta ~4.6h para reconfirmar que LGB gana. A 0.5 (50 trials / 3 outer folds
-# en prod_xl) baja a ~2.3h sin perder la funcion de control (sigue dando una
-# segunda opinion). Subir a 1.0 cuando se quiera re-evaluar a XGB de tu a tu
-# (p.ej. tras activar OPTUNA_OBJECTIVE_GAP_PENALTY para que tunee honesto).
-BACKEND_BUDGET_FRACTION: dict[str, float] = {"xgb": 0.5}
+# Dict vacio (2026-06-24): TODOS los backends al perfil completo (frac=1.0), o
+# sea LGB y XGB corren el MISMO presupuesto en prod_xl: outer=6 / inner=3 /
+# 100 trials/fold / final=50 => trials_total=650 cada uno. Decision explicita:
+# se quiere comparar XGB vs LGB de tu a tu, no a XGB a medio presupuesto.
+# El objetivo del tuning es MAE PURO (OPTUNA_OBJECTIVE_GAP_PENALTY=0.0 y
+# OPTUNA_OBJECTIVE_STD_PENALTY=0.0) — no se penaliza el gap aqui; quien protege
+# al campeon es select_champion (gate de gap + MAPE_oof), no la grilla.
+# Para volver a correr XGB a presupuesto reducido: {"xgb": 0.5}.
+BACKEND_BUDGET_FRACTION: dict[str, float] = {}
 
 DEFAULT_TUNING: str = "dev"
 
