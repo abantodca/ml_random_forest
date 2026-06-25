@@ -100,15 +100,15 @@ module "batch" {
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  project               = var.project
-  alert_email           = var.alert_email
+  project     = var.project
+  alert_email = var.alert_email
   batch_job_queue_names = {
     spot     = module.batch.job_queue_spot
     ondemand = module.batch.job_queue_ondemand
   }
-  alb_arn_suffix        = module.mlflow.alb_arn_suffix
-  varieties             = var.varieties_allowed
-  mape_alarm_threshold  = var.mape_alarm_threshold
+  alb_arn_suffix       = module.mlflow.alb_arn_suffix
+  varieties            = var.varieties_allowed
+  mape_alarm_threshold = var.mape_alarm_threshold
 }
 
 # -------------------------------------------------------------------------

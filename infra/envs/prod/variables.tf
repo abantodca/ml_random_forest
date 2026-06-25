@@ -48,7 +48,17 @@ variable "github_repo" {
 variable "varieties_allowed" {
   description = "Allow-list defensivo para el Lambda dispatcher (rechaza submits con variety no listada). NO define las variedades del modelo: la verdad esta en las hojas del Excel (data/BD_HISTORICO_ACUMULADO.xlsx) y se descubre dinamicamente con src/step_01_load/data_loader.py::list_varieties(). Esta lista solo previene typos en `aws lambda invoke`."
   type        = list(string)
-  default     = ["POP", "JUPITER", "VENTURA", "SEKOYA", "ALLISON", "STELLA"]
+  default = [
+    "JUPITER", "MAGICA", "BIANCA", "POP", "MAGNIFICA", "ZILA", "MAGNUS",
+    "REGINA", "ROSITA", "ATLAS", "VENTURA", "MADEIRA", "MALIBU", "ARANA",
+    "KIRRA", "BILOXI", "EMERALD", "MASIRAH", "BEAUTY", "TERRAPIN", "STELLA",
+    "BELLA", "BONITA", "RAYMI", "FCM15-003", "FCM15-005", "FCM17-132",
+    "MANILA", "COLOSSUS", "PATRECIA", "BOBOLINK", "WAYNE", "FCM14-057",
+    "AZRA", "RAVEN", "MERLIAH", "AVANTI", "MEGAEARLY", "KEECRISP",
+    "MEGACRISP", "MEGAGEM", "MEGAGRAND", "MEGAONE", "MEGASTAR", "ALBUS",
+    "FL-10-179", "FL-11-158", "FL19-006", "FALCO", "FCE15-087", "FCE18-012",
+    "FCE18-015", "FL12-236", "FL09-279",
+  ]
 }
 
 variable "spot_max_vcpus" {
@@ -69,7 +79,7 @@ variable "batch_instance_type" {
   # c6i.4xlarge (16 vCPU / 32 GB): permite PARALLEL=4 con 4 cores por variedad
   # en jobs prod_xl multi-variedad. Antes c6i.2xlarge (8 vCPU). El job-def
   # (modules/batch: vcpus=16) ocupa la instancia completa por job.
-  default     = "c6i.4xlarge"
+  default = "c6i.4xlarge"
 }
 
 variable "rds_instance_class" {
