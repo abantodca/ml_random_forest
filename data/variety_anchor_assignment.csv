@@ -1,0 +1,24 @@
+variedad,n_filas,zona,entrena_con,distancia_wass,nota
+RAYMI,319,⬛ Agrupar,ARANA,0.2276,"Vecino más cercano: ARANA (dist=0.228, similitud=40%)"
+ARANA,546,🟡 Individual,ARANA,0.0,Modelo individual (árboles básicos)
+MASIRAH,188,⬛ Agrupar,ATLAS,0.2405,"Vecino más cercano: ATLAS (dist=0.240, similitud=60%)"
+STELLA,151,⬛ Agrupar,ATLAS,0.3403,"Vecino más cercano: ATLAS (dist=0.340, similitud=0%)"
+ATLAS,2755,🟢 Individual,ATLAS,0.0,Modelo individual con nested CV completo
+BEAUTY,4125,🟢 Individual,BEAUTY,0.0,Modelo individual con nested CV completo
+AZRA,131,⬛ Agrupar,BELLA,0.3423,"Vecino más cercano: BELLA (dist=0.342, similitud=0%)"
+BELLA,664,🟢 Individual,BELLA,0.0,Modelo individual con nested CV completo
+TERRAPIN,105,⬛ Agrupar,BIANCA,0.233,"Vecino más cercano: BIANCA (dist=0.233, similitud=40%)"
+BIANCA,3347,🟢 Individual,BIANCA,0.0,Modelo individual con nested CV completo
+EMERALD,803,🟢 Individual,EMERALD,0.0,Modelo individual con nested CV completo
+KIRRA,844,⬛ Agrupar,JUPITER,0.1525,"Vecino más cercano: JUPITER (dist=0.152, similitud=20%)"
+BONITA,235,⬛ Agrupar,JUPITER,0.1622,"Vecino más cercano: JUPITER (dist=0.162, similitud=40%)"
+JUPITER,1668,🟢 Individual,JUPITER,0.0,Modelo individual con nested CV completo
+MAGICA,1152,🟢 Individual,MAGICA,0.0,Modelo individual con nested CV completo
+FCM17-132,116,⬛ Agrupar,POP,0.641,"Vecino más cercano: POP (dist=0.641, similitud=40%)"
+POP,9990,🟢 Individual,POP,0.0,Modelo individual con nested CV completo
+MAGNUS,132,⬛ Agrupar,ROSITA,0.3443,"Vecino más cercano: ROSITA (dist=0.344, similitud=60%)"
+ROSITA,588,🟡 Individual,ROSITA,0.0,Modelo individual (árboles básicos)
+BILOXI,400,⬛ Agrupar,VENTURA,0.4048,"Vecino más cercano: VENTURA (dist=0.405, similitud=20%)"
+MALIBU,230,⬛ Agrupar,VENTURA,0.2621,"Vecino más cercano: VENTURA (dist=0.262, similitud=40%)"
+MADEIRA,167,⬛ Agrupar,VENTURA,0.2277,"Vecino más cercano: VENTURA (dist=0.228, similitud=0%)"
+VENTURA,4656,🟢 Individual,VENTURA,0.0,Modelo individual con nested CV completo

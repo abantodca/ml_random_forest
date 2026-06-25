@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Decisión de clustering — 2026-06-25 10:38</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#f8fafc; color:#0f172a; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  .sub { color:#64748b; margin-bottom: 24px; }
+  .verdict { display:inline-block; padding:4px 14px; border-radius:999px; color:white; font-weight:700; background:#dc2626; margin-left:8px; font-size:14px; vertical-align:middle; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 12px; margin-bottom: 28px; }
+  .kpi { background:white; border:1px solid #e2e8f0; border-radius: 10px; padding:16px; text-align:center; }
+  .kpi-v { font-size: 22px; font-weight: 700; }
+  .kpi-l { font-size: 12px; color:#64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-top:4px; }
+  .card { background:white; border:1px solid #e2e8f0; border-radius: 10px; padding:16px; margin-bottom: 24px; }
+  h2 { font-size: 18px; margin: 0 0 12px; }
+  table.tbl { width:100%; border-collapse: collapse; font-size: 14px; }
+  table.tbl th, table.tbl td { text-align:left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
+  table.tbl th { background:#f1f5f9; font-weight: 600; font-size:12px; text-transform:uppercase; letter-spacing: 0.03em; }
+  .pill { color:white; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; text-transform:capitalize; }
+  code { background:#f1f5f9; padding: 1px 6px; border-radius:4px; font-size: 12px; }
+  small { color:#64748b; }
+  .foot { color:#64748b; font-size:12px; margin-top:24px; line-height: 1.8; }
+</style></head><body>
+<div class="wrap">
+  <h1>Decisión de clustering <span class="verdict">REVISAR</span></h1>
+  <div class="sub">Generado el 2026-06-25 10:38 · Wasserstein sobre 5 features · Bootstrap 100× · Holm-Bonferroni · Silhouette sobre 16,047 obs</div>
+
+  <div class="kpis"><div class='kpi'><div class='kpi-v'>23</div><div class='kpi-l'>Variedades totales</div></div><div class='kpi'><div class='kpi-v'>11</div><div class='kpi-l'>Anclas (entrenan)</div></div><div class='kpi'><div class='kpi-v'>2</div><div class='kpi-l'>Robustas (bootstrap ≥90%)</div></div><div class='kpi'><div class='kpi-v'>9</div><div class='kpi-l'>Frágiles (bootstrap <60%)</div></div><div class='kpi'><div class='kpi-v'>7</div><div class='kpi-l'>MW-Holm ≥40.0%</div></div><div class='kpi'><div class='kpi-v'>-0.112</div><div class='kpi-l'>Silhouette global</div></div><div class='kpi'><div class='kpi-v'>3/4</div><div class='kpi-l'>Tests globales OK</div></div><div class='kpi'><div class='kpi-v'>REVISAR</div><div class='kpi-l'>Veredicto</div></div></div>
+
+  <div class="card">
+    <h2>Validación global (4 tests) + Silhouette reforzado</h2>
+    <table class="tbl">
+      <thead><tr><th></th><th>Test</th><th>Resultado</th></tr></thead>
+      <tbody><tr><td><span style='color:#dc2626;font-weight:700'>FAIL</span></td><td>Silhouette Score</td><td>Centroides: -0.0440 — Global (todas obs): -0.1120</td></tr><tr><td><span style='color:#10b981;font-weight:700'>OK</span></td><td>Ratio intra/inter</td><td>Ratio: 0.6299 (Bueno)</td></tr><tr><td><span style='color:#10b981;font-weight:700'>OK</span></td><td>Kruskal-Wallis</td><td>5/5 features significativas</td></tr><tr><td><span style='color:#10b981;font-weight:700'>OK</span></td><td>PERMANOVA</td><td>F=4.17 · p=0.0010 · R²=0.776</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Tabla de decisión — 23 variedades</h2>
+    <p style="color:#64748b;font-size:13px;margin:0 0 12px">
+      <b>MW raw</b>: Mann-Whitney sin corregir · <b>MW Holm</b>: con corrección de tests múltiples ·
+      <b>Stability</b>: % de 100 bootstraps que confirman la asignación canónica ·
+      <b>Top alt</b>: segunda ancla más probable en el bootstrap
+    </p>
+    <table class="tbl">
+      <thead><tr>
+        <th>Variedad</th><th>Entrena con</th><th>n</th>
+        <th>Dist. Wass.</th><th>MW raw</th><th>MW Holm</th>
+        <th>Stability</th><th>Top alt</th><th>Decisión</th>
+      </tr></thead>
+      <tbody><tr><td><code>RAYMI</code></td><td><code>ARANA</code></td><td>319</td><td>0.2276</td><td>40%</td><td>60%</td><td>100%</td><td><small>POP (0%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ARANA</code></td><td><code>ARANA</code></td><td>546</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>MASIRAH</code></td><td><code>ATLAS</code></td><td>188</td><td>0.2405</td><td>60%</td><td>60%</td><td>17%</td><td><small>BIANCA (49%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>STELLA</code></td><td><code>ATLAS</code></td><td>151</td><td>0.3403</td><td>0%</td><td>0%</td><td>0%</td><td><small>JUPITER (100%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ATLAS</code></td><td><code>ATLAS</code></td><td>2755</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BEAUTY</code></td><td><code>BEAUTY</code></td><td>4125</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>AZRA</code></td><td><code>BELLA</code></td><td>131</td><td>0.3423</td><td>0%</td><td>0%</td><td>18%</td><td><small>ROSITA (68%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BELLA</code></td><td><code>BELLA</code></td><td>664</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>TERRAPIN</code></td><td><code>BIANCA</code></td><td>105</td><td>0.2330</td><td>40%</td><td>60%</td><td>1%</td><td><small>JUPITER (79%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>BIANCA</code></td><td><code>BIANCA</code></td><td>3347</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>EMERALD</code></td><td><code>EMERALD</code></td><td>803</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>JUPITER</code></td><td><code>JUPITER</code></td><td>1668</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BONITA</code></td><td><code>JUPITER</code></td><td>235</td><td>0.1622</td><td>40%</td><td>40%</td><td>99%</td><td><small>BIANCA (1%)</small></td><td><span class='pill' style='background:#059669'>robusto</span></td></tr><tr><td><code>KIRRA</code></td><td><code>JUPITER</code></td><td>844</td><td>0.1525</td><td>20%</td><td>20%</td><td>86%</td><td><small>BIANCA (13%)</small></td><td><span class='pill' style='background:#059669'>robusto</span></td></tr><tr><td><code>MAGICA</code></td><td><code>MAGICA</code></td><td>1152</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>POP</code></td><td><code>POP</code></td><td>9990</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>FCM17-132</code></td><td><code>POP</code></td><td>116</td><td>0.6410</td><td>40%</td><td>40%</td><td>2%</td><td><small>BEAUTY (76%)</small></td><td><span class='pill' style='background:#f59e0b'>revisar</span></td></tr><tr><td><code>MAGNUS</code></td><td><code>ROSITA</code></td><td>132</td><td>0.3443</td><td>60%</td><td>60%</td><td>42%</td><td><small>POP (29%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>ROSITA</code></td><td><code>ROSITA</code></td><td>588</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>MADEIRA</code></td><td><code>VENTURA</code></td><td>167</td><td>0.2277</td><td>0%</td><td>0%</td><td>56%</td><td><small>BIANCA (44%)</small></td><td><span class='pill' style='background:#84cc16'>aceptable</span></td></tr><tr><td><code>VENTURA</code></td><td><code>VENTURA</code></td><td>4656</td><td>0.0000</td><td>—</td><td>—</td><td>—</td><td><small>nan (nan%)</small></td><td><span class='pill' style='background:#0ea5e9'>ancla</span></td></tr><tr><td><code>BILOXI</code></td><td><code>VENTURA</code></td><td>400</td><td>0.4048</td><td>20%</td><td>20%</td><td>0%</td><td><small>JUPITER (100%)</small></td><td><span class='pill' style='background:#dc2626'>fragil</span></td></tr><tr><td><code>MALIBU</code></td><td><code>VENTURA</code></td><td>230</td><td>0.2621</td><td>40%</td><td>40%</td><td>0%</td><td><small>JUPITER (100%)</small></td><td><span class='pill' style='background:#f59e0b'>revisar</span></td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="foot">
+    <b>Leyenda de decisión reforzada:</b><br>
+    <span class='pill' style='background:#0ea5e9'>ancla</span> entrena modelo propio ·
+    <span class='pill' style='background:#059669'>robusto</span> efecto pequeño (|Cliff|&lt;0.33) y estable ·
+    <span class='pill' style='background:#84cc16'>aceptable</span> efecto ≤ moderado (|Cliff|&lt;0.474) ·
+    <span class='pill' style='background:#f59e0b'>revisar</span> claramente distinta (0.474≤|Cliff|&lt;0.60) ·
+    <span class='pill' style='background:#dc2626'>fragil</span> muy distinta (|Cliff|≥0.60) — considerar ancla propia ·
+    <span class='pill' style='background:#94a3b8'>insuficiente</span> n&lt;3 filas
+    <br><br>
+    <b>Cómo leer la tabla:</b> para decidir si una asignación es confiable, mira <b>stability</b> antes que MW raw.
+    Una variedad puede tener MW raw 80% pero stability 50% → significa que la similitud marginal es casual y
+    el ancla nearest es inestable al resamplear. La decisión reforzada ya integra ambos criterios.
+  </div>
+</div>
+</body></html>

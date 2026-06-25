@@ -1,0 +1,24 @@
+variedad,entrena_con,n_filas,distancia_wass,mw_pct_raw,mw_pct_holm,stability_pct,max_cliff,top_alternative,top_alt_pct,zona,decision_raw,decision_robust
+RAYMI,ARANA,319,0.2276,40.0,60.0,100.0,0.38977516430300935,POP,0.0,⬛ Agrupar,revisar,aceptable
+ARANA,ARANA,546,0.0,,,,,,,🟡 Individual,ancla,ancla
+MASIRAH,ATLAS,188,0.2405,60.0,60.0,17.0,0.2879236086629983,BIANCA,49.0,⬛ Agrupar,aceptable,aceptable
+STELLA,ATLAS,151,0.3403,0.0,0.0,0.0,0.4645397927282574,JUPITER,100.0,⬛ Agrupar,revisar,aceptable
+ATLAS,ATLAS,2755,0.0,,,,,,,🟢 Individual,ancla,ancla
+BEAUTY,BEAUTY,4125,0.0,,,,,,,🟢 Individual,ancla,ancla
+AZRA,BELLA,131,0.3423,0.0,0.0,18.0,0.32074506939371805,ROSITA,68.0,⬛ Agrupar,revisar,aceptable
+BELLA,BELLA,664,0.0,,,,,,,🟢 Individual,ancla,ancla
+TERRAPIN,BIANCA,105,0.233,40.0,60.0,1.0,0.22833356236544364,JUPITER,79.0,⬛ Agrupar,revisar,aceptable
+BIANCA,BIANCA,3347,0.0,,,,,,,🟢 Individual,ancla,ancla
+EMERALD,EMERALD,803,0.0,,,,,,,🟢 Individual,ancla,ancla
+JUPITER,JUPITER,1668,0.0,,,,,,,🟢 Individual,ancla,ancla
+BONITA,JUPITER,235,0.1622,40.0,40.0,99.0,0.23343088311241178,BIANCA,1.0,⬛ Agrupar,revisar,robusto
+KIRRA,JUPITER,844,0.1525,20.0,20.0,86.0,0.14017211765547843,BIANCA,13.0,⬛ Agrupar,revisar,robusto
+MAGICA,MAGICA,1152,0.0,,,,,,,🟢 Individual,ancla,ancla
+POP,POP,9990,0.0,,,,,,,🟢 Individual,ancla,ancla
+FCM17-132,POP,116,0.641,40.0,40.0,2.0,0.5569647498375568,BEAUTY,76.0,⬛ Agrupar,revisar,revisar
+MAGNUS,ROSITA,132,0.3443,60.0,60.0,42.0,0.4180919426594167,POP,28.999999999999996,⬛ Agrupar,aceptable,aceptable
+ROSITA,ROSITA,588,0.0,,,,,,,🟡 Individual,ancla,ancla
+MADEIRA,VENTURA,167,0.2277,0.0,0.0,56.00000000000001,0.2900413965476841,BIANCA,44.0,⬛ Agrupar,revisar,aceptable
+VENTURA,VENTURA,4656,0.0,,,,,,,🟢 Individual,ancla,ancla
+BILOXI,VENTURA,400,0.4048,20.0,20.0,0.0,0.6081984622573383,JUPITER,100.0,⬛ Agrupar,revisar,fragil
+MALIBU,VENTURA,230,0.2621,40.0,40.0,0.0,0.5789999615665475,JUPITER,100.0,⬛ Agrupar,revisar,revisar

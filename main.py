@@ -100,13 +100,26 @@ def _hydrate_data_from_s3(logger) -> bool:
 
 
 def _resolve_parallelism(args, settings: dict) -> int:
-    """Ajusta `inner_cv_n_jobs` cuando hay paralelismo de variedades para
-    evitar oversubscription de CPU."""
+    """Ajusta el presupuesto de hilos cuando hay paralelismo de variedades
+    para evitar oversubscription de CPU.
+
+    Con `--parallel-varieties N`, cada variedad corre en su PROCESO y cada
+    `fit` del modelo abre `MODEL_N_JOBS` hilos nativos (LightGBM/XGB). Si
+    `MODEL_N_JOBS=-1` (default), cada uno de los N procesos toma TODOS los
+    cores -> N*cores hilos peleando por cores cores. Repartimos
+    `MODEL_N_JOBS = cores // N` para que N*MODEL_N_JOBS ~= cores. Se setea
+    en el entorno del proceso padre ANTES de lanzar el pool, asi los
+    subprocesos lo heredan. Un override explicito de MODEL_N_JOBS se respeta.
+    """
     parallel = max(1, int(args.parallel_varieties))
     inner_n_jobs = args.inner_cv_n_jobs
-    if parallel > 1 and inner_n_jobs == -1:
+    if parallel > 1:
         cores = os.cpu_count() or 4
-        inner_n_jobs = max(1, cores // parallel)
+        per_variety = max(1, cores // parallel)
+        if inner_n_jobs == -1:
+            inner_n_jobs = per_variety
+        if "MODEL_N_JOBS" not in os.environ:
+            os.environ["MODEL_N_JOBS"] = str(per_variety)
     settings["inner_cv_n_jobs"] = inner_n_jobs
     return parallel
 

@@ -1,0 +1,381 @@
+metadata:
+  generated_at: '2026-06-25T10:38:02'
+  method: wasserstein_distance
+  normalization: RobustScaler
+  features:
+  - KGHECT
+  - INDUSTRIAL
+  - DPC
+  - PesoBayaFIMPRO
+  - KGHORA
+  alpha: 0.05
+  min_similar_pct: 60.0
+  n_permutations: 999
+  n_varieties: 23
+  n_anchors: 11
+  reinforced_analysis:
+    bootstrap_iterations: 100
+    bootstrap_seed: 42
+    mw_correction: holm-bonferroni
+    silhouette_source: all_16047_observations
+validation:
+  verdict: REVISAR
+  n_tests_passed: 3
+  n_tests_total: 4
+  global_tests:
+  - name: Silhouette Score
+    passed: false
+    score_centroids: -0.04400721433733014
+    score_all_observations: -0.11204251723695514
+    quality_all_obs: Bajo
+  - name: Ratio intra/inter
+    passed: true
+    ratio: 0.6298822406311706
+    mean_intra: 0.29818597378395467
+    mean_inter: 0.47339955716985893
+    quality: Bueno
+  - name: Kruskal-Wallis
+    passed: true
+    n_sig: 5
+    n_total: 5
+  - name: PERMANOVA
+    passed: true
+    f_obs: 4.165962487054416
+    p_value: 0.001
+    r2: 0.7763681719924348
+  mann_whitney_raw:
+    n_assignments_ok: 2
+    n_assignments_weak: 10
+  mann_whitney_holm:
+    n_assignments_ok: 4
+    n_assignments_weak: 8
+  bootstrap_stability:
+    n_robust_ge_90: 2
+    n_intermediate_60_89: 1
+    n_fragile_lt_60: 9
+anchors:
+- POP
+- VENTURA
+- BEAUTY
+- BIANCA
+- ATLAS
+- JUPITER
+- ROSITA
+- BELLA
+- ARANA
+- EMERALD
+- MAGICA
+mappings:
+  anchor_of:
+    RAYMI: ARANA
+    ARANA: ARANA
+    MASIRAH: ATLAS
+    STELLA: ATLAS
+    ATLAS: ATLAS
+    BEAUTY: BEAUTY
+    AZRA: BELLA
+    BELLA: BELLA
+    TERRAPIN: BIANCA
+    BIANCA: BIANCA
+    EMERALD: EMERALD
+    KIRRA: JUPITER
+    BONITA: JUPITER
+    JUPITER: JUPITER
+    MAGICA: MAGICA
+    FCM17-132: POP
+    POP: POP
+    MAGNUS: ROSITA
+    ROSITA: ROSITA
+    BILOXI: VENTURA
+    MALIBU: VENTURA
+    MADEIRA: VENTURA
+    VENTURA: VENTURA
+  varieties_by_anchor:
+    POP:
+    - FCM17-132
+    - POP
+    VENTURA:
+    - BILOXI
+    - MADEIRA
+    - MALIBU
+    - VENTURA
+    BEAUTY:
+    - BEAUTY
+    BIANCA:
+    - BIANCA
+    - TERRAPIN
+    ATLAS:
+    - ATLAS
+    - MASIRAH
+    - STELLA
+    JUPITER:
+    - BONITA
+    - JUPITER
+    - KIRRA
+    ROSITA:
+    - MAGNUS
+    - ROSITA
+    BELLA:
+    - AZRA
+    - BELLA
+    ARANA:
+    - ARANA
+    - RAYMI
+    EMERALD:
+    - EMERALD
+    MAGICA:
+    - MAGICA
+decisions_by_variety:
+  RAYMI:
+    entrena_con: ARANA
+    decision_raw: revisar
+    decision_robust: aceptable
+    n_filas: 319
+    mw_pct_raw: 40.0
+    mw_pct_holm: 60.0
+    stability_pct: 100.0
+    top_alternative: POP
+    top_alt_pct: 0.0
+    distancia_wass: 0.2276
+  ARANA:
+    entrena_con: ARANA
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 546
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  MASIRAH:
+    entrena_con: ATLAS
+    decision_raw: aceptable
+    decision_robust: aceptable
+    n_filas: 188
+    mw_pct_raw: 60.0
+    mw_pct_holm: 60.0
+    stability_pct: 17.0
+    top_alternative: BIANCA
+    top_alt_pct: 49.0
+    distancia_wass: 0.2405
+  STELLA:
+    entrena_con: ATLAS
+    decision_raw: revisar
+    decision_robust: aceptable
+    n_filas: 151
+    mw_pct_raw: 0.0
+    mw_pct_holm: 0.0
+    stability_pct: 0.0
+    top_alternative: JUPITER
+    top_alt_pct: 100.0
+    distancia_wass: 0.3403
+  ATLAS:
+    entrena_con: ATLAS
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 2755
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  BEAUTY:
+    entrena_con: BEAUTY
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 4125
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  AZRA:
+    entrena_con: BELLA
+    decision_raw: revisar
+    decision_robust: aceptable
+    n_filas: 131
+    mw_pct_raw: 0.0
+    mw_pct_holm: 0.0
+    stability_pct: 18.0
+    top_alternative: ROSITA
+    top_alt_pct: 68.0
+    distancia_wass: 0.3423
+  BELLA:
+    entrena_con: BELLA
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 664
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  TERRAPIN:
+    entrena_con: BIANCA
+    decision_raw: revisar
+    decision_robust: aceptable
+    n_filas: 105
+    mw_pct_raw: 40.0
+    mw_pct_holm: 60.0
+    stability_pct: 1.0
+    top_alternative: JUPITER
+    top_alt_pct: 79.0
+    distancia_wass: 0.233
+  BIANCA:
+    entrena_con: BIANCA
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 3347
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  EMERALD:
+    entrena_con: EMERALD
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 803
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  JUPITER:
+    entrena_con: JUPITER
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 1668
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  BONITA:
+    entrena_con: JUPITER
+    decision_raw: revisar
+    decision_robust: robusto
+    n_filas: 235
+    mw_pct_raw: 40.0
+    mw_pct_holm: 40.0
+    stability_pct: 99.0
+    top_alternative: BIANCA
+    top_alt_pct: 1.0
+    distancia_wass: 0.1622
+  KIRRA:
+    entrena_con: JUPITER
+    decision_raw: revisar
+    decision_robust: robusto
+    n_filas: 844
+    mw_pct_raw: 20.0
+    mw_pct_holm: 20.0
+    stability_pct: 86.0
+    top_alternative: BIANCA
+    top_alt_pct: 13.0
+    distancia_wass: 0.1525
+  MAGICA:
+    entrena_con: MAGICA
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 1152
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  POP:
+    entrena_con: POP
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 9990
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  FCM17-132:
+    entrena_con: POP
+    decision_raw: revisar
+    decision_robust: revisar
+    n_filas: 116
+    mw_pct_raw: 40.0
+    mw_pct_holm: 40.0
+    stability_pct: 2.0
+    top_alternative: BEAUTY
+    top_alt_pct: 76.0
+    distancia_wass: 0.641
+  MAGNUS:
+    entrena_con: ROSITA
+    decision_raw: aceptable
+    decision_robust: aceptable
+    n_filas: 132
+    mw_pct_raw: 60.0
+    mw_pct_holm: 60.0
+    stability_pct: 42.0
+    top_alternative: POP
+    top_alt_pct: 28.999999999999996
+    distancia_wass: 0.3443
+  ROSITA:
+    entrena_con: ROSITA
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 588
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  MADEIRA:
+    entrena_con: VENTURA
+    decision_raw: revisar
+    decision_robust: aceptable
+    n_filas: 167
+    mw_pct_raw: 0.0
+    mw_pct_holm: 0.0
+    stability_pct: 56.00000000000001
+    top_alternative: BIANCA
+    top_alt_pct: 44.0
+    distancia_wass: 0.2277
+  VENTURA:
+    entrena_con: VENTURA
+    decision_raw: ancla
+    decision_robust: ancla
+    n_filas: 4656
+    mw_pct_raw: null
+    mw_pct_holm: null
+    stability_pct: null
+    top_alternative: .nan
+    top_alt_pct: null
+    distancia_wass: 0.0
+  BILOXI:
+    entrena_con: VENTURA
+    decision_raw: revisar
+    decision_robust: fragil
+    n_filas: 400
+    mw_pct_raw: 20.0
+    mw_pct_holm: 20.0
+    stability_pct: 0.0
+    top_alternative: JUPITER
+    top_alt_pct: 100.0
+    distancia_wass: 0.4048
+  MALIBU:
+    entrena_con: VENTURA
+    decision_raw: revisar
+    decision_robust: revisar
+    n_filas: 230
+    mw_pct_raw: 40.0
+    mw_pct_holm: 40.0
+    stability_pct: 0.0
+    top_alternative: JUPITER
+    top_alt_pct: 100.0
+    distancia_wass: 0.2621
