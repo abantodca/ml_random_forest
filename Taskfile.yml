@@ -111,7 +111,9 @@ tasks:
           ║  task smoke             deploy + 1 job Batch POP de humo                  ║
           ║  task batch:train VARIETIES=POP            entrenamiento en Batch (bg)    ║
           ║  task batch:train VARIETIES=A,B,C,D PARALLEL=4   4 variedades en paralelo ║
-          ║  task batch:watch · logs · status          ver estado del entrenamiento   ║
+          ║  task batch:logs FOLLOW=true   logs EN VIVO (Ctrl+C no detiene el job)    ║
+          ║  task batch:watch              BLOQUEA hasta SUCCEEDED/FAILED             ║
+          ║  task batch:status             jobs activos en las colas                  ║
           ║  task ops:promote MODEL_NAME=… VERSION=N   promover a Production          ║
           ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                   ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -127,6 +129,9 @@ tasks:
             En Batch el dispatcher rutea por queue:  prod_xl → On-Demand (sin
             interrupciones, jobs de ~4-6 h) · resto → Spot (−70% costo).
             PARALLEL=N tambien aplica en Batch (>1 variedad): 1 job, N en paralelo.
+            Con PARALLEL>1 los hilos se reparten solos (MODEL_N_JOBS=cores//N):
+            PARALLEL=4 llena los 16 vCPU del job Batch sin oversubscription. NO
+            pongas PARALLEL > vCPU: mas procesos que cores frena TODO el job.
 
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║  Variables  (override por CLI · VAR=valor)                                ║
