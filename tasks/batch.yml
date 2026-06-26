@@ -60,8 +60,7 @@ tasks:
       - |
         set -e
         source tasks/lib/batch_wait.sh
-        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" --arg t "{{.TUNING}}" --argjson p "{{.PARALLEL | default 1}}" \
-          '{varieties: $v, tuning: $t, parallel: $p}')
+        PAYLOAD=$(build_train_payload "{{.VARIETIES}}" "{{.TUNING}}" "{{.PARALLEL | default 1}}")
         dispatch_job "{{.JOBDEF}}" "{{.REGION}}" "{{.DISPATCHER_FN}}" "$PAYLOAD" \
           "train {{.VARIETIES}} tuning={{.TUNING}} parallel={{.PARALLEL | default 1}}" "{{.WAIT}}"
 
@@ -73,8 +72,7 @@ tasks:
       - |
         set -e
         source tasks/lib/batch_wait.sh
-        # mode=eda -> el dispatcher arma command=["--eda","--varieties",...] (sin tuning).
-        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" '{varieties: $v, mode: "eda"}')
+        PAYLOAD=$(build_eda_payload "{{.VARIETIES}}")
         dispatch_job "{{.JOBDEF}}" "{{.REGION}}" "{{.DISPATCHER_FN}}" "$PAYLOAD" \
           "eda {{.VARIETIES}}" "{{.WAIT}}"
 
