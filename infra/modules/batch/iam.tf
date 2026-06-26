@@ -39,10 +39,12 @@ resource "aws_iam_role_policy" "job_s3" {
         Resource = [var.data_bucket_arn, "${var.data_bucket_arn}/*"]
       },
       {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"
-        ]
+        # Least-privilege: el job solo sube outputs (scripts/s3_sync.py usa
+        # upload_file => PutObject). El borrado de runs perdedores pasa por la
+        # API REST de MLflow (rol del tracking server), NO por S3 directo. Sin
+        # s3:DeleteObject el job no puede borrar artifacts/modelos productivos.
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
         Resource = [var.artifacts_bucket_arn, "${var.artifacts_bucket_arn}/*"]
       }
     ]
