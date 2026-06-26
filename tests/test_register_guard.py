@@ -11,7 +11,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 import src.config as config
-from src.orchestration.variety_runner import _apply_quality_gate
+from src.orchestration.quality_gate import apply_quality_gate as _apply_quality_gate
 from src.step_05_evaluate.champion import ModelResult
 
 
