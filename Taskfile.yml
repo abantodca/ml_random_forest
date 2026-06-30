@@ -213,6 +213,14 @@ tasks:
       SEED: '{{.SEED | default "42"}}'
     cmds:
       - 'echo ">> train: VARIETIES={{.VARIETIES}} TUNING={{.TUNING}} (default prod_xl) SEED={{.SEED}} · backends LGB+XGB"'
+      # Guard: prod_xl es el default y dura ~4-6 h. Confirmar solo si hay TTY
+      # (interactivo) -> no bloquea CI ni usos no-interactivos.
+      - |
+        if [ "{{.TUNING}}" = "prod_xl" ] && [ -t 0 ]; then
+          printf ">> TUNING=prod_xl lanza un entrenamiento de ~4-6 h. Continuar? [y/N] "
+          read ans
+          case "$ans" in [yY]*) ;; *) echo "Abortado (usa TUNING=smoke|dev|prod para correr mas corto)."; exit 1 ;; esac
+        fi
       - |
         if [ "{{.DATA_SHA}}" = "missing" ]; then
           echo "ERROR: data/training/DB-HISTORICA.xlsx no existe. Correr 'task data:split' primero."
@@ -238,7 +246,7 @@ tasks:
       - task: _print_urls
 
   down:
-    desc: "Detiene servicios. Preserva volumen Postgres"
+    desc: "LOCAL: detiene el stack docker-compose (preserva volumen Postgres). NO es el apagado AWS -> ese es `task sleep`"
     cmds:
       - docker compose down
 
@@ -297,7 +305,7 @@ tasks:
   # ═══ Atajos high-level del stack AWS ════════════════════════════════════════
 
   deploy:
-    desc: "AWS: stand-up completo (storage -> 5 imagenes -> resto) + imprime URLs"
+    desc: "AWS: stand-up completo desde cero o aplicar cambios de infra (storage -> 5 imagenes -> resto) + URLs. (Para solo reanudar: `wake`; tras teardown: `rebuild`)"
     cmds:
       # Pre-check: si los buckets *-data-* / *-artifacts-* existen en AWS pero
       # no en tfstate (tipico tras nuke parcial o re-bootstrap), `apply
@@ -324,12 +332,12 @@ tasks:
       - task: batch:smoke
 
   wake:
-    desc: "AWS: encender stack (idempotente)"
+    desc: "AWS: encender un stack YA desplegado y dormido (sleep). Reanuda RDS+Fargate. Idempotente. (Tras teardown usa `rebuild`; desde cero, `deploy`)"
     cmds:
       - task: ops:up
 
   sleep:
-    desc: "AWS: apagar stack"
+    desc: "AWS: apagar stack (pausa corta). Para RDS+Fargate pero MANTIENE el NAT (~$3/mes idle). Para liberar NAT usa `teardown`"
     cmds:
       - task: ops:down
 
@@ -349,12 +357,12 @@ tasks:
       - task: infra:urls
 
   teardown:
-    desc: "AWS: down + destroy volatiles (preserva storage + network)"
+    desc: "AWS: apagado LARGO. sleep + destroy de volatiles, LIBERA el NAT (ahorra ~$3/mes). Conserva storage (S3) + state. Volver: `rebuild`"
     cmds:
       - task: ops:teardown
 
   rebuild:
-    desc: "AWS: re-apply tras teardown + up"
+    desc: "AWS: volver tras un `teardown`. Recrea NAT + volatiles (re-apply) y enciende. (Si solo estaba dormido con sleep, usa `wake`)"
     cmds:
       - task: ops:rebuild
 

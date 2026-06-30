@@ -70,9 +70,13 @@ class ExperimentConfig:
         # hoja y caían como no-anclas.
         #
         # Reconciliado 2026-06-26 al set predictivo (se autopredicen mejor que
-        # cualquier donante, MAPE OOS): entran KIRRA y BILOXI (auto-MAPE 6.3%/4.6%);
-        # salen BELLA y ARANA (pasan a ruteadas, pero con n holgado y ganancia
-        # negativa → candidatas a re-promover; ver SUSTENTO_ESTADISTICO_RUTEO.md §7.4).
+        # cualquier donante, MAPE OOS): entra KIRRA (auto-MAPE 6.3%); salen BELLA y
+        # ARANA (pasan a ruteadas, pero con n holgado y ganancia negativa →
+        # candidatas a re-promover; ver SUSTENTO_ESTADISTICO_RUTEO.md §7.4).
+        #
+        # Baja 2026-06-26: BILOXI deja de ser ancla (la variedad ya no se cultiva,
+        # no se justifica un modelo propio). Sus filas históricas se conservan y se
+        # rutean al ancla que mejor la pronostica → 10 anclas.
         default_factory=lambda: [
             "POP",
             "BEAUTY",
@@ -84,7 +88,6 @@ class ExperimentConfig:
             "EMERALD",
             "KIRRA",
             "ROSITA",
-            "BILOXI",
         ]
     )
     excel_path: str = "../data/training/DB-HISTORICA.xlsx"

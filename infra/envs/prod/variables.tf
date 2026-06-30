@@ -137,8 +137,14 @@ variable "log_retention_days" {
   default     = 14
 }
 
+variable "enable_work_hours_cron" {
+  description = "Crons start/stop por horario laboral. false (default) = stack 100% manual (task wake/sleep); el Lambda, keepstop del RDS y autostop de Batch siguen activos."
+  type        = bool
+  default     = false
+}
+
 variable "work_start_hour_local" {
-  description = "Hora local de arranque del scheduler (PET, UTC-5)."
+  description = "Hora local de arranque del scheduler (PET, UTC-5). Solo se usa si enable_work_hours_cron=true."
   type        = number
   default     = 8
 }

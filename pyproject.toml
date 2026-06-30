@@ -1,3 +1,39 @@
+[project]
+# Tabla mínima para que uv gestione un venv + lock LOCAL (notebooks/dev).
+# NO publicamos este repo como paquete: `package = false` (abajo) evita que uv
+# intente `pip install .`. Ver la NOTA sobre dependencias más abajo.
+name = "ml-random-forest"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.38,<2",
+    "ipykernel==7.3.0",
+    "joblib==1.5.2",
+    "lightgbm==4.6.0",
+    "matplotlib==3.10.6",
+    "mlflow==3.12.0",
+    "mypy==1.18.2",
+    "numpy==2.2.3",
+    "openpyxl==3.1.5",
+    "optuna==4.8.0",
+    "pandas==2.2.3",
+    "patsy==1.0.1",
+    "plotly==6.3.0",
+    "pre-commit==4.4.0",
+    "pytest==8.4.2",
+    "ruff==0.15.13",
+    "scikit-learn==1.6.1",
+    "scipy==1.16.3",
+    "seaborn==0.13.2",
+    "statsmodels>=0.14.4,<0.15",
+    "xgboost==3.2.0",
+]
+
+[tool.uv]
+# Proyecto "virtual": uv mantiene venv + uv.lock pero NO construye/instala el
+# repo como paquete (es un monorepo Docker + PYTHONPATH, no `pip install .`).
+package = false
+
 [tool.ruff]
 # Alineado con .editorconfig: Python 3.12, 4 spaces, 100 col.
 line-length = 100
@@ -40,10 +76,12 @@ skip-magic-trailing-comma = false
 # ---------------------------------------------------------------------------
 # NOTA sobre dependencias: este repo NO es un paquete pip-instalable, es un
 # monorepo de 3 servicios que corren en Docker + PYTHONPATH (no `pip install .`).
-# Por eso NO hay tabla [project]/[build-system]: las deps de RUNTIME viven
-# pinneadas en requirements.txt (trainer/ui) y api/requirements.txt — esos son
-# los locks que consumen los Dockerfiles. Las de DEV en requirements-dev.txt.
-# pyproject.toml es el hub de config de HERRAMIENTAS (ruff, mypy, pytest).
+# La FUENTE DE VERDAD de RUNTIME sigue siendo requirements.txt (trainer/ui) y
+# api/requirements.txt — esos son los locks que consumen los Dockerfiles; las de
+# DEV/notebooks, requirements-dev.txt. La tabla [project] de arriba existe SOLO
+# para tener un venv local manejado por uv (uv add / uv add -r ...); por eso va
+# con `[tool.uv] package = false` y sin [build-system]: nunca se construye.
+# Si pinneas algo nuevo para prod, espéjalo en el requirements.txt que toque.
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
