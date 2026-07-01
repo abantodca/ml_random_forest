@@ -5,14 +5,21 @@ el dashboard de `step_05_evaluate` como los reportes de `diagnostics`
 consuman el mismo bundle sin acoplamientos cross-package.
 
 `plotly_js_tag()` decide entre embeber plotly.js (offline, autocontenido)
-o cargarlo desde CDN segun `REPORT_PLOTLY_OFFLINE`. La constante
-`PLOTLY_JS_TAG` cachea el resultado para callers que solo necesitan el
-string ya construido.
+o cargarlo desde CDN segun `REPORT_PLOTLY_OFFLINE`. Va con `lru_cache`:
+comprimir el bundle (~5 MB -> ~1.9 MB gzip) cuesta ~1s y solo debe pagarse
+la PRIMERA vez que se genera un reporte, no al importar el modulo (antes
+era una constante de modulo y cualquier `import` de la cadena html la
+pagaba aunque nunca se renderizara nada).
 """
 
 from __future__ import annotations
 
+import logging
+from functools import lru_cache
+
 from src.config import REPORT_PLOTLY_OFFLINE
+
+logger = logging.getLogger(__name__)
 
 _CDN_URL = "https://cdn.plot.ly/plotly-3.1.0.min.js"
 
@@ -65,6 +72,7 @@ _GZ_LOADER_JS = """
 """.replace("%CDN%", _CDN_URL)
 
 
+@lru_cache(maxsize=1)
 def plotly_js_tag() -> str:
     """Tag <script> con plotly.js. Offline (default, gzip ~1.9 MB) o CDN.
 
@@ -88,11 +96,11 @@ def plotly_js_tag() -> str:
             f'<script id="plotly-gz" type="text/plain">{b64}</script>'
             f"<script>{_GZ_LOADER_JS}</script>"
         )
-    except Exception:
+    except Exception as exc:
+        # Sin bundle offline el reporte sigue funcionando via CDN (requiere
+        # internet al abrirlo); dejar rastro del porque.
+        logger.warning("plotly.js offline no disponible, cayendo a CDN: %s", exc)
         return cdn_tag
 
 
-PLOTLY_JS_TAG = plotly_js_tag()
-
-
-__all__ = ["plotly_js_tag", "PLOTLY_JS_TAG"]
+__all__ = ["plotly_js_tag"]

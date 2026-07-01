@@ -17,7 +17,7 @@ def plotly_div(fig, div_id: str = "") -> str:
 
     Helper compartido entre `diagnostics.py` (charts globales del pipeline)
     y `html/technical.py` (boxplots por subgrupo). El script `plotly.js`
-    se carga UNA sola vez desde el <head> via `html.styles._PLOTLY_JS_TAG`,
+    se carga UNA sola vez desde el <head> via `src.utils.html_assets.plotly_js_tag()`,
     por eso aqui siempre se pasa `include_plotlyjs=False`.
     """
     try:

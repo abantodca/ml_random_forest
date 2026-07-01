@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import pandas as pd
 
 from src.config import DATE_COLUMN
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,8 +43,10 @@ def build_context(
                 if not d.empty:
                     date_min = d.min().strftime("%Y-%m")
                     date_max = d.max().strftime("%Y-%m")
-            except Exception:
-                pass
+            except Exception as exc:
+                # Contexto descriptivo best-effort: sin rango de fechas el
+                # reporte sigue siendo valido (date_min/max quedan None).
+                logger.debug("Rango de fechas del contexto omitido: %s", exc)
         if "FUNDO" in X_raw.columns:
             uniq = sorted(X_raw["FUNDO"].dropna().astype(str).unique())
             n_fundos = len(uniq)

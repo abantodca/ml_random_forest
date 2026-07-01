@@ -73,7 +73,11 @@ def _coerce(value: str) -> object:
 def _clip_to_grid(params: dict[str, object], model_type: str) -> dict[str, object]:
     """Recorta depth y hojas a la grilla VIGENTE (lazy import para leer el
     valor actual de los env de search_spaces, no uno horneado)."""
-    from src.step_04_train.search_spaces import TREE_MAX_DEPTH, TREE_MAX_LEAVES
+    from src.step_04_train.search_spaces import (
+        TREE_MAX_DEPTH,
+        TREE_MAX_LEAVES,
+        leaves_bounds,
+    )
 
     p = dict(params)
     depth = TREE_MAX_DEPTH
@@ -83,10 +87,7 @@ def _clip_to_grid(params: dict[str, object], model_type: str) -> dict[str, objec
 
     leaves_key = _LEAVES_KEY.get(model_type)
     if leaves_key and leaves_key in p:
-        if model_type == "lgb":
-            lo, hi = 7, max(7, min(2**depth - 1, TREE_MAX_LEAVES))
-        else:  # xgb
-            lo, hi = 8, max(8, min(2**depth, TREE_MAX_LEAVES))
+        lo, hi = leaves_bounds(model_type, depth, TREE_MAX_LEAVES)
         p[leaves_key] = max(lo, min(int(p[leaves_key]), hi))
     return p
 

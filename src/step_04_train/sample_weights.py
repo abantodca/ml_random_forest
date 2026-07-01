@@ -16,6 +16,13 @@ import numpy as np
 import pandas as pd
 
 
+def _renormalize_mean1(weights: np.ndarray) -> np.ndarray:
+    """Escala los pesos a media=1 para que el peso total no altere la escala
+    de la loss (sigue siendo MAE en KG/JR_H). Paso final comun de ambas
+    estrategias de pesos."""
+    return weights * (len(weights) / weights.sum())
+
+
 def compute_sample_weights(
     y: pd.Series,
     n_bins: int = 20,
@@ -65,8 +72,7 @@ def compute_sample_weights(
     )
     weights = np.minimum(weights, weight_cap * weights.mean())
     weights = np.sqrt(weights)
-    weights = weights * (n / weights.sum())
-    return weights
+    return _renormalize_mean1(weights)
 
 
 def compute_inv_target_weights(
@@ -99,5 +105,4 @@ def compute_inv_target_weights(
     weights = np.ones(n, dtype=float)
     weights[valid] = ref / y_arr[valid]
     weights = np.clip(weights, 1.0 / weight_cap, weight_cap)
-    weights = weights * (n / weights.sum())
-    return weights
+    return _renormalize_mean1(weights)

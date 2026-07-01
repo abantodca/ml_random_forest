@@ -25,7 +25,10 @@ import sys
 
 from mlflow.tracking import MlflowClient
 
-METRIC_KEYS = ("mape_oof", "mape")
+# Nombre real que loguea el trainer: `business_oof_mape` (ver
+# BusinessValidation.to_mlflow_metrics, prefijo business_oof_). Los otros dos
+# quedan como fallback para runs antiguos con la convencion vieja.
+METRIC_KEYS = ("business_oof_mape", "mape_oof", "mape")
 
 
 def resolve_uri(uri: str | None) -> str:
@@ -45,7 +48,7 @@ def get_mape(client: MlflowClient, run_id: str) -> float:
     for key in METRIC_KEYS:
         if key in metrics:
             return metrics[key]
-    sys.exit(f"ERROR el run {run_id} no tiene mape_oof ni mape")
+    sys.exit(f"ERROR el run {run_id} no tiene ninguna metrica MAPE ({', '.join(METRIC_KEYS)})")
 
 
 def main() -> None:

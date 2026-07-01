@@ -14,7 +14,7 @@ paso a renderizarlos inline en `html/winner_dashboard.py`. Si vuelven a
 hacer falta, recuperar desde git historico antes que reescribir.
 
 El script plotly.js se carga UNA sola vez desde el <head> del HTML (ver
-`html.styles._PLOTLY_JS_TAG`); por eso `plotly_div` (importado de
+`src.utils.html_assets.plotly_js_tag()`); por eso `plotly_div` (importado de
 `html.helpers`) siempre pasa `include_plotlyjs=False`.
 """
 

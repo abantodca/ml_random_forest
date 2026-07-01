@@ -67,6 +67,12 @@ class VarietyConfig:
     rare_min_count: int | None = None
 
 
+# Meses de temporada de POP (EDA 2026-05: ALTA=jun-oct, BAJA=dic-abr). UNICA
+# fuente del literal: lo consumen el pin de POP abajo y el fallback legacy de
+# FeatureGenerator._date_features (cuando llega None y el autodetect no aplica).
+POP_HIGH_SEASON_MONTHS: tuple[int, ...] = (6, 7, 8, 9, 10)
+POP_LOW_SEASON_MONTHS: tuple[int, ...] = (12, 1, 2, 3, 4)
+
 # Overrides explicitos por hoja del Excel. Variedad sin entrada = defaults
 # globales (hoy DATA-DRIVEN: temporada autodetectada, capacidad/folds por n).
 #
@@ -77,8 +83,8 @@ class VarietyConfig:
 # Exactamente el escenario que el comentario original de este dict advertia.
 VARIETY_OVERRIDES: dict[str, dict[str, object]] = {
     "POP": {
-        "high_season_months": (6, 7, 8, 9, 10),
-        "low_season_months": (12, 1, 2, 3, 4),
+        "high_season_months": POP_HIGH_SEASON_MONTHS,
+        "low_season_months": POP_LOW_SEASON_MONTHS,
     },
 }
 

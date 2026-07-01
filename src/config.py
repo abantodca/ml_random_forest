@@ -240,7 +240,9 @@ MAPE_MIN_DENOM: float = float(os.environ.get("MAPE_MIN_DENOM", "1.0"))
 #   25% es ~8pp arriba del MAPE_oof observado en POP (~17%); deja
 #   holgura para variedades mas dificiles pero filtra modelos rotos.
 #   Antes era 30% comparado contra full_mape (in-sample, optimista).
-# CHAMPION_MAX_GAP: brecha maxima Train-Test aceptable (overfitting).
+# CHAMPION_MAX_GAP: brecha maxima Train-Test aceptable (overfitting) — LEGACY:
+#   desde 2026-06-11 el gate real es CHAMPION_MAX_GAP_REL (abajo); este valor
+#   queda solo como tag informativo (`gap_gate_pp_legacy` en el reporte).
 #   Valor en % (18.0 = 18pp de diferencia entre MAE_train y MAE_test).
 #   Subido de 15 -> 18 tras evidencia empirica: con search spaces rev. 7.1
 #   (LGB) y rev. 6 (XGB) -- capacidad capada y regularizacion estricta
@@ -289,7 +291,8 @@ CHAMPION_WARN_TEMPORAL_R2: float = float(
 # Revision 2026-06-10: el lex-order anterior era |gap| -> full_mape -> tiempo.
 # Eso optimizaba "poco overfitting" como objetivo primario (premia subajuste)
 # y usaba una metrica IN-SAMPLE (full_mape) como desempate. El orden nuevo:
-#   1. Gate de gap: |gap|*100 <= CHAMPION_MAX_GAP (restriccion, no objetivo).
+#   1. Gate de gap: gap_rel = |gap|/MAE_test <= CHAMPION_MAX_GAP_REL
+#      (restriccion, no objetivo).
 #   2. Menor MAPE OOF de negocio (generalizacion honesta).
 #   3. Menor tiempo de entrenamiento ante empate practico.
 

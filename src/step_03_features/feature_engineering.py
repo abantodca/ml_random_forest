@@ -44,6 +44,7 @@ from src.config import (
     SKEW_THRESHOLD,
 )
 from src.step_03_features._helpers import safe_ratio
+from src.variety_config import POP_HIGH_SEASON_MONTHS, POP_LOW_SEASON_MONTHS
 
 
 class FeatureGenerator(BaseEstimator, TransformerMixin):
@@ -303,8 +304,8 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         # listas quedan en 0). Defaults POP: ALTA=jun-oct (z>0), BAJA=dic-abr
         # (z<0 por condicion de fruta). Otras variedades tienen otros picos:
         # los meses llegan por VarietyConfig (P0.2) via __init__.
-        alta = list(high_season_months) if high_season_months else [6, 7, 8, 9, 10]
-        baja = list(low_season_months) if low_season_months else [12, 1, 2, 3, 4]
+        alta = list(high_season_months) if high_season_months else list(POP_HIGH_SEASON_MONTHS)
+        baja = list(low_season_months) if low_season_months else list(POP_LOW_SEASON_MONTHS)
         out["TEMPORADA_ALTA"] = month.isin(alta).astype(int)
         out["TEMPORADA_BAJA"] = month.isin(baja).astype(int)
 

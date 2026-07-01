@@ -18,6 +18,7 @@ en `residuals/` del run.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -42,6 +43,8 @@ from src.diagnostics.statistical_tests import (
     shapiro_wilk,
     white_test,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _residuals_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
@@ -88,8 +91,10 @@ def _abs_res_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
                 hoverinfo="skip",
             )
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        # El lowess es decorativo: sin la curva de tendencia el scatter
+        # de |residuos| sigue siendo interpretable.
+        logger.debug("Suavizado lowess omitido: %s", exc)
     fig.update_xaxes(title="prediccion (y_pred)")
     fig.update_yaxes(title="|residual|")
     return style_fig(fig, title="|Residuos| vs prediccion (cono ascendente => heteroscedasticidad)")
@@ -281,7 +286,9 @@ def render_residual_report(
     bias = float(np.mean(residuals))
 
     # Reusa el tag canonico del proyecto (offline vs CDN segun config).
-    from src.utils.html_assets import PLOTLY_JS_TAG as plotly_cdn
+    from src.utils.html_assets import plotly_js_tag
+
+    plotly_cdn = plotly_js_tag()
 
     # Run identification para trazabilidad MLflow.
     run_meta = ""

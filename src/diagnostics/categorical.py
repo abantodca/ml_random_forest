@@ -20,6 +20,7 @@ pipeline / LLM consuma stats sin parsear HTML).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -31,6 +32,8 @@ from src.config import (
     CRAMERS_V_STRONG,
     CRAMERS_V_WEAK,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +177,11 @@ def profile_categorical(
                 from scipy.stats import chi2_contingency
 
                 chi2_stat = float(chi2_contingency(ct.values)[0])
-        except Exception:
-            pass
+        except Exception as exc:
+            # Stats inferenciales opcionales del EDA: si scipy falla (tabla
+            # degenerada, frecuencias esperadas 0) quedan en None y el HTML
+            # simplemente no los muestra.
+            logger.debug("Chi2/Cramers V omitidos para la categorica: %s", exc)
 
     # Recomendacion target-encoding
     rec = _target_encoding_rec(cardinality, n - n_miss, cramers_v_val)

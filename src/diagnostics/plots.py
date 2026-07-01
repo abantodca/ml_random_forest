@@ -7,10 +7,14 @@ para embeber inline sin duplicar plotly.js (se carga UNA vez en el head).
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+logger = logging.getLogger(__name__)
 
 _AXIS_TITLE_FONT = dict(size=11, color="#475569")
 _FIG_FONT = dict(family="Inter, system-ui, sans-serif", size=11, color="#1e293b")
@@ -67,8 +71,10 @@ def histogram_with_kde(x: pd.Series, name: str) -> go.Figure:
                     name="kde",
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # El overlay KDE es decorativo: si scipy falla (matriz singular,
+            # data degenerada) el histograma sigue siendo valido.
+            logger.debug("KDE overlay omitido del histograma: %s", exc)
     fig.add_vline(
         x=float(x_clean.mean()),
         line_dash="dash",

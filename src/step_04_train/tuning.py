@@ -526,6 +526,7 @@ def _temporal_honesty_check(
         TEMPORAL_MAPE_REL_FLOOR,
     )
     from src.step_04_train.temporal_cv import TemporalYearSplit
+    from src.step_05_evaluate.metrics import _mape_valid_mask, mape_safe
 
     try:
         splitter = TemporalYearSplit(
@@ -574,7 +575,7 @@ def _temporal_honesty_check(
         # excluye denominadores implausibles. Ver TEMPORAL_MAPE_REL_FLOOR.
         med = float(np.nanmedian(np.abs(y_arr[base_mask]))) if base_mask.any() else 0.0
         denom_floor = max(1e-9, TEMPORAL_MAPE_REL_FLOOR * med)
-        mask = base_mask & (np.abs(y_arr) >= denom_floor)
+        mask = base_mask & _mape_valid_mask(y_arr, denom_floor)
         n_mape_excl = int((base_mask & ~mask).sum())
         if not base_mask.any():
             logger.warning("Chequeo temporal sin filas OOF validas; se omite.")
@@ -585,9 +586,10 @@ def _temporal_honesty_check(
                 f"denominador < {denom_floor:.4f} (artefactos casi-cero); "
                 "R2/MAE las conservan."
             )
-        ape = np.abs(oof_pred[mask] - y_arr[mask]) / np.abs(y_arr[mask])
         metrics = {
-            "temporal_mape_oof": float(ape.mean() * 100.0) if mask.any() else float("nan"),
+            "temporal_mape_oof": mape_safe(
+                y_arr[base_mask], oof_pred[base_mask], min_denom=denom_floor
+            ),
             "temporal_r2_oof": float(r2_score(y_arr[base_mask], oof_pred[base_mask])),
             "temporal_mae_test_mean": float(np.mean(mae_folds)),
             "temporal_n_oof": float(base_mask.sum()),
@@ -627,7 +629,7 @@ def _pick_final_params(
     """Devuelve los params para el refit final.
 
     Dos modos:
-      - `skip_final_tuning=True`: argmin sobre los outer folds (rapido).
+      - `skip_final_tuning=True`: fold MEDIANO por MAE_test (rapido).
       - `False` (default): ronda extra de Optuna sobre TODO el dataset.
 
     `warm_start_params`: siembra la ronda final con el campeon registrado.
@@ -737,8 +739,9 @@ def perform_nested_cv(
     final_trials : trials de la ronda extra sobre el dataset completo.
                    Si es None se usa el mismo `n_trials`.
     skip_final_tuning : si True, omite la ronda final y refitea con los
-                        mejores parametros del MEJOR outer fold (argmin MAE
-                        test). Ahorra ~1/(outer_folds+1) del tiempo total.
+                        params del outer fold MEDIANO por MAE_test (el argmin
+                        premiaba al fold con mas suerte; ver _pick_final_params).
+                        Ahorra ~1/(outer_folds+1) del tiempo total.
     inner_cv_n_jobs : VESTIGIAL. Ya no aplica: el inner CV se hace manual
                       (fold a fold) para soportar sample_weight. Aceptamos
                       el flag para no romper la CLI/settings. La paralelizacion

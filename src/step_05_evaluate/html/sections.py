@@ -12,6 +12,7 @@ calculos pesados) y devuelve un fragmento HTML escapado.
 
 from __future__ import annotations
 
+import logging
 import math
 from html import escape
 
@@ -20,6 +21,7 @@ import pandas as pd
 
 from src.config import (
     CHAMPION_MAX_GAP_REL,
+    DATE_COLUMN,
     KPI_PRECISION_HIGH_MAPE_PCT,
     KPI_PRECISION_MEDIUM_MAPE_PCT,
     REPORT_BUSINESS_UNIT,
@@ -39,6 +41,8 @@ from src.step_05_evaluate.explainability import (
     kpi_vs_baseline,
 )
 from src.step_05_evaluate.html.helpers import compute_error_percentiles, download_button
+
+logger = logging.getLogger(__name__)
 
 
 def _hero_kpi_chip(label: str, value: str, status: str, sub: str = "") -> str:
@@ -742,14 +746,16 @@ def _extract_row_context(X_aligned, i: int, has_X: bool) -> tuple:
     if has_X:
         try:
             row = X_aligned.iloc[i]
-            if "FECHA" in row.index and pd.notna(row["FECHA"]):
-                fecha = pd.to_datetime(row["FECHA"]).strftime("%Y-%m-%d")
+            if DATE_COLUMN in row.index and pd.notna(row[DATE_COLUMN]):
+                fecha = pd.to_datetime(row[DATE_COLUMN]).strftime("%Y-%m-%d")
             if "FUNDO" in row.index and pd.notna(row["FUNDO"]):
                 fundo = str(row["FUNDO"])
             if "FORMATO" in row.index and pd.notna(row["FORMATO"]):
                 formato = str(row["FORMATO"])
-        except Exception:
-            pass
+        except Exception as exc:
+            # Metadata best-effort de la tabla de peores errores: la fila
+            # sale con "—" y el reporte sigue completo.
+            logger.debug("Contexto de fila %s omitido: %s", i, exc)
     return fecha, fundo, formato
 
 
@@ -825,10 +831,10 @@ def _error_plots_html(
     resid_html = plot_residuals_vs_predicted_plotly(pred_arr, residuals)
 
     time_html = ""
-    if has_X and "FECHA" in X_aligned.columns:
+    if has_X and DATE_COLUMN in X_aligned.columns:
         try:
             time_html = plot_error_over_time_plotly(
-                X_aligned["FECHA"].to_numpy(),
+                X_aligned[DATE_COLUMN].to_numpy(),
                 abs_err,
             )
         except Exception:
