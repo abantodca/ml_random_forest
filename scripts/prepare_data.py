@@ -8,8 +8,9 @@ Diseno:
     - Las columnas del acumulado vienen con espacios (` HA`, ` KG/JR`, ...).
       Aqui se normalizan UNA SOLA VEZ para que el data_loader downstream
       no tenga que hacerlo cada vez.
-    - Variedades con muy pocas filas se descartan (`--min-rows`, default 100):
-      no hay datos suficientes para tunear con CV anidado.
+    - Variedades con muy pocas filas se descartan (`--min-rows`, default
+      `config.MIN_ROWS_PER_VARIETY`): no hay datos suficientes para tunear
+      con CV anidado.
     - Dedup estructural: filas 100% identicas se eliminan por variedad
       (keep="first"), UNA sola vez. El data_loader mantiene un dedup
       defensivo que queda en no-op con el dato ya limpio.
@@ -31,6 +32,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
+
+from src.config import MIN_ROWS_PER_VARIETY
 
 _INVALID_SHEET_CHARS = re.compile(r"[\\/\?\*\[\]:]+")
 
@@ -72,7 +75,7 @@ def _split_by_variety(
 def split_workbook(
     input_path: str | Path,
     output_path: str | Path,
-    min_rows: int = 100,
+    min_rows: int = MIN_ROWS_PER_VARIETY,
     source_sheet: str = "acumulado",
     variety_col: str = "VARIEDAD",
 ) -> dict:
@@ -142,7 +145,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--input", required=True, help="Ruta del Excel acumulado")
     p.add_argument("--output", required=True, help="Ruta del Excel resultante")
     p.add_argument(
-        "--min-rows", type=int, default=100, help="Filas minimas por variedad para incluirla"
+        "--min-rows",
+        type=int,
+        default=MIN_ROWS_PER_VARIETY,
+        help="Filas minimas por variedad para incluirla",
     )
     p.add_argument(
         "--source-sheet", default="acumulado", help="Hoja de entrada en el Excel acumulado"

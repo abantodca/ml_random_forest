@@ -73,7 +73,7 @@ tasks:
           ║  task data:split        genera data/training/DB-HISTORICA.xlsx            ║
           ║  task train             entrena + publica el HTML del campeon             ║
           ║  task down              apaga servicios (preserva el volumen Postgres)    ║
-          ║  task test · task lint  suite P0 en contenedores · ruff                   ║
+          ║  task lint              ruff check de todo el monorepo                    ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
             Setup 1ª vez:  task local:ensure-buckets  +  completar buckets en .env
             URLs:  UI :8501 · API :8000/docs · MLflow :5000 · Reports/Artifacts :8080

@@ -451,7 +451,9 @@ def render_eda_html(
         """
 
     # Reusa el tag canonico (offline vs CDN segun config) para tamaño consistente.
-    from src.utils.html_assets import PLOTLY_JS_TAG as plotly_cdn
+    from src.utils.html_assets import plotly_js_tag
+
+    plotly_cdn = plotly_js_tag()
 
     body = f"""
     <div class="container">

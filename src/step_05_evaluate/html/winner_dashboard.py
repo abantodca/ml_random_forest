@@ -41,8 +41,9 @@ from src.step_05_evaluate.html.sections import (
     build_pdp_section,
     build_statistical_diagnostic_section,
 )
-from src.step_05_evaluate.html.styles import _PLOTLY_JS_TAG, DASHBOARD_CSS
+from src.step_05_evaluate.html.styles import DASHBOARD_CSS
 from src.step_05_evaluate.html.technical import build_technical_section
+from src.utils.html_assets import plotly_js_tag
 
 
 def render_winner_dashboard(
@@ -191,7 +192,7 @@ def render_winner_dashboard(
         <html lang="es"><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Winner · {escape(variety)} — {escape(REPORT_PROJECT_NAME)}</title>
-        {_PLOTLY_JS_TAG}
+        {plotly_js_tag()}
         <style>{DASHBOARD_CSS}</style></head>
         <body>
         {nav_back}

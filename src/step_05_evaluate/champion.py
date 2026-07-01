@@ -113,8 +113,9 @@ class ModelResult:
         """MAPE en KG/JR sobre el dataset completo (mas bajo es mejor).
 
         IN-SAMPLE: refit + predict en TODO X (incluyendo train). Mide
-        estabilidad del modelo de produccion, no generalizacion. Lo usa
-        `select_champion` como criterio de desempate de "estabilidad".
+        estabilidad del modelo de produccion, no generalizacion. Es
+        INFORMATIVO (aparece en el ranking del reporte); `_decision_key`
+        NO lo usa — el lex-order es gate de gap_rel -> MAPE OOF -> tiempo.
 
         Si no hay metricas full disponibles, cae al MAPE OOF de negocio.
         Si tampoco, devuelve infinito (deja al modelo en ultimo lugar).
@@ -192,7 +193,7 @@ def _decision_key(r: ModelResult) -> tuple:
     """Llave lex-order para `min(...)`.
 
     Orden de prioridad:
-      1. Gate de |gap| (0 = pasa, 1 = falla). Restriccion, no objetivo.
+      1. Gate de gap_rel (0 = pasa, 1 = falla). Restriccion, no objetivo.
       2. Bucket de MAPE OOF (generalizacion honesta; empata si difiere
          < OOF_MAPE_TIE_TOLERANCE).
       3. Tiempo de entrenamiento (eficiencia).

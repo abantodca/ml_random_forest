@@ -96,7 +96,7 @@ task destroy / nuke  # DESTRUCTIVE (nuke also removes tfstate + OIDC)
 
 2. **The pipeline always trains every backend in the registry; there is no flag to force one model**
    (ADR-002). `src/step_05_evaluate/champion.py::select_champion` decides the winner per variety via a
-   strict lex-order: gap gate (`|gap|*100 <= CHAMPION_MAX_GAP`, a constraint — not minimized) →
+   strict lex-order: gap gate (`gap_rel = |gap|/MAE_test <= CHAMPION_MAX_GAP_REL`, a constraint — not minimized) →
    OOF business MAPE (honest generalization) → wall time. `full_mape` (in-sample) is informational
    only. Adding a backend = one new file in `src/step_04_train/` + its entry in `registry.py` and
    `search_spaces.py`; `tuning.py` is untouched. `--tuning smoke` runs never register models.

@@ -243,4 +243,6 @@ tasks:
     requires:
       vars: [MODEL_NAME, VERSION]
     cmds:
-      - python scripts/promote_model.py {{.MODEL_NAME}} {{.VERSION}} --max-mape {{.MAX_MAPE}} --tf-dir {{.TF_DIR}}
+      # La URI de MLflow se resuelve via env MLFLOW_ALB_DNS (o --uri); el
+      # fallback --tf-dir se removio junto con la carpeta infra/ pegable.
+      - python scripts/promote_model.py {{.MODEL_NAME}} {{.VERSION}} --max-mape {{.MAX_MAPE}}

@@ -8,6 +8,7 @@ campeon actual).
 from __future__ import annotations
 
 import gc
+import logging
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -15,6 +16,8 @@ import matplotlib.pyplot as plt
 import mlflow
 
 from src.config import REPORTS_DIR
+
+_logger = logging.getLogger(__name__)
 
 # matplotlib backend ya esta forzado a 'Agg' en src/__init__.py (side-effect
 # del paquete raiz). Importar pyplot aqui es seguro porque cualquier
@@ -68,6 +71,8 @@ def cleanup_residual_reports(
             try:
                 f.unlink()
                 deleted.append(f)
-            except OSError:
-                pass
+            except OSError as exc:
+                # Limpieza best-effort: un residuo que no se pudo borrar no
+                # debe abortar el run, pero conviene dejar rastro.
+                _logger.warning("No se pudo borrar el residuo %s: %s", f, exc)
     return deleted

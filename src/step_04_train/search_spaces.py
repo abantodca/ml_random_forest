@@ -78,6 +78,22 @@ def caps_for_n(n_rows: int | None) -> tuple[int, int, int]:
     )
 
 
+def leaves_bounds(model_type: str, max_depth: int, leaves_cap: int) -> tuple[int, int]:
+    """(lo, hi) del nº de hojas acoplado a depth, por backend.
+
+    LGB tunea num_leaves en 7 .. min(2^depth - 1, cap); XGB tunea max_leaves
+    en 8 .. min(2^depth, cap) (paridad estructural, rev. 9 2026-06-22). UNICA
+    fuente de la formula: la usan los search spaces de este modulo y el clip
+    del warm-start — si divergieran, una siembra del Registry podria quedar
+    fuera de la grilla vigente.
+    """
+    if model_type == "lgb":
+        lo, ceiling = 7, 2**max_depth - 1
+    else:  # xgb
+        lo, ceiling = 8, 2**max_depth
+    return lo, max(lo, min(ceiling, leaves_cap))
+
+
 # ---------------------------------------------------------------------------
 # Preprocesador (compartido para todos los backends)
 # ---------------------------------------------------------------------------
@@ -157,11 +173,10 @@ def suggest_xgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
         "regressor__regressor__grow_policy", ["depthwise", "lossguide"]
     )
     max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, depth_cap)
-    # max_leaves acoplado a depth y SIEMPRE tuneado: 8 .. min(2^depth, leaves_cap),
-    # espejando el num_leaves de suggest_lgb_params (7 .. min(2^depth-1, leaves_cap)).
-    # En depth bajos la formula acota sola; el cap (anti-overfit 2026-06-25, 64->40;
-    # y n-adaptativo 2026-07-01) evita arboles anchos memorizadores.
-    max_leaves_max = max(8, min(2**max_depth, leaves_cap))
+    # max_leaves acoplado a depth y SIEMPRE tuneado (ver leaves_bounds). En depth
+    # bajos la formula acota sola; el cap (anti-overfit 2026-06-25, 64->40; y
+    # n-adaptativo 2026-07-01) evita arboles anchos memorizadores.
+    leaves_lo, max_leaves_max = leaves_bounds("xgb", max_depth, leaves_cap)
     params = {
         "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__learning_rate": trial.suggest_float(
@@ -195,7 +210,7 @@ def suggest_xgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
         ),
         "regressor__regressor__grow_policy": grow_policy,
         "regressor__regressor__max_leaves": trial.suggest_int(
-            "regressor__regressor__max_leaves", 8, max_leaves_max
+            "regressor__regressor__max_leaves", leaves_lo, max_leaves_max
         ),
     }
     return params
@@ -233,11 +248,11 @@ def suggest_lgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
     """
     depth_cap, leaves_cap, min_child_floor = caps_for_n(n_rows)
     max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, depth_cap)
-    num_leaves_max = max(7, min(2**max_depth - 1, leaves_cap))
+    leaves_lo, num_leaves_max = leaves_bounds("lgb", max_depth, leaves_cap)
     return {
         "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__num_leaves": trial.suggest_int(
-            "regressor__regressor__num_leaves", 7, num_leaves_max
+            "regressor__regressor__num_leaves", leaves_lo, num_leaves_max
         ),
         "regressor__regressor__learning_rate": trial.suggest_float(
             # Piso subido 3e-3 -> 1e-2 (2026-06-23): ver nota en suggest_xgb_params.

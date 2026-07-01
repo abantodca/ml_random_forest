@@ -1,19 +1,14 @@
-"""Recursos compartidos del dashboard HTML: CSS + plotly.js bundle.
+"""Hoja de estilos del dashboard ejecutivo.
 
 El tag canonico de plotly.js (offline vs CDN) vive en
-`src.utils.html_assets` para evitar acoplamiento cross-package entre
-`diagnostics/` y `step_05_evaluate/`. Aqui solo se re-exporta como
-`_PLOTLY_JS_TAG` para callers internos del paquete html. `DASHBOARD_CSS`
-es la hoja de estilos completa del dashboard ejecutivo (hero, secciones,
-KPIs, charts, technical details).
+`src.utils.html_assets.plotly_js_tag()` (lazy + cacheado) para evitar
+acoplamiento cross-package entre `diagnostics/` y `step_05_evaluate/`;
+los consumidores lo llaman directamente. `DASHBOARD_CSS` es la hoja de
+estilos completa del dashboard ejecutivo (hero, secciones, KPIs, charts,
+technical details).
 """
 
 from __future__ import annotations
-
-# Re-export interno del paquete html. Los consumidores externos
-# (diagnostics, etc.) deben importar directamente desde
-# `src.utils.html_assets` para no depender de simbolos privados.
-from src.utils.html_assets import PLOTLY_JS_TAG as _PLOTLY_JS_TAG
 
 DASHBOARD_CSS = """
 :root {
@@ -413,4 +408,4 @@ footer { text-align:center; color: var(--gray-500); font-size: 12px;
 """
 
 
-__all__ = ["_PLOTLY_JS_TAG", "DASHBOARD_CSS"]
+__all__ = ["DASHBOARD_CSS"]
