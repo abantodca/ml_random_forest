@@ -98,17 +98,37 @@ def _is_same_backend(space_params: dict, model_type: str) -> bool:
     return bool(sig and sig in space_params)
 
 
-def _fetch_champion_space(client, model_name: str) -> tuple[dict, str, str] | None:
-    """(params del search space, version, run_id) del campeon registrado mas
-    reciente, o None si no hay versiones. Filtra metadata (git/sha/n_rows...):
-    deja solo las claves del espacio (regressor__/preprocessor__)."""
+def _fetch_champion_space(client, model_name: str) -> tuple[dict, str, str, dict] | None:
+    """(params del search space, version, run_id, metrics) del campeon registrado
+    mas reciente, o None si no hay versiones. Filtra metadata (git/sha/n_rows...):
+    deja solo las claves del espacio (regressor__/preprocessor__). `metrics` trae
+    las metricas del run (para el guard anti-overfit del caller)."""
     versions = client.search_model_versions(f"name='{model_name}'")
     if not versions:
         return None
     latest = max(versions, key=lambda mv: int(mv.version))
-    raw = client.get_run(latest.run_id).data.params or {}
+    run_data = client.get_run(latest.run_id).data
+    raw = run_data.params or {}
     space = {k: v for k, v in raw.items() if k.startswith(_SPACE_PREFIXES)}
-    return space, latest.version, latest.run_id
+    return space, latest.version, latest.run_id, dict(run_data.metrics or {})
+
+
+def _prev_champion_overfit(metrics: dict) -> bool:
+    """True si el campeon registrado quedo con gap_rel sobre el gate vigente.
+
+    Guard 2026-07-01: un campeon puede registrarse CON warning de overfitting
+    (el gap no bloquea, solo el MAPE). Sembrar la ronda final con esa config
+    empuja al proximo reentreno hacia la MISMA zona memorizada — perpetua el
+    overfit entre reentrenos. Si el gap_rel del run registrado supera
+    CHAMPION_MAX_GAP_REL, mejor arranque frio (el TPE + los caps n-aware
+    vigentes buscan una zona sana). Sin metricas suficientes -> False
+    (no bloquea; fail-open como todo el warm-start).
+    """
+    gap = metrics.get("nested_cv_gap_mean")
+    mae_test = metrics.get("nested_cv_mae_mean")
+    if gap is None or mae_test is None or not mae_test > 0:
+        return False
+    return (abs(float(gap)) / float(mae_test)) > config.CHAMPION_MAX_GAP_REL
 
 
 def build_warm_start_params(variety: str | None, model_type: str, logger) -> dict | None:
@@ -130,9 +150,16 @@ def build_warm_start_params(variety: str | None, model_type: str, logger) -> dic
             logger.info(f"{tag}: sin modelo previo en Registry ({model_name}); arranque en frio.")
             return None
 
-        space, version, run_id = fetched
+        space, version, run_id, prev_metrics = fetched
         if not _is_same_backend(space, model_type):
             logger.info(f"{tag}: el campeon {model_name} v{version} es de otro backend; frio.")
+            return None
+        if _prev_champion_overfit(prev_metrics):
+            logger.info(
+                f"{tag}: campeon previo {model_name} v{version} registro con gap_rel sobre "
+                f"el gate ({config.CHAMPION_MAX_GAP_REL}); NO se siembra su config "
+                f"(evita perpetuar el overfit). Arranque en frio."
+            )
             return None
 
         seed = _clip_to_grid({k: _coerce(v) for k, v in space.items()}, model_type)
@@ -142,6 +169,6 @@ def build_warm_start_params(variety: str | None, model_type: str, logger) -> dic
             f"leaves={seed.get(_LEAVES_KEY.get(model_type))})"
         )
         return seed
-    except Exception as exc:  # noqa: BLE001 — el warm-start jamas rompe el training
+    except Exception as exc:
         logger.warning(f"{tag} fallo (arranque en frio): {exc}")
         return None

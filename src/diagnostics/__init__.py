@@ -18,6 +18,6 @@ Modulos:
     eda               : entrypoint `run_eda(variety) -> Path`
 """
 
-from src.diagnostics.eda import run_eda  # noqa: F401
+from src.diagnostics.eda import run_eda
 
 __all__ = ["run_eda"]

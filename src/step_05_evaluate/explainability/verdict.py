@@ -11,15 +11,16 @@ from src.config import REPORT_VERDICT_THRESHOLDS
 class Verdict:
     """Veredicto del modelo en formato presentable.
 
-    level     : 'alta_confianza' | 'confianza_aceptable' | 'confianza_limitada' | 'no_recomendado'
     icon      : emoji para badge (✅ / 🟢 / ⚠ / 🚫)
     title     : titulo corto para el hero (e.g. "Listo para producción")
     headline  : 1 frase de cabecera (e.g. "Modelo apto para uso operacional")
     body      : 1-2 frases con la recomendacion accionable
     color_key : 'green' | 'green-2' | 'amber' | 'red' (para CSS class)
+
+    El nivel ('alta_confianza' | ... | 'no_recomendado') es la KEY del dict
+    _VERDICTS; ningun consumidor lo leia como campo, asi que no se duplica aca.
     """
 
-    level: str
     icon: str
     title: str
     headline: str
@@ -29,7 +30,6 @@ class Verdict:
 
 _VERDICTS: dict[str, Verdict] = {
     "alta_confianza": Verdict(
-        level="alta_confianza",
         icon="✅",
         title="Listo para producción",
         headline="Modelo apto para integrarse al flujo operacional.",
@@ -41,7 +41,6 @@ _VERDICTS: dict[str, Verdict] = {
         color_key="green",
     ),
     "confianza_aceptable": Verdict(
-        level="confianza_aceptable",
         icon="🟢",
         title="Apto con monitoreo",
         headline="Modelo útil para producción con seguimiento cercano.",
@@ -53,7 +52,6 @@ _VERDICTS: dict[str, Verdict] = {
         color_key="green-2",
     ),
     "confianza_limitada": Verdict(
-        level="confianza_limitada",
         icon="⚠",
         title="Usar como referencia",
         headline="Modelo informativo, no como autoridad operativa.",
@@ -65,7 +63,6 @@ _VERDICTS: dict[str, Verdict] = {
         color_key="amber",
     ),
     "no_recomendado": Verdict(
-        level="no_recomendado",
         icon="🚫",
         title="No recomendado para producción",
         headline="Modelo con variabilidad alta — investigar antes de usar.",

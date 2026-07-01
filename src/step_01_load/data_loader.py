@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.config import (
+    ADAPT_RARE_MIN_COUNT,
     CATEGORICAL_FEATURES,
     DATE_COLUMN,
     DEFAULT_VARIETIES,
@@ -20,6 +21,8 @@ from src.config import (
     NUMERIC_FEATURES,
     RARE_GROUP_COLS,
     RARE_MIN_COUNT,
+    RARE_MIN_COUNT_FLOOR,
+    RARE_MIN_COUNT_FRAC,
     RAW_FEATURE_COLUMNS,
     TARGET,
     TRAINING_FILE,
@@ -96,6 +99,22 @@ def _load_sheet_aligned(
     n_dropped_target = n_before - len(df)
     if n_dropped_target:
         logger.warning(f"{n_dropped_target} filas descartadas por target NaN ({sheet_name})")
+    # KG/JR_H = KG/JR / H-EF es kg por jornal-hora: fisicamente > 0. Un target
+    # <= 0 es IMPOSIBLE (visto 2026-07-01: 1 fila en MAGICA con KG/JR=-393.59,
+    # H-EF=8 -> ratio=-49.2; error de carga en origen, kilos negativos). Ademas
+    # rompe el log1p del target transform (log1p(<=-1)=NaN, que se propaga al y
+    # del fold y envenena el fit). Se descarta aca, en el filtro CANONICO, para
+    # no desalinear KG/JR/H-EF con (X, y). Validation solo AVISA; el drop va aca.
+    target_num = pd.to_numeric(df[TARGET], errors="coerce")
+    impossible = target_num <= 0
+    n_impossible = int(impossible.sum())
+    if n_impossible:
+        ejemplos = target_num[impossible].round(3).tolist()[:5]
+        logger.warning(
+            f"{n_impossible} fila(s) con target <= 0 descartadas ({sheet_name}) "
+            f"- KG/JR_H imposible <= 0; ejemplos={ejemplos}"
+        )
+        df = df.loc[~impossible].reset_index(drop=True)
     # EDA POP 2026-05-09: duplicados estructurales (mismas filas) inflaban CV
     # metrics. Detecta filas identicas sobre TODAS las columnas; mantiene el
     # PRIMERO (orden Excel = orden temporal en POP). Desde 2026-06-15 el dedup
@@ -169,7 +188,14 @@ def load_data(
     # aprender un dummy con tan poca muestra y solo introduce ruido.
     # Umbrales en config.py (RARE_MIN_COUNT, RARE_GROUP_COLS) salvo
     # override por variedad (parametro rare_min_count, P0.2).
-    min_count = rare_min_count if rare_min_count is not None else RARE_MIN_COUNT
+    if rare_min_count is not None:
+        min_count = rare_min_count  # override explicito de VarietyConfig
+    elif ADAPT_RARE_MIN_COUNT:
+        # Escala con n: n grande -> 50 (POP identico); n chico -> baja al piso
+        # para no colapsar todo FORMATO a 'OTROS'. Ver ADAPT_RARE_MIN_COUNT.
+        min_count = min(RARE_MIN_COUNT, max(RARE_MIN_COUNT_FLOOR, round(RARE_MIN_COUNT_FRAC * len(df))))
+    else:
+        min_count = RARE_MIN_COUNT
     for col in RARE_GROUP_COLS:
         if col not in df.columns:
             continue

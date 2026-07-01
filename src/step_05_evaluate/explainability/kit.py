@@ -122,7 +122,7 @@ def build_winner_kit(
 
     abs_gap = champion.abs_gap
     verdict = compute_verdict(full_mape_pct=oof_mape, abs_gap=abs_gap)
-    context = build_context(variety, X_raw)
+    context = build_context(X_raw)
     actions = recommended_actions(
         abs_errors=abs_err,
         real=real,

@@ -84,21 +84,6 @@ skip-magic-trailing-comma = false
 # Si pinneas algo nuevo para prod, espéjalo en el requirements.txt que toque.
 # ---------------------------------------------------------------------------
 
-[tool.pytest.ini_options]
-# Suite P0 (tests/). Correr DENTRO del contenedor (mismas versiones que prod):
-#   docker compose run --rm --entrypoint sh trainer -c \
-#     "pip install -q pytest && PYTHONPATH=/app pytest -q"
-minversion = "8.0"
-testpaths = ["tests"]
-addopts = "-q --strict-markers"
-pythonpath = ["."]
-filterwarnings = [
-    # Silenciar ruido de libs de terceros (pyparsing/matplotlib) sin ocultar
-    # los warnings de NUESTRO código.
-    "ignore::DeprecationWarning:matplotlib.*",
-    "ignore::DeprecationWarning:pyparsing.*",
-]
-
 [tool.mypy]
 # Typing GRADUAL y opt-in: arrancamos laxo para no bloquear, endurecemos por
 # módulo con overrides a medida que se anotan. NO es gate de CI todavía.

@@ -102,7 +102,7 @@ def build_live_data_vm() -> LiveDataVM:
         # ensuciar la consola pero dejar rastro diagnosticable.
         try:
             points.extend(get_cached_accuracy(name, with_decomposition=False))
-        except Exception as exc:  # noqa: BLE001 — resumen best-effort, una variedad no tumba el resto
+        except Exception as exc:
             logger.debug("Precisión en vivo: variedad %s omitida (%s)", name, exc)
 
     errs = [p.error_total for p in points]

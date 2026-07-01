@@ -21,6 +21,7 @@ entrenamiento) y se usan para construir los graficos del reporte gerencial.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 import warnings
@@ -30,6 +31,7 @@ import numpy as np
 import optuna
 import pandas as pd
 from optuna.exceptions import ExperimentalWarning
+from optuna.trial import TrialState
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.pipeline import Pipeline
 
@@ -38,6 +40,9 @@ from sklearn.pipeline import Pipeline
 warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
 from src.config import (  # noqa: E402  (filterwarnings debe ir antes)
+    ADAPT_FOLDS_ROWS_PER_INNER,
+    ADAPT_FOLDS_ROWS_PER_OUTER,
+    ADAPT_FOLDS_TO_N,
     INNER_CV_FOLDS,
     OOF_ENSEMBLE_K,
     OUTER_CV_FOLDS,
@@ -76,24 +81,71 @@ def _build_model(model_type: str):
 # ---------------------------------------------------------------------------
 
 
-def _make_study(seed: int, warm_start_params: dict | None = None) -> optuna.Study:
-    """TPE multivariado. Sin pruner: cada trial devuelve UN solo score
-    (CV ya hecho), no hay valores intermedios que prunir.
+def _make_study(
+    seed: int,
+    warm_start_params: dict | None = None,
+    study_name: str | None = None,
+    logger=logger,
+) -> optuna.Study:
+    """TPE multivariado + MedianPruner opcional (ENABLE_PRUNER).
+
+    El pruner poda trials cuyo MAE parcial (reportado por `_objective` tras cada
+    inner fold) queda peor que la mediana -> ahorra el resto de folds de los
+    trials malos. Con ENABLE_PRUNER=0 usa NopPruner (comportamiento historico).
+
+    `study_name` (opcional): si se pasa Y `OPTUNA_STORAGE_URL` esta seteado, el
+    estudio PERSISTE en Postgres con ese nombre y RESUME (`load_if_exists`). Solo
+    la ronda final lo usa (los outer folds pasan study_name=None -> memoria).
+    Si la conexion falla, cae a memoria con warning (nunca rompe el training).
 
     `warm_start_params` (opcional): config del campeon registrado a evaluar
     como PRIMER trial (study.enqueue_trial). El resto de los trials parte de
     ahi via TPE. `skip_if_exists=True` lo hace idempotente ante resume. La
     siembra nunca rompe el estudio: si enqueue falla, se sigue en frio.
     """
+    from src.config import (
+        ENABLE_PRUNER,
+        OPTUNA_STORAGE_URL,
+        PRUNER_STARTUP_TRIALS,
+        PRUNER_WARMUP_STEPS,
+    )
+
     sampler = optuna.samplers.TPESampler(
         seed=seed, multivariate=True, warn_independent_sampling=False
     )
-    study = optuna.create_study(direction="minimize", sampler=sampler)
-    if warm_start_params:
+    pruner = (
+        optuna.pruners.MedianPruner(
+            n_startup_trials=PRUNER_STARTUP_TRIALS,
+            n_warmup_steps=PRUNER_WARMUP_STEPS,
+        )
+        if ENABLE_PRUNER
+        else optuna.pruners.NopPruner()
+    )
+    common = {"direction": "minimize", "sampler": sampler, "pruner": pruner}
+    study = None
+    if study_name and OPTUNA_STORAGE_URL:
         try:
+            study = optuna.create_study(
+                study_name=study_name,
+                storage=OPTUNA_STORAGE_URL,
+                load_if_exists=True,  # RESUME si ya existe
+                **common,
+            )
+            done = sum(
+                t.state.is_finished() for t in study.get_trials(deepcopy=False)
+            )
+            if done:
+                logger.info(f"Optuna RESUME | study={study_name} | trials previos={done}")
+        except Exception as exc:
+            logger.warning(
+                f"Optuna storage no disponible ({exc}); estudio en memoria (sin resume)"
+            )
+            study = None
+    if study is None:
+        study = optuna.create_study(**common)  # en memoria (default / fallback)
+    if warm_start_params:
+        with contextlib.suppress(Exception):  # siembra best-effort, nunca rompe
             study.enqueue_trial(warm_start_params, skip_if_exists=True)
-        except Exception:  # noqa: BLE001 — la siembra es best-effort, nunca rompe
-            pass
     return study
 
 
@@ -115,6 +167,7 @@ def _objective(
     model_type: str,
     sample_weights_train: np.ndarray | None = None,
     strat_label_train: pd.Series | None = None,
+    n_rows: int | None = None,
 ) -> float:
     """Optuna objective: MAE promedio del inner CV con sample_weight por fold.
 
@@ -140,10 +193,10 @@ def _objective(
 
     track_gap = OPTUNA_OBJECTIVE_GAP_PENALTY > 0.0
 
-    params = suggest_full_params(trial, model_type)
+    params = suggest_full_params(trial, model_type, n_rows=n_rows)
     scores: list[float] = []
     gaps: list[float] = []
-    for tr_i, te_i in inner_cv.split(X_train, strat_label_train):
+    for step, (tr_i, te_i) in enumerate(inner_cv.split(X_train, strat_label_train)):
         Xt = X_train.iloc[tr_i]
         Xv = X_train.iloc[te_i]
         yt = y_train.iloc[tr_i]
@@ -154,6 +207,12 @@ def _objective(
         fit_with_optional_sample_weight(pipe_local, Xt, yt, sample_weight=sw_fold)
         val_mae = float(mean_absolute_error(yv, pipe_local.predict(Xv)))
         scores.append(val_mae)
+        # Pruning: reporta el MAE parcial (media de folds evaluados) y deja que
+        # MedianPruner mate el trial si va peor que la mediana. Con NopPruner
+        # (ENABLE_PRUNER=0) should_prune() es siempre False -> sin efecto.
+        trial.report(float(np.mean(scores)), step)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
         if track_gap:
             # Costo extra (un predict del train) SOLO si la penalizacion esta
             # activa: gap = cuanto peor generaliza vs lo que memorizo del train.
@@ -176,6 +235,35 @@ def _objective(
 # ---------------------------------------------------------------------------
 # Nested CV
 # ---------------------------------------------------------------------------
+
+
+def _data_fingerprint(X: pd.DataFrame) -> str:
+    """Hash corto y determinista de los datos de la variedad.
+
+    Sirve para nombrar el estudio persistido: data nueva -> fingerprint nuevo
+    -> estudio nuevo (no se mezclan valores calculados sobre otro dataset).
+    """
+    import hashlib
+
+    payload = pd.util.hash_pandas_object(X, index=False).values.tobytes()
+    return hashlib.sha1(payload).hexdigest()[:12]
+
+
+def _adapt_folds_to_n(
+    n: int, outer_folds: int, inner_folds: int
+) -> tuple[int, int]:
+    """Recorta outer/inner folds si n es chico (nunca sube sobre el perfil).
+
+    Cada outer fold de TEST apunta a ~ADAPT_FOLDS_ROWS_PER_OUTER filas y cada
+    inner fold de VAL a ~ADAPT_FOLDS_ROWS_PER_INNER, con piso 2. n grande ->
+    devuelve los folds del perfil intactos (POP identico). Ver ADAPT_FOLDS_TO_N.
+    """
+    if not ADAPT_FOLDS_TO_N or n <= 0:
+        return outer_folds, inner_folds
+    o = max(2, min(outer_folds, n // ADAPT_FOLDS_ROWS_PER_OUTER))
+    outer_train = int(n * (o - 1) / o)
+    i = max(2, min(inner_folds, outer_train // ADAPT_FOLDS_ROWS_PER_INNER))
+    return o, i
 
 
 def _format_eta(seconds: float) -> str:
@@ -213,17 +301,21 @@ def _maybe_sample_weights(
     logger,
     X: pd.DataFrame | None = None,
     high_season_months: tuple | None = None,
+    high_season_toggle: bool | None = None,
 ) -> np.ndarray | None:
     """Computa sample_weights por decil del target o devuelve None.
 
     Capas opcionales (config-driven, se multiplican y renormalizan a media=1):
       - `SAMPLE_WEIGHT_INV_Y` (Fase B.4): pesos ∝ 1/y (alineacion MAE->MAPE).
-      - `SAMPLE_WEIGHT_HIGH_SEASON`: boost a meses pico (autopsia OOF
-        2026-06-11: peor 5% de errores 2-3x sobre-representado en ago-oct).
-        Requiere `X` con la columna de fecha.
+      - boost de temporada alta (autopsia OOF 2026-06-11: peor 5% de errores
+        2-3x sobre-representado en ago-oct). Requiere `X` con la columna fecha.
 
-    `high_season_months` (P0.2, VarietyConfig): meses pico POR VARIEDAD.
-    None = env global SAMPLE_WEIGHT_HIGH_SEASON_MONTHS (default POP 8,9,10).
+    `high_season_toggle` (VarietyConfig.sample_weight_high_season): activa/apaga
+    el boost POR VARIEDAD; None = env global SAMPLE_WEIGHT_HIGH_SEASON.
+    `high_season_months`: meses pico POR VARIEDAD. Si es None y el boost esta
+    activo, se DERIVAN de los datos (misma logica que las dummies TEMPORADA,
+    2026-07-01) en vez de caer al POP 8,9,10 — evita boostear los meses
+    equivocados en variedades con otro calendario.
     """
     if not use_sample_weights:
         return None
@@ -234,6 +326,10 @@ def _maybe_sample_weights(
         SAMPLE_WEIGHT_HIGH_SEASON_MONTHS,
         SAMPLE_WEIGHT_INV_Y,
         SAMPLE_WEIGHT_INV_Y_CAP,
+    )
+
+    high_season_on = (
+        high_season_toggle if high_season_toggle is not None else SAMPLE_WEIGHT_HIGH_SEASON
     )
 
     # n_bins/weight_cap leidos de src.config para evitar override silencioso
@@ -248,12 +344,14 @@ def _maybe_sample_weights(
         sw = sw * compute_inv_target_weights(y, weight_cap=SAMPLE_WEIGHT_INV_Y_CAP)
         sw = sw * (len(sw) / sw.sum())
         extra_tags += f" | inv_y ON (cap={SAMPLE_WEIGHT_INV_Y_CAP})"
-    if SAMPLE_WEIGHT_HIGH_SEASON and X is not None and DATE_COLUMN in X.columns:
-        meses_pico = (
-            high_season_months
-            if high_season_months is not None
-            else SAMPLE_WEIGHT_HIGH_SEASON_MONTHS
-        )
+    if high_season_on and X is not None and DATE_COLUMN in X.columns:
+        meses_pico = high_season_months
+        if meses_pico is None:
+            # Data-driven (no POP 8,9,10) cuando la variedad no fija meses.
+            from src.step_03_features.feature_engineering import FeatureGenerator
+
+            alta_d, _ = FeatureGenerator._derive_season_months(X[DATE_COLUMN], y)
+            meses_pico = alta_d if alta_d is not None else SAMPLE_WEIGHT_HIGH_SEASON_MONTHS
         months = pd.to_datetime(X[DATE_COLUMN], errors="coerce").dt.month
         boost = np.where(
             months.isin(meses_pico).to_numpy(),
@@ -337,6 +435,9 @@ def _run_outer_cv_loop(
                 model_type,
                 sample_weights_train=sw_tr,
                 strat_label_train=strat_tr,
+                # n_rows = n de la VARIEDAD (no del fold): la capacidad se acota
+                # por el tamano del dataset completo, estable entre folds.
+                n_rows=n,
             ),
             n_trials=n_trials,
             show_progress_bar=False,
@@ -419,7 +520,11 @@ def _temporal_honesty_check(
     Nunca rompe el training: cualquier excepcion se absorbe con warning
     y devuelve {} (las metricas duales simplemente no se loggean).
     """
-    from src.config import DUAL_CV_FOLDS, TEMPORAL_CV_MIN_TRAIN_YEARS
+    from src.config import (
+        DUAL_CV_FOLDS,
+        TEMPORAL_CV_MIN_TRAIN_YEARS,
+        TEMPORAL_MAPE_REL_FLOOR,
+    )
     from src.step_04_train.temporal_cv import TemporalYearSplit
 
     try:
@@ -428,6 +533,24 @@ def _temporal_honesty_check(
             n_splits=DUAL_CV_FOLDS,
             min_train_years=TEMPORAL_CV_MIN_TRAIN_YEARS,
         )
+        # Guard por años de historia (2026-07-01): con 2 años el splitter da 0
+        # folds (antes: {} SILENCIOSO); con 3 años da 1 fold (una sola ventana,
+        # metricas de alta varianza). Aca solo avisamos el porque; el consumidor
+        # (quality_gate) usa temporal_n_folds para NO warnear drift con <2 folds.
+        k_folds = splitter.get_n_splits(X)
+        if k_folds <= 0:
+            logger.info(
+                "Chequeo temporal OMITIDO: historia insuficiente "
+                f"(folds={k_folds} con min_train_years={TEMPORAL_CV_MIN_TRAIN_YEARS}); "
+                "se necesitan al menos min_train_years+1 anios de datos."
+            )
+            return {}
+        if k_folds == 1:
+            logger.info(
+                "Chequeo temporal con UN solo fold (3 anios de historia): "
+                "las metricas temporales son una sola ventana (alta varianza), "
+                "tomarlas como indicativas, no como senal de drift."
+            )
         n = len(y)
         oof_pred = np.full(n, np.nan, dtype=float)
         mae_folds = []
@@ -443,16 +566,33 @@ def _temporal_honesty_check(
             mae_folds.append(float(mean_absolute_error(y_te, y_pred)))
 
         y_arr = np.asarray(y, dtype=float)
-        mask = np.isfinite(oof_pred) & np.isfinite(y_arr) & (np.abs(y_arr) > 1e-9)
-        if not mask.any():
+        base_mask = np.isfinite(oof_pred) & np.isfinite(y_arr)
+        # Piso RELATIVO para el MAPE (fix 2026-07-01): el umbral viejo 1e-9
+        # dejaba pasar targets casi-cero (artefactos de carga) que explotaban
+        # el APE — ATLAS reporto temporal_MAPE 720% por 8 filas de ~0.0002.
+        # R2/MAE siguen usando base_mask (robustos a escala); solo el MAPE
+        # excluye denominadores implausibles. Ver TEMPORAL_MAPE_REL_FLOOR.
+        med = float(np.nanmedian(np.abs(y_arr[base_mask]))) if base_mask.any() else 0.0
+        denom_floor = max(1e-9, TEMPORAL_MAPE_REL_FLOOR * med)
+        mask = base_mask & (np.abs(y_arr) >= denom_floor)
+        n_mape_excl = int((base_mask & ~mask).sum())
+        if not base_mask.any():
             logger.warning("Chequeo temporal sin filas OOF validas; se omite.")
             return {}
+        if n_mape_excl:
+            logger.info(
+                f"Chequeo temporal: {n_mape_excl} fila(s) excluidas del MAPE por "
+                f"denominador < {denom_floor:.4f} (artefactos casi-cero); "
+                "R2/MAE las conservan."
+            )
         ape = np.abs(oof_pred[mask] - y_arr[mask]) / np.abs(y_arr[mask])
         metrics = {
-            "temporal_mape_oof": float(ape.mean() * 100.0),
-            "temporal_r2_oof": float(r2_score(y_arr[mask], oof_pred[mask])),
+            "temporal_mape_oof": float(ape.mean() * 100.0) if mask.any() else float("nan"),
+            "temporal_r2_oof": float(r2_score(y_arr[base_mask], oof_pred[base_mask])),
             "temporal_mae_test_mean": float(np.mean(mae_folds)),
-            "temporal_n_oof": float(mask.sum()),
+            "temporal_n_oof": float(base_mask.sum()),
+            "temporal_n_folds": float(k_folds),
+            "temporal_mape_n_excluded": float(n_mape_excl),
         }
         logger.info(
             f"Chequeo honesto temporal | MAPE_oof={metrics['temporal_mape_oof']:.2f}% | "
@@ -462,7 +602,7 @@ def _temporal_honesty_check(
             f"(forecast de anio no visto; el stratified mide interpolacion)"
         )
         return metrics
-    except Exception as exc:  # noqa: BLE001 — el chequeo jamas rompe el training
+    except Exception as exc:
         logger.warning(f"Chequeo temporal fallo (se omite del reporte): {exc}")
         return {}
 
@@ -482,6 +622,7 @@ def _pick_final_params(
     random_state: int,
     logger,
     warm_start_params: dict | None = None,
+    study_name: str | None = None,
 ) -> dict[str, object]:
     """Devuelve los params para el refit final.
 
@@ -490,6 +631,8 @@ def _pick_final_params(
       - `False` (default): ronda extra de Optuna sobre TODO el dataset.
 
     `warm_start_params`: siembra la ronda final con el campeon registrado.
+    `study_name`: si se pasa y hay OPTUNA_STORAGE_URL, la ronda persiste y
+    RESUME (solo corre los trials que faltan).
     """
     if skip_final_tuning:
         # Fold MEDIANO por MAE_test, no argmin (2026-06-13): el argmin
@@ -503,8 +646,24 @@ def _pick_final_params(
         )
         return fold_results.best_params[best_idx]
 
-    logger.info(f"Ronda final | trials={final_trials} sobre dataset completo...")
-    final_study = _make_study(random_state, warm_start_params=warm_start_params)
+    final_study = _make_study(
+        random_state, warm_start_params=warm_start_params, study_name=study_name, logger=logger
+    )
+    # RESUME: descontar los trials ya terminados (persistidos). Si ya se
+    # completaron todos y hay al menos uno COMPLETE, se salta el optimize.
+    trials = final_study.get_trials(deepcopy=False)
+    finished = sum(t.state.is_finished() for t in trials)
+    completed = sum(t.state == TrialState.COMPLETE for t in trials)
+    n_remaining = max(0, final_trials - finished)
+    if n_remaining == 0 and completed == 0:
+        n_remaining = final_trials  # estudio sin trials utiles: recomputar
+    logger.info(
+        f"Ronda final | trials={final_trials} (ya={finished}, faltan={n_remaining}) "
+        f"sobre dataset completo..."
+    )
+    if n_remaining == 0:
+        logger.info("Ronda final ya completa (resume): usando best_params persistidos.")
+        return final_study.best_params
     final_study.optimize(
         lambda trial: _objective(
             trial,
@@ -515,8 +674,9 @@ def _pick_final_params(
             model_type,
             sample_weights_train=sample_weights,
             strat_label_train=strat_label,
+            n_rows=len(y),
         ),
-        n_trials=final_trials,
+        n_trials=n_remaining,
         show_progress_bar=False,
         gc_after_trial=True,
         catch=(Exception,),  # idem outer loop: trial fallido != run fallido
@@ -599,6 +759,15 @@ def perform_nested_cv(
     inner_folds = inner_folds or INNER_CV_FOLDS
     final_trials = final_trials if final_trials is not None else n_trials
 
+    # Recorte n-adaptativo de folds (variedades chicas): POP queda igual.
+    _o0, _i0 = outer_folds, inner_folds
+    outer_folds, inner_folds = _adapt_folds_to_n(len(X), outer_folds, inner_folds)
+    if (outer_folds, inner_folds) != (_o0, _i0):
+        logger.info(
+            f"Folds n-adaptativos (n={len(X)}): outer {_o0}->{outer_folds}, "
+            f"inner {_i0}->{inner_folds}"
+        )
+
     outer_cv, inner_cv, strat_label, strat_strategy = build_cv_splitters(
         X,
         outer_folds,
@@ -630,6 +799,7 @@ def perform_nested_cv(
         logger,
         X=X,
         high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
+        high_season_toggle=getattr(variety_cfg, "sample_weight_high_season", None),
     )
 
     # Warm-start (2026-06-25): sembrar la RONDA FINAL con el campeon ya
@@ -642,6 +812,16 @@ def perform_nested_cv(
     warm_start_params = build_warm_start_params(
         getattr(variety_cfg, "variety", None), model_type, logger
     )
+
+    # Nombre del estudio para PERSISTIR + RESUME la ronda final (solo si hay
+    # OPTUNA_STORAGE_URL; si no, None -> estudio en memoria). Incluye fingerprint
+    # de los datos: data nueva -> estudio nuevo (no mezcla valores stale).
+    from src.config import OPTUNA_STORAGE_URL
+
+    final_study_name = None
+    if OPTUNA_STORAGE_URL:
+        variety = getattr(variety_cfg, "variety", None) or "novar"
+        final_study_name = f"final_{variety}_{model_type}_{_data_fingerprint(X)}"
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     t0 = time.perf_counter()
@@ -686,6 +866,7 @@ def perform_nested_cv(
         random_state=random_state,
         logger=logger,
         warm_start_params=warm_start_params,
+        study_name=final_study_name,
     )
 
     # Reporte dual (Fase A.2): si el outer fue stratified, anadir el chequeo

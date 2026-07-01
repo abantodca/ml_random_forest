@@ -286,21 +286,9 @@ tasks:
         EOF
 
   lint:
-    desc: "ruff check src/ main.py scripts/ tests/ api/ ui/ (config en pyproject.toml)"
+    desc: "ruff check src/ main.py scripts/ api/ ui/ (config en pyproject.toml)"
     cmds:
-      - ruff check src/ main.py scripts/ tests/ api/ ui/
-
-  test:
-    desc: "Suite pytest P0 DENTRO de los contenedores (trainer + api, mismas versiones que prod)"
-    cmds:
-      # Trainer: lag transformer, champion, conformal, variety config, guard.
-      - >-
-        docker compose run --rm -v "{{.PWD}}/tests:/app/tests" --entrypoint sh trainer
-        -c "pip install -q pytest 2>/dev/null; PYTHONPATH=/app python -m pytest tests/ -q"
-      # API: _conformal_halfwidths (en trainer se salta solo via importorskip).
-      - >-
-        docker compose run --rm --user root -v "{{.PWD}}/tests:/app/tests" --entrypoint sh api
-        -c "/opt/venv/bin/pip install -q pytest 2>/dev/null; cd /app && /opt/venv/bin/python -m pytest tests/test_api_conformal.py -q"
+      - ruff check src/ main.py scripts/ api/ ui/
 
   # ═══ Atajos high-level del stack AWS ════════════════════════════════════════
 

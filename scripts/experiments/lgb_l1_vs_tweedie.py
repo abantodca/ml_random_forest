@@ -215,7 +215,7 @@ try:
             f"{k:<12}{results[k]['business_mape']:>8.2f}{seg_mape(o, m_gran):>9.2f}"
             f"{seg_mape(o, m_a9g):>9.2f}{abs_err_kg(o):>11.0f}"
         )
-except Exception as exc:  # noqa: BLE001 - desglose es informativo, no debe abortar
+except Exception as exc:
     print(f"(desglose por segmento omitido: {exc})")
 
 np.savez(

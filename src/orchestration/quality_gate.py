@@ -16,7 +16,7 @@ import argparse
 from typing import TYPE_CHECKING
 
 from src.config import (
-    CHAMPION_MAX_GAP,
+    CHAMPION_MAX_GAP_REL,
     CHAMPION_MAX_MAPE,
     CHAMPION_WARN_TEMPORAL_MAPE,
     CHAMPION_WARN_TEMPORAL_R2,
@@ -38,6 +38,13 @@ def _warn_temporal_generalization(champion: ModelResult, variety: str, logger) -
     t_mape = champion.metrics.get("temporal_mape_oof")
     t_r2 = champion.metrics.get("temporal_r2_oof")
     if t_mape is None and t_r2 is None:
+        return
+    # Con <2 folds temporales (3 anios de historia) las metricas son UNA sola
+    # ventana: demasiado ruidosas para acusar drift. El chequeo ya lo loguea
+    # como indicativo; aqui NO warneamos (2026-07-01). Runs viejos sin
+    # temporal_n_folds conservan el comportamiento historico (warnean).
+    n_folds = champion.metrics.get("temporal_n_folds")
+    if n_folds is not None and n_folds < 2:
         return
     mape_bad = t_mape is not None and t_mape > CHAMPION_WARN_TEMPORAL_MAPE
     r2_bad = t_r2 is not None and t_r2 < CHAMPION_WARN_TEMPORAL_R2
@@ -104,8 +111,12 @@ def apply_quality_gate(
         )
         return False
 
+    # Gap RELATIVO (unificado 2026-07-01): select_champion decide con gap_rel
+    # (adimensional, comparable entre variedades); este warning usaba el gap
+    # absoluto viejo (kilos*100 llamado "pp", ver caveat en config) — dos
+    # definiciones conviviendo confundian el log. Ahora ambos hablan gap_rel.
     mape_ok = champion.oof_mape <= CHAMPION_MAX_MAPE
-    gap_ok = (champion.abs_gap * 100) <= CHAMPION_MAX_GAP
+    gap_ok = champion.gap_rel <= CHAMPION_MAX_GAP_REL
 
     if not mape_ok:
         logger.warning(
@@ -127,8 +138,8 @@ def apply_quality_gate(
     if not gap_ok:
         logger.warning(
             f"[{variety}] CAMPEON registra con WARNING de overfitting | "
-            f"gap={champion.abs_gap * 100:.2f}pp supera threshold "
-            f"{CHAMPION_MAX_GAP}pp pero MAPE_oof={champion.oof_mape:.2f}% "
+            f"gap_rel={champion.gap_rel:.2f} supera threshold "
+            f"{CHAMPION_MAX_GAP_REL} pero MAPE_oof={champion.oof_mape:.2f}% "
             f"(<={CHAMPION_MAX_MAPE}%) confirma calidad operativa OK. "
             f"El gap es diagnostico de memoria del train, NO afecta predicciones "
             f"OOF/produccion. Modelo aprobado para Registry."
@@ -137,7 +148,7 @@ def apply_quality_gate(
     logger.info(
         f"[{variety}] CAMPEON pasa quality gate | "
         f"MAPE_oof={champion.oof_mape:.2f}% (max={CHAMPION_MAX_MAPE}%) | "
-        f"gap={champion.abs_gap * 100:.2f}pp (max={CHAMPION_MAX_GAP}pp). "
+        f"gap_rel={champion.gap_rel:.2f} (max={CHAMPION_MAX_GAP_REL}). "
         f"Registra en MLflow Model Registry."
     )
     return args.register_model

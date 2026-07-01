@@ -690,11 +690,6 @@ def lag_output_columns(flags: dict | None = None) -> list[str]:
     )
 
 
-# Compat: snapshot al importar (uso en notebooks/scripts legacy). El
-# transformer NO usa esta constante: usa lag_output_columns(self.flags_).
-LAG_OUTPUT_COLUMNS: list[str] = lag_output_columns()
-
-
 def _history_cols(flags: dict | None = None) -> list[str]:
     """Columnas raw que el transformer memoriza en history_. Con
     feature_lags activo tambien P/BAYA y DPC (sus lags requieren historia
@@ -703,10 +698,6 @@ def _history_cols(flags: dict | None = None) -> list[str]:
     return ["FUNDO", "FORMATO", DATE_COLUMN, KG_HA_COL] + (
         ["P/BAYA", "DPC"] if f["feature_lags"] else []
     )
-
-
-# Compat para imports legacy; el transformer usa _history_cols(self.flags_).
-_HISTORY_COLS: list[str] = _history_cols()
 
 
 class LagFeatureTransformer(BaseEstimator, TransformerMixin):
@@ -721,9 +712,9 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
     - `fit(X, y)`        : guarda `self.history_` con (FUNDO, FORMATO,
       FECHA, KG/HA, target) extraido de los datos de entrenamiento.
     - `fit_transform(X, y)` : ademas devuelve X con las columnas de lag
-      agregadas (segun `LAG_OUTPUT_COLUMNS`), calculadas sobre el propio
-      train (esto es lo que ven los siguientes pasos del pipeline durante
-      fit).
+      agregadas (segun `lag_output_columns(self.flags_)`), calculadas sobre
+      el propio train (esto es lo que ven los siguientes pasos del pipeline
+      durante fit).
     - `transform(X_new)` : combina history + filas nuevas (con TARGET=NaN
       para las nuevas), llama a `add_lag_features` y devuelve solo las
       filas nuevas con lags. Para inferencia el caller no necesita

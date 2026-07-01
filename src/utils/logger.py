@@ -139,7 +139,8 @@ def log_business_audit(
         f"MAPE={moof.get('mape', float('nan')):.2f}% | "
         f"InSample: R2={mins.get('r2', float('nan')):.4f} "
         f"MAE={mins.get('mae', float('nan')):.4f} | "
-        f"n_oof={business_validation.n_oof} n_drop={business_validation.n_dropped_business}"
+        f"n_oof={business_validation.n_oof} n_drop={business_validation.n_dropped_business} "
+        f"mape_excl={int(moof.get('mape_n_excluded', 0))}"
     )
 
     record = {

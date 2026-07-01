@@ -88,18 +88,14 @@ def _safe_mlflow_call(fn: Callable, op_name: str) -> Any:
         raise
 
 
-def init_mlflow(
-    experiment_name: str | None = None,
-    tracking_uri: str = MLFLOW_TRACKING_URI,
-) -> None:
-    """Configura backend (local o remoto). Setea experimento si se provee.
+def init_mlflow() -> None:
+    """Configura el backend de tracking (local o remoto, MLFLOW_TRACKING_URI).
 
-    En multi-variedad NO se pasa experiment_name aqui: cada `train_one_variety`
-    setea su propio experimento dinamicamente con `mlflow.set_experiment(...)`.
+    No setea experimento: cada `train_one_variety` setea el suyo dinamicamente
+    con `mlflow.set_experiment(...)`. (Los params experiment_name/tracking_uri
+    se retiraron el 2026-07-01: ningun caller los pasaba.)
     """
-    mlflow.set_tracking_uri(tracking_uri)
-    if experiment_name:
-        mlflow.set_experiment(experiment_name)
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
 def set_experiment(experiment_name: str) -> None:

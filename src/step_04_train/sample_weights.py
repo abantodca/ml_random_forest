@@ -20,11 +20,18 @@ def compute_sample_weights(
     y: pd.Series,
     n_bins: int = 20,
     weight_cap: float = 5.0,
+    min_rows_per_bin: int = 40,
 ) -> np.ndarray:
     """Pesos inversos a la densidad del target con bins de IGUAL ANCHO.
 
     `qcut` (igual frecuencia) daria pesos uniformes; `cut` (igual ancho)
     hace que las colas (target muy alto/bajo, poca masa) reciban mas peso.
+
+    `n_bins` se RECORTA por n (fix multi-variedad 2026-07-01): con bins de igual
+    ancho y n chico o alta varianza, los bins de la cola tienen 1-2 filas y
+    reciben el peso maximo -> amplifican justo las filas mas ruidosas. Se limita
+    a n//min_rows_per_bin (piso 3) para que cada bin tenga masa. n grande ->
+    n_bins pedido (POP identico).
 
     Pipeline:
       1. Bins de igual ancho sobre el rango del target.
@@ -40,12 +47,15 @@ def compute_sample_weights(
     y_arr = np.asarray(y, dtype=float)
     n = len(y_arr)
 
+    # Recorte de bins por n: cada bin apunta a >= min_rows_per_bin filas.
+    n_bins_eff = min(n_bins, max(3, n // max(1, min_rows_per_bin)))
+
     # `pd.cut` puede devolver NaN cuando y contiene NaN o en casos borde
     # (ej: valores fuera del rango de bins por float-precision). Mapear NaN
     # a un bin sentinel -1 antes de indexar evita ValueError al hacer
     # int(NaN). Las filas con bin=-1 reciben weight neutral (1.0) y por
     # tanto no contribuyen al re-balanceo.
-    bins = pd.cut(y_arr, bins=n_bins, labels=False, include_lowest=True)
+    bins = pd.cut(y_arr, bins=n_bins_eff, labels=False, include_lowest=True)
     bins = pd.Series(bins).fillna(-1).astype(int).to_numpy()
     counts = pd.Series(bins).value_counts().to_dict()
 

@@ -170,7 +170,7 @@ def train_model(
                     f"por_fundo={ {k: round(v, 2) for k, v in qbf.items()} } | "
                     f"known_ff={len(final_pipeline.conformal_['known_ff'])}"
                 )
-        except Exception as exc:  # noqa: BLE001 — metadata opcional, jamas rompe el run
+        except Exception as exc:
             logger.warning(f"Conformal metadata fallo (se omite): {exc}")
             final_pipeline.conformal_ = None
 

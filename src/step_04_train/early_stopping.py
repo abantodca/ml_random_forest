@@ -36,6 +36,7 @@ from xgboost import XGBRegressor
 
 from src.config import (
     EARLY_STOPPING_MIN_ROWS,
+    EARLY_STOPPING_MIN_VAL,
     EARLY_STOPPING_ROUNDS,
     EARLY_STOPPING_VAL_FRACTION,
     RANDOM_STATE,
@@ -66,7 +67,7 @@ def _log_overfit(est, name: str, X_tr, y_tr, X_va, y_va) -> None:
             mae_va,
             mae_va - mae_tr,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("%s early-stop: diagnostico no disponible: %s", name, exc)
 
 
@@ -74,7 +75,11 @@ def _holdout_indices(n_rows: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
     """Devuelve (idx_train, idx_valid) con un shuffle reproducible."""
     rng = np.random.RandomState(seed)
     idx = rng.permutation(n_rows)
-    n_val = max(1, int(n_rows * EARLY_STOPPING_VAL_FRACTION))
+    # Holdout = fraccion, pero con piso absoluto (EARLY_STOPPING_MIN_VAL) para
+    # que en n chico el eval_set no sea degenerado, capado a n/3 para no vaciar
+    # el train. En n grande domina la fraccion (POP identico).
+    n_val = min(max(int(n_rows * EARLY_STOPPING_VAL_FRACTION), EARLY_STOPPING_MIN_VAL), n_rows // 3)
+    n_val = max(1, n_val)
     return idx[n_val:], idx[:n_val]
 
 
@@ -114,7 +119,7 @@ def _seed_of(estimator) -> int:
 class EarlyStoppingLGBMRegressor(LGBMRegressor):
     """LGBMRegressor que corta arboles con early stopping interno."""
 
-    def fit(self, X, y, sample_weight=None, **kwargs):  # noqa: D102
+    def fit(self, X, y, sample_weight=None, **kwargs):
         n_rows = len(np.asarray(y))
         if n_rows < EARLY_STOPPING_MIN_ROWS:
             return super().fit(X, y, sample_weight=sample_weight, **kwargs)
@@ -146,7 +151,7 @@ class EarlyStoppingXGBRegressor(XGBRegressor):
     setea/limpia segun haya holdout o no.
     """
 
-    def fit(self, X, y, sample_weight=None, **kwargs):  # noqa: D102
+    def fit(self, X, y, sample_weight=None, **kwargs):
         n_rows = len(np.asarray(y))
         if n_rows < EARLY_STOPPING_MIN_ROWS:
             self.early_stopping_rounds = None

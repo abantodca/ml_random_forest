@@ -10,13 +10,9 @@ Funciones:
   - conformal_intervals    : bandas de prediccion con garantia estadistica.
   - calibration_bins       : agregacion por bin para calibration plot.
 
-DEPRECATED:
-  - `breusch_pagan_test`        -> usar `src.diagnostics.statistical_tests.breusch_pagan_residuals`
-  - `HeteroscedasticityTest`    -> usar `src.diagnostics.statistical_tests.TestResult`
-
-Se mantienen como alias para no romper consumidores externos durante la
-transicion. Devuelven los mismos numeros que la implementacion original
-(la logica fue movida tal cual a `diagnostics`).
+Los tests de heterocedasticidad viven en `src.diagnostics.statistical_tests`
+(breusch_pagan_residuals / TestResult); los alias deprecados de la transicion
+se retiraron el 2026-07-01 al confirmar cero consumidores.
 """
 
 from __future__ import annotations
@@ -26,14 +22,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-
-# Alias deprecados: re-export desde la implementacion canonica en diagnostics.
-# `HeteroscedasticityTest` ahora es `TestResult` (superset compatible: expone
-# .p_value, .is_heteroscedastic y .note, ademas del resto de campos del
-# diagnostico estadistico generico).
-from src.diagnostics.statistical_tests import (  # noqa: F401
-    TestResult as HeteroscedasticityTest,
-)
 
 
 @dataclass(frozen=True)

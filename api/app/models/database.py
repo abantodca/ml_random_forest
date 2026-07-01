@@ -60,7 +60,7 @@ async def ensure_database(database_url: str) -> None:
     maintenance_dsn = urlunsplit(parts._replace(path="/postgres"))
     try:
         conn = await asyncpg.connect(dsn=maintenance_dsn, timeout=10)
-    except Exception as exc:  # noqa: BLE001 — best-effort bootstrap
+    except Exception as exc:
         logger.warning(
             "ensure_database: no se pudo conectar a 'postgres' (%s); se asume que '%s' ya existe.",
             exc,

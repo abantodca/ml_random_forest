@@ -41,10 +41,7 @@ from src.step_05_evaluate.explainability.context import (
     TrainingContext,
     build_context,
 )
-from src.step_05_evaluate.explainability.glossary import (
-    GLOSSARY,
-    glossary_terms,
-)
+from src.step_05_evaluate.explainability.glossary import glossary_terms
 from src.step_05_evaluate.explainability.kit import (
     WinnerKit,
     build_winner_kit,
@@ -79,7 +76,6 @@ __all__ = [
     "TrainingContext",
     "build_context",
     # glossary
-    "GLOSSARY",
     "glossary_terms",
     # kit
     "WinnerKit",
