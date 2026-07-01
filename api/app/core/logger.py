@@ -7,6 +7,8 @@ Define el formato y nivel de logs para toda la aplicación
 import logging
 import sys
 
+_VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
 
 def setup_logger(name: str = "rnd-forest-backend", level: str = "INFO") -> logging.Logger:
     """
@@ -18,9 +20,20 @@ def setup_logger(name: str = "rnd-forest-backend", level: str = "INFO") -> loggi
 
     Returns:
         Logger configurado
+
+    Raises:
+        ValueError: si `level` no es un nivel de logging válido. Sin esta guarda,
+            un valor mal escrito reventaba con un AttributeError opaco en
+            `getattr(logging, ...)`.
     """
+    normalized_level = level.upper()
+    if normalized_level not in _VALID_LEVELS:
+        raise ValueError(
+            f"level '{level}' no válido. Valores aceptados: {', '.join(sorted(_VALID_LEVELS))}"
+        )
+
     logger = logging.getLogger(name)
-    logger.setLevel(getattr(logging, level.upper()))
+    logger.setLevel(getattr(logging, normalized_level))
 
     # Silenciar el ruidoso "Detected one or more mismatches" del sublogger
     # `mlflow.utils.requirements_utils`. Ese mensaje lista deps OPCIONALES

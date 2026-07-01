@@ -21,5 +21,13 @@ variable "workdays_cron" {
   type    = string
   default = "MON,WED,FRI" # Patch 13.1: solo L/Mi/V (antes: "MON-FRI")
 }
+variable "enable_work_hours_cron" {
+  # Crons de encendido/apagado por horario laboral (start + stop). Con false
+  # (default) NO se crean: el stack solo se enciende/apaga manual via
+  # `task wake`/`task sleep` (que invocan el Lambda directo). El Lambda,
+  # el keepstop del RDS y el autostop de Batch siguen existiendo igual.
+  type    = bool
+  default = false
+}
 variable "log_retention_days" { type = number }
 variable "lambdas_src_dir" { type = string }

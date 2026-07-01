@@ -58,6 +58,15 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in v.split(",")]
         return v
 
+    @field_validator("health_cache_ttl_seconds")
+    @classmethod
+    def validate_ttl(cls, v: int) -> int:
+        """Un TTL <= 0 haría que el cache de health expirara de inmediato
+        (siempre miss), anulando su propósito. Fail-fast al boot."""
+        if v <= 0:
+            raise ValueError("health_cache_ttl_seconds debe ser > 0")
+        return v
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

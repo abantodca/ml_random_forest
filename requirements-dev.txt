@@ -26,3 +26,9 @@ pre-commit==4.4.0
 # Type-checker gradual/opt-in (config en pyproject.toml [tool.mypy]).
 # Aún NO es gate de CI; se endurece por módulo con overrides.
 mypy==1.18.2
+
+# Gráficos en notebooks (encima de matplotlib, que viene de requirements.txt).
+seaborn==0.13.2
+
+# Kernel Jupyter para correr los notebooks (notebooks/).
+ipykernel==7.3.0

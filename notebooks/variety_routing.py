@@ -61,21 +61,33 @@ class ExperimentConfig:
         ]
     )
     anchor_varieties: list = field(
-        # Nombres = hojas del Excel. "POP"/"BEAUTY" son SEKOYA POP / SEKOYA
-        # BEAUTY (las 2 variedades con más datos); con el nombre largo NO
-        # matcheaban la hoja y caían como no-anclas.
+        # FUENTE ÚNICA DE VERDAD del set de anclas: la consumen tanto el prior
+        # distribucional (§1-§5: Wasserstein/Cliff/bootstrap/silhouette) como la
+        # decisión predictiva (§7: MAPE OOS) → ambas capas describen el MISMO set.
+        #
+        # Nombres = hojas del Excel. "POP"/"BEAUTY" son SEKOYA POP / SEKOYA BEAUTY
+        # (las 2 variedades con más datos); con el nombre largo NO matcheaban la
+        # hoja y caían como no-anclas.
+        #
+        # Reconciliado 2026-06-26 al set predictivo (se autopredicen mejor que
+        # cualquier donante, MAPE OOS): entra KIRRA (auto-MAPE 6.3%); salen BELLA y
+        # ARANA (pasan a ruteadas, pero con n holgado y ganancia negativa →
+        # candidatas a re-promover; ver SUSTENTO_ESTADISTICO_RUTEO.md §7.4).
+        #
+        # Baja 2026-06-26: BILOXI deja de ser ancla (la variedad ya no se cultiva,
+        # no se justifica un modelo propio). Sus filas históricas se conservan y se
+        # rutean al ancla que mejor la pronostica → 10 anclas.
         default_factory=lambda: [
             "POP",
-            "VENTURA",
             "BEAUTY",
+            "VENTURA",
             "BIANCA",
             "ATLAS",
             "JUPITER",
-            "ROSITA",
-            "BELLA",
-            "ARANA",
-            "EMERALD",
             "MAGICA",
+            "EMERALD",
+            "KIRRA",
+            "ROSITA",
         ]
     )
     excel_path: str = "../data/training/DB-HISTORICA.xlsx"

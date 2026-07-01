@@ -14,6 +14,7 @@ from datetime import date, datetime
 from sqlalchemy import Date, DateTime, Float, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.catalogs import FORMATO_DEFAULT
 from app.models.database import Base
 
 
@@ -36,7 +37,10 @@ class Forecast(Base):
     p_baya: Mapped[float | None] = mapped_column(Float, nullable=True)
     ha: Mapped[float] = mapped_column(Float, nullable=False)
     dia_cosecha: Mapped[int] = mapped_column(Integer, nullable=False)
-    formato: Mapped[str] = mapped_column(String(40), nullable=False, default="FRESCO")
+    # default alineado al catálogo (FORMATO_DEFAULT). En la práctica el schema
+    # Pydantic siempre provee formato validado antes de llegar al ORM, pero el
+    # valor anterior ("FRESCO") no era un miembro válido de Formato y confundía.
+    formato: Mapped[str] = mapped_column(String(40), nullable=False, default=FORMATO_DEFAULT.value)
     fundo: Mapped[str] = mapped_column(String(80), nullable=False)
 
     # Metadato del request (no entra al modelo)

@@ -46,6 +46,10 @@ class VarietyConfig:
       sample_weight_high_season_months:
           boost de temporada alta en tuning._maybe_sample_weights
           (default: env SAMPLE_WEIGHT_HIGH_SEASON_MONTHS, hoy "8,9,10").
+      sample_weight_high_season:
+          toggle POR VARIEDAD del boost de temporada alta. None = usa el env
+          global SAMPLE_WEIGHT_HIGH_SEASON (hoy OFF). Permite activar el boost
+          solo en variedades donde ayuda, sin encenderlo para todo el proceso.
       imputer_knn_threshold:
           fallback_threshold de CustomKNNImputer
           (default: env IMPUTER_KNN_THRESHOLD, hoy 0.30).
@@ -58,16 +62,24 @@ class VarietyConfig:
     high_season_months: tuple[int, ...] | None = None
     low_season_months: tuple[int, ...] | None = None
     sample_weight_high_season_months: tuple[int, ...] | None = None
+    sample_weight_high_season: bool | None = None
     imputer_knn_threshold: float | None = None
     rare_min_count: int | None = None
 
 
-# Overrides explicitos por hoja del Excel. POP vacio = defaults globales
-# (sus valores SON los defaults historicos del proyecto; documentarlo aqui
-# evita que un cambio de default global mute a POP sin querer... si eso
-# preocupa, fijar aqui los valores actuales de POP explicitamente).
+# Overrides explicitos por hoja del Excel. Variedad sin entrada = defaults
+# globales (hoy DATA-DRIVEN: temporada autodetectada, capacidad/folds por n).
+#
+# POP fija sus meses de temporada EXPLICITAMENTE (2026-07-01): son los valores
+# historicos validados con su EDA. Sin este pin, SEASON_AUTODETECT derivaria
+# (7,8,9,10)/(1,2,3,4) — parecido pero NO identico al literal (6-10)/(12-4) —
+# y cambiaria silenciosamente el comportamiento de la variedad de referencia.
+# Exactamente el escenario que el comentario original de este dict advertia.
 VARIETY_OVERRIDES: dict[str, dict[str, object]] = {
-    "POP": {},
+    "POP": {
+        "high_season_months": (6, 7, 8, 9, 10),
+        "low_season_months": (12, 1, 2, 3, 4),
+    },
 }
 
 _VALID_FIELDS = {f.name for f in fields(VarietyConfig)} - {"variety"}

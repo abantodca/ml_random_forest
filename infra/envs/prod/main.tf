@@ -132,7 +132,8 @@ module "lambdas" {
 }
 
 # -------------------------------------------------------------------------
-# Capa 8: Scheduler (auto on/off RDS + Fargate)
+# Capa 8: Scheduler (Lambda on/off RDS + Fargate; crons por horario opt-in via
+# enable_work_hours_cron, default false -> wake/sleep 100% manual)
 # -------------------------------------------------------------------------
 module "scheduler" {
   source = "../../modules/scheduler"
@@ -146,6 +147,7 @@ module "scheduler" {
   rds_instance_id          = module.mlflow.rds_instance_id
   job_queue_spot_name      = module.batch.job_queue_spot
   job_queue_ondemand_name  = module.batch.job_queue_ondemand
+  enable_work_hours_cron   = var.enable_work_hours_cron
   work_start_hour_local    = var.work_start_hour_local
   work_end_hour_local      = var.work_end_hour_local
   log_retention_days       = var.log_retention_days

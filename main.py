@@ -15,7 +15,7 @@ Uso directo (CLI avanzado):
 El pipeline SIEMPRE entrena todos los backends del registry (XGB + LGB hoy)
 y `champion.select_champion` elige el ganador por variedad (lex-order:
 gap -> MAPE -> tiempo). No hay flag de usuario para forzar un modelo: ese
-es el contrato del proyecto. Default --tuning prod. Cada variedad es
+es el contrato del proyecto. Default --tuning dev. Cada variedad es
 independiente: si una falla, las demas continuan.
 """
 
@@ -25,6 +25,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from src.config import (
     ACCUMULATED_FILE,
@@ -130,7 +131,7 @@ def _write_aggregate_summary(
     varieties: list[str],
     models: list[str],
     elapsed_seconds: float,
-) -> ARTIFACTS_DIR.__class__:  # path-like
+) -> Path:
     return dump_json_artifact(
         ARTIFACTS_DIR / "run_summary_AGGREGATE.json",
         {
@@ -166,7 +167,7 @@ def _run_eda_mode(varieties: list[str], logger) -> int:
         try:
             out_path = run_eda(v)
             logger.info(f"[EDA/{v}] reporte: {out_path}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(f"[EDA/{v}] fallo: {exc}")
             failed.append(v)
 
@@ -208,11 +209,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    try:
-        varieties = resolve_varieties(args.varieties)
-    except ValueError as exc:
-        logger.error(str(exc))
-        return 2
+    # resolve_varieties valida contra el catalogo y aborta con sys.exit(2)
+    # ante variedades desconocidas (no lanza ValueError).
+    varieties = resolve_varieties(args.varieties)
     # El proyecto NO permite forzar un modelo: siempre entrena todos los
     # backends del registry y `champion.select_champion` decide el ganador
     # por variedad (lex-order: gap -> MAPE -> tiempo).

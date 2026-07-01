@@ -25,8 +25,12 @@ from pathlib import Path
 import mlflow
 from mlflow.exceptions import MlflowException
 
-from src.config import ARTIFACTS_DIR, CHAMPION_MAX_GAP, CHAMPION_MAX_MAPE, REPORTS_DIR
+from src.config import (
+    ARTIFACTS_DIR,
+    REPORTS_DIR,
+)
 from src.orchestration.cleanup import cleanup_residual_reports, cleanup_state
+from src.orchestration.quality_gate import apply_quality_gate
 from src.orchestration.single_run import train_model
 from src.step_01_load.data_loader import load_business_columns, load_data
 from src.step_05_evaluate.champion import (
@@ -110,7 +114,7 @@ def train_variety(
         )
         logger.info(f"[{variety}] Decision: {champion_decision.get('justification', '')}")
 
-        args_register = _apply_quality_gate(champion, args, variety, logger)
+        args_register = apply_quality_gate(champion, args, variety, logger)
         emit_mape_metric(variety=variety, mape_value=champion.oof_mape)
 
         _delete_loser_runs(results, champion, variety, logger)
@@ -225,88 +229,6 @@ def _run_model_loop(
         finally:
             cleanup_state(logger, f"post {variety}/{model_type}")
     return results, failures
-
-
-def _apply_quality_gate(
-    champion: ModelResult,
-    args: argparse.Namespace,
-    variety: str,
-    logger,
-) -> bool:
-    """Decide si el campeon se registra segun MAPE_oof y |gap|.
-
-    - MAPE_oof = calidad OPERATIVA real (lo que ve el negocio).
-      Si supera threshold -> BLOQUEA registro (modelo inutil).
-    - gap = sintoma DIAGNOSTICO de overfitting (diferencia train-test).
-      Si supera threshold -> WARNING pero NO bloquea registro:
-      un arbol boosted con gap alto puede igual generalizar bien
-      (memoriza train por diseno; lo importante es MAE_test honesto).
-
-    Devuelve True si pasa el gate operativo (MAPE_oof OK) y respeta el
-    flag `--register-model`; False si MAPE_oof supera el threshold.
-
-    Los runs `--tuning smoke` NUNCA registran: son sanity checks de ~1min
-    con 5 trials / 2 folds, no modelos tuneados. Antes un smoke podia
-    registrar (y promover) una version casi sin tunear en el Registry.
-    """
-    if args.tuning == "smoke":
-        logger.info(
-            f"[{variety}] Registro OMITIDO: tuning=smoke es un sanity check "
-            f"(5 trials, 2 folds), no un modelo de produccion. Usa "
-            f"--tuning dev|prod|prod_xl para registrar en Model Registry."
-        )
-        return False
-
-    # Guard de registro (incidente 2026-06-13: un dev EXANTE_MODE=1 paso el
-    # gate y registro v2 experimental — la API sirve la ULTIMA version).
-    # Releemos el modulo (no import top-level) para honrar el env del run.
-    from src import config as _cfg
-
-    if not _cfg.REGISTER_ENABLED:
-        logger.info(
-            f"[{variety}] Registro OMITIDO: REGISTER_ENABLED=0 (guard "
-            f"explicito para corridas experimentales)."
-        )
-        return False
-    if _cfg.EXANTE_MODE:
-        logger.warning(
-            f"[{variety}] Registro BLOQUEADO: EXANTE_MODE=1 es un flag "
-            f"EXPERIMENTAL — su campeon no debe llegar al Model Registry "
-            f"(la API serviria la ultima version). Metricas y reportes del "
-            f"run quedan intactos en MLflow Experiments."
-        )
-        return False
-
-    mape_ok = champion.oof_mape <= CHAMPION_MAX_MAPE
-    gap_ok = (champion.abs_gap * 100) <= CHAMPION_MAX_GAP
-
-    if not mape_ok:
-        logger.warning(
-            f"[{variety}] CAMPEON RECHAZADO por calidad operativa | "
-            f"MAPE_oof={champion.oof_mape:.2f}% supera threshold "
-            f"{CHAMPION_MAX_MAPE}%. El modelo NO se registra en Model Registry "
-            f"(predice mal en datos OOF -> inutilizable en produccion). "
-            f"El run SI esta en MLflow Experiments (run_id={champion.mlflow_run_id[:8]}...) "
-            f"con todos sus artifacts para diagnostico."
-        )
-        return False
-    if not gap_ok:
-        logger.warning(
-            f"[{variety}] CAMPEON registra con WARNING de overfitting | "
-            f"gap={champion.abs_gap * 100:.2f}pp supera threshold "
-            f"{CHAMPION_MAX_GAP}pp pero MAPE_oof={champion.oof_mape:.2f}% "
-            f"(<={CHAMPION_MAX_MAPE}%) confirma calidad operativa OK. "
-            f"El gap es diagnostico de memoria del train, NO afecta predicciones "
-            f"OOF/produccion. Modelo aprobado para Registry."
-        )
-        return args.register_model
-    logger.info(
-        f"[{variety}] CAMPEON pasa quality gate | "
-        f"MAPE_oof={champion.oof_mape:.2f}% (max={CHAMPION_MAX_MAPE}%) | "
-        f"gap={champion.abs_gap * 100:.2f}pp (max={CHAMPION_MAX_GAP}pp). "
-        f"Registra en MLflow Model Registry."
-    )
-    return args.register_model
 
 
 def _delete_loser_runs(

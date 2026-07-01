@@ -55,7 +55,7 @@ There is **no `:80`** locally — that's the prod ALB.
 ### Lint
 
 ```bash
-task lint          # == ruff check src/ main.py scripts/ tests/ api/ ui/   (ruff config in pyproject.toml; py312, 100 col)
+task lint          # == ruff check src/ main.py scripts/ api/ ui/   (ruff config in pyproject.toml; py312, 100 col)
 ```
 
 `ruff` is the only formatter/linter (replaces black+isort+flake8+pyupgrade). Install dev deps with
@@ -63,24 +63,12 @@ task lint          # == ruff check src/ main.py scripts/ tests/ api/ ui/   (ruff
 
 ### Tests
 
-Suite P0 mínima en `tests/` (pytest, desde 2026-06-13): LagFeatureTransformer (pickle
-round-trip, flags horneados, same-day ex-ante), select_champion (gate relativo),
-conformal bands (cascade/cold-start), guard de registro y `_conformal_halfwidths` del API.
-Correr DENTRO de los contenedores (mismas versiones que producción):
+No hay suite de tests committeada (la suite P0 se retiró el 2026-07-01 por decisión del
+owner). La validación es lint + stack local: `task build` → `task train VARIETIES=POP
+TUNING=smoke` → revisar UI/MLflow.
 
-```bash
-docker compose run --rm -v "$(pwd)/tests:/app/tests" --entrypoint sh trainer \
-  -c "pip install -q pytest; PYTHONPATH=/app python -m pytest tests/ -q"
-# el test del API corre en su contenedor (en trainer se salta solo):
-docker compose run --rm --user root -v "$(pwd)/tests:/app/tests" --entrypoint sh api \
-  -c "/opt/venv/bin/pip install -q pytest; cd /app && /opt/venv/bin/python -m pytest tests/test_api_conformal.py -q"
-```
-
-**CI** vive en `.github/workflows/ci.yml` (lint ruff + tests P0 en contenedor + build de las
-3 imágenes) y corre en push a `main` y en PRs. El **CD** (GHA OIDC → ECR/ECS deploy) es
-deliberadamente Terraform pegable en `GUIA_MLOPS_AWS_V2.md` #3.10 (`infra/modules/cicd/`), no un
-workflow committeado. Cambios estructurales se validan además con el stack
-(`task build` → `task train …` → UI).
+El **CD** (GHA OIDC → ECR/ECS deploy) es deliberadamente Terraform pegable en
+`GUIA_MLOPS_AWS_V2.md` #3.10 (`infra/modules/cicd/`), no un workflow committeado.
 
 ### Running the apps standalone (rarely needed; compose is the norm)
 

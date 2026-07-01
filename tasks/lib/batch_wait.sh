@@ -73,6 +73,23 @@ EOF
   return 1
 }
 
+# Contrato del payload del Lambda dispatcher (infra/lambdas/dispatcher.py):
+#   { varieties: str, tuning?: str, parallel?: int, mode?: "eda" }
+# Estas funciones son la UNICA fuente del JSON; antes el jq vivia inline y
+# duplicado en batch:train y batch:eda (riesgo de derivar si cambia el contrato).
+#
+# build_train_payload <varieties> <tuning> [parallel=1]
+build_train_payload() {
+  jq -nc --arg v "$1" --arg t "$2" --argjson p "${3:-1}" \
+    '{varieties: $v, tuning: $t, parallel: $p}'
+}
+
+# build_eda_payload <varieties>
+# mode=eda -> el dispatcher arma command=["--eda","--varieties",...] (sin tuning).
+build_eda_payload() {
+  jq -nc --arg v "$1" '{varieties: $v, mode: "eda"}'
+}
+
 # dispatch_job <jobdef> <region> <dispatcher_fn> <payload> <label> [wait=true]
 # Flujo comun de submit via Lambda dispatcher, compartido por batch:train y
 # batch:eda: preflight de imagen -> invoke -> parseo de jobId (con fallback si el

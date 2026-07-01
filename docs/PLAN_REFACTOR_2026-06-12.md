@@ -45,7 +45,8 @@ Un run dev con `EXANTE_MODE=1` (experimento #11) pasó el quality gate
 sirve siempre la última versión, así que habría servido un modelo
 experimental degradado en producción local (se eliminó la v2 a mano).
 HECHO (2026-06-13): `REGISTER_ENABLED` en config.py + bloqueo automático
-con `EXANTE_MODE=1` en `_apply_quality_gate` (variety_runner), cubierto
+con `EXANTE_MODE=1` en `apply_quality_gate` (extraído de variety_runner a
+`src/orchestration/quality_gate.py` el 2026-06-26), cubierto
 por `tests/test_register_guard.py`.
 
 ## P1 — deuda que ya molesta

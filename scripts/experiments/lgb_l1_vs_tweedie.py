@@ -24,8 +24,8 @@ import optuna
 from src.config import RANDOM_STATE
 from src.pipeline.build_pipeline import create_preprocessing_pipeline
 from src.step_01_load.data_loader import load_business_columns, load_data
+from src.step_04_train.cv_strategy import build_cv_splitters
 from src.step_04_train.target_transform import _expm1, _log1p_cap
-from src.step_04_train.tuning import _build_cv_splitters
 from src.step_05_evaluate.metrics import calculate_regression_metrics
 from src.step_06_track.business_validation import _align_and_clean
 
@@ -46,7 +46,7 @@ business = load_business_columns(sheet="POP")
 h_ef = business["H-EF"].to_numpy(dtype=float)
 kg_jr = business["KG/JR"].to_numpy(dtype=float)
 
-outer_cv, inner_cv, strat_label, _ = _build_cv_splitters(X, OUTER_FOLDS, INNER_FOLDS, RANDOM_STATE)
+outer_cv, inner_cv, strat_label, _ = build_cv_splitters(X, OUTER_FOLDS, INNER_FOLDS, RANDOM_STATE)
 folds = list(outer_cv.split(X, strat_label))
 
 fold_data = []
@@ -215,7 +215,7 @@ try:
             f"{k:<12}{results[k]['business_mape']:>8.2f}{seg_mape(o, m_gran):>9.2f}"
             f"{seg_mape(o, m_a9g):>9.2f}{abs_err_kg(o):>11.0f}"
         )
-except Exception as exc:  # noqa: BLE001 - desglose es informativo, no debe abortar
+except Exception as exc:
     print(f"(desglose por segmento omitido: {exc})")
 
 np.savez(

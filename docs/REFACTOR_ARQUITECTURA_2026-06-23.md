@@ -33,7 +33,7 @@ runtime) tras CADA split.
 |---|---|---|---|
 | `step_05_evaluate/html/sections.py` | 991 | → sub-paquete `sections/` (hero, kpis, groups, backends, diagnostics, errors_detail, links_actions); `__init__` re-exporta los 16 `build_*` que importa `winner_dashboard.py` | bajo (preservar laziness de plotly) |
 | `diagnostics/eda.py` | 539 | extraer `eda_sidecar.py` (`_write_eda_sidecar`, `find_latest_eda_sidecar`, `extract_drift_summary`); re-exportar las 2 públicas desde `eda.py` | bajo |
-| `orchestration/variety_runner.py` | 756 | helpers MLflow → `_variety_mlflow.py`; outputs → `_variety_outputs.py`. `train_variety` y `_apply_quality_gate` (lo toca un test) **quedan** | bajo |
+| `orchestration/variety_runner.py` | 756 | helpers MLflow → `_variety_mlflow.py`; outputs → `_variety_outputs.py`. `train_variety` **queda**; `apply_quality_gate` extraído a `quality_gate.py` (2026-06-26, el test lo importa de ahí) | bajo |
 | `api/app/services/drift_service.py` | 667 | estadística pura (PSI/KS/Chi²) → `_drift_stats.py`; `DriftService` queda en su path (fachada `services/__init__.py`) | bajo (ojo tests sobre staticmethods) |
 | `step_03_features/lag_features.py` | 913 | cómputo puro → `_lag_compute.py`; **`LagFeatureTransformer` NO se mueve** (su path está horneado en `.joblib`, inv. #4). Re-exportar símbolos legacy | **alto** — solo con `test_lag_transformer.py` (pickle) verde antes/después |
 

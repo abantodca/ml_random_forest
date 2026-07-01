@@ -53,10 +53,16 @@ def _common_kwargs() -> dict:
 
 
 def _log1p_cap(y):
-    """Cap suave (CAP_PERCENTILE) y luego log1p para estabilizar varianza."""
+    """Cap suave (CAP_PERCENTILE) y luego log1p para estabilizar varianza.
+
+    log1p(x) es NaN si x <= -1. KG/JR_H (kg por jornal-hora) es fisicamente
+    >= 0, asi que un target negativo es un error de dato; sin pisarlo el NaN
+    se propaga al y del fold y envenena el fit. Clip [0, cap]: piso en 0 por
+    abajo (evita el NaN) y cap suave por arriba (estabiliza varianza).
+    """
     y = np.asarray(y, dtype=float)
     cap = float(np.nanpercentile(y, CAP_PERCENTILE))
-    return np.log1p(np.minimum(y, cap))
+    return np.log1p(np.clip(y, 0.0, cap))
 
 
 def _expm1(y):

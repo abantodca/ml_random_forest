@@ -26,17 +26,10 @@ URLs: UI `:8501` · API `:8000/docs` · MLflow `:5000` · reports `:8080`.
 1. **Rama** desde `main` (`git switch -c tipo/descripcion`).
 2. Edita. Los hooks de `pre-commit` formatean/lint en cada commit.
 3. **Lint** manual: `task lint` (== `ruff check …`). Formato: `ruff format .`.
-4. **Tests P0** (DENTRO del contenedor, mismas versiones que prod):
-   ```bash
-   docker compose run --rm -v "$(pwd)/tests:/app/tests" --entrypoint sh trainer \
-     -c "pip install -q pytest; PYTHONPATH=/app python -m pytest tests/ -q"
-   # El test del API corre en su propio contenedor (en trainer se salta solo):
-   docker compose run --rm --user root -v "$(pwd)/tests:/app/tests" --entrypoint sh api \
-     -c "/opt/venv/bin/pip install -q pytest; cd /app && /opt/venv/bin/python -m pytest tests/test_api_conformal.py -q"
-   ```
-5. Cambios estructurales: validar además con el stack
-   (`task build` → `task train …` → revisar UI/API/reports).
-6. **Commit** en español, `tipo(scope): resumen` (ver §4).
+4. Cambios estructurales: validar con el stack
+   (`task build` → `task train …` → revisar UI/API/reports). No hay suite de
+   tests committeada (retirada el 2026-07-01).
+5. **Commit** en español, `tipo(scope): resumen` (ver §4).
 
 ## 3. Convenciones de código
 
@@ -88,7 +81,6 @@ Romper uno de estos invalida modelos en producción o despliegues. Detalle en
 | `ui/app/` | Streamlit en capas (`views/ client/`) |
 | `infra/` | Terraform por módulo (`network storage mlflow api ui reports batch …`) |
 | `scripts/` | módulos importables desde `main.py` + tasks (`prepare_data`, `s3_sync`) |
-| `tests/` | suite P0 (correr en contenedor) |
 | `tasks/` | taskfiles namespaced incluidos por `Taskfile.yml` |
 | `docs/` | planes y notas de diseño |
 

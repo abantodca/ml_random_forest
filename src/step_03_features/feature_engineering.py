@@ -34,6 +34,10 @@ from src.config import (
     DATE_COLUMN,
     ENABLE_CALENDAR_EXTRA,
     NUMERIC_FEATURES,
+    SEASON_AUTODETECT,
+    SEASON_HIGH_PCTL,
+    SEASON_LOW_PCTL,
+    SEASON_MIN_MONTH_OBS,
     SKEW_AUTO_DETECT,
     SKEW_DROP_RAW,
     SKEW_KURT_THRESHOLD,
@@ -111,6 +115,40 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         if "KG/HA" in X.columns and "DPC" in X.columns:
             names.append("KG_HA_PER_DPC")
         return names
+
+    @staticmethod
+    def _derive_season_months(
+        dates: pd.Series, y
+    ) -> tuple[tuple[int, ...] | None, tuple[int, ...] | None]:
+        """Deriva (meses_alta, meses_baja) de la relacion target~mes del fold.
+
+        Meses cuya media de target supera el percentil SEASON_HIGH_PCTL de las
+        medias mensuales -> ALTA; bajo SEASON_LOW_PCTL -> BAJA. Solo se
+        consideran meses con >= SEASON_MIN_MONTH_OBS observaciones (una media
+        de 1-2 filas es ruido). Reemplaza el prior POP jun-oct por la
+        estacionalidad REAL de la variedad. CV-safe: corre en fit sobre el
+        train de cada fold. El ranking mensual es invariante a transformaciones
+        monotonas del target (log1p), asi que da igual si `y` viene crudo o
+        transformado. Devuelve (None, None) si no hay senal utilizable ->
+        el caller cae al literal POP (backward-compat).
+        """
+        # dates puede venir como Series (X[col], caso prod) o Index/lista:
+        # normalizar a Series para que .dt funcione siempre.
+        dates = pd.Series(np.asarray(dates)).reset_index(drop=True)
+        m = pd.to_datetime(dates, errors="coerce").dt.month
+        yv = pd.to_numeric(pd.Series(np.asarray(y, dtype=float), index=m.index), errors="coerce")
+        g = pd.DataFrame({"m": m, "y": yv}).dropna()
+        if g.empty:
+            return None, None
+        agg = g.groupby("m")["y"].agg(["mean", "count"])
+        agg = agg[agg["count"] >= SEASON_MIN_MONTH_OBS]
+        if len(agg) < 3:  # sin al menos 3 meses solidos no hay como rankear
+            return None, None
+        hi = float(np.percentile(agg["mean"], SEASON_HIGH_PCTL))
+        lo = float(np.percentile(agg["mean"], SEASON_LOW_PCTL))
+        alta = tuple(sorted(int(mo) for mo in agg.index[agg["mean"] >= hi]))
+        baja = tuple(sorted(int(mo) for mo in agg.index[agg["mean"] <= lo]))
+        return (alta or None), (baja or None)
 
     @staticmethod
     def _detect_skew_features(X: pd.DataFrame) -> tuple[list[str], list[str], dict]:
@@ -353,6 +391,24 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
             if not dates.empty:
                 self.trend_anchor_ = dates.min()
 
+        # Meses de temporada HORNEADOS (self-contained pickle). Precedencia:
+        # override explicito de VarietyConfig > autodeteccion data-driven del
+        # fold (SEASON_AUTODETECT) > literal POP (None -> lo resuelve
+        # _date_features). Deriva solo el lado (alta/baja) que no vino fijado.
+        self.high_season_months_ = self.high_season_months
+        self.low_season_months_ = self.low_season_months
+        if (
+            SEASON_AUTODETECT
+            and date_col is not None
+            and y is not None
+            and (self.high_season_months is None or self.low_season_months is None)
+        ):
+            alta_d, baja_d = self._derive_season_months(X[date_col], y)
+            if self.high_season_months is None and alta_d is not None:
+                self.high_season_months_ = alta_d
+            if self.low_season_months is None and baja_d is not None:
+                self.low_season_months_ = baja_d
+
         # Derivadas de fecha (DIA_SEM_SIN/COS removidas: corr con target ~0).
         if date_col is not None:
             self.date_feature_names_ = (
@@ -423,8 +479,12 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
                 # getattr: pickles legacy (pre-fix) no tienen el atributo ->
                 # False/None, que era el comportamiento default de entonces.
                 calendar_extra=getattr(self, "calendar_extra_", False),
-                high_season_months=getattr(self, "high_season_months", None),
-                low_season_months=getattr(self, "low_season_months", None),
+                high_season_months=getattr(
+                    self, "high_season_months_", getattr(self, "high_season_months", None)
+                ),
+                low_season_months=getattr(
+                    self, "low_season_months_", getattr(self, "low_season_months", None)
+                ),
             )
         else:
             date_part = pd.DataFrame(index=X.index)

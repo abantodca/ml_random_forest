@@ -92,7 +92,8 @@ class VarietyService:
                 endpoints.variety_detail(name),
                 timeout=self._client.timeout_read,
             )
-        except (ApiConnectionError, ApiResponseError):
+        except (ApiConnectionError, ApiResponseError) as exc:
+            logger.warning("No se pudo obtener el detalle de la variedad %s: %s", name, exc)
             return VarietyViewModel(name=name, model_loaded=True, metrics={})
         vm = to_variety(data, fallback_name=name)
         # `name` viene de los disponibles en el REGISTRY → TIENE modelo. El

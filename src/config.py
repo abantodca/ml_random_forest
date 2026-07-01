@@ -130,6 +130,24 @@ USELESS_COLUMNS: list[str] = ["VARIEDAD", "DIA_SEM", "MES"]
 # pasar `cols=` explicito al constructor de `MissingFlagger` o ajustar aqui.
 MISSING_FLAG_COLS: list[str] = ["%INDUS", "P/BAYA"]
 
+# ---------------------------------------------------------------------------
+# Temporada agronomica DATA-DRIVEN (fix multi-variedad 2026-07-01).
+# ---------------------------------------------------------------------------
+# Las dummies TEMPORADA_ALTA/BAJA usaban meses HARDCODEADOS de POP (jun-oct /
+# dic-abr). Para variedades con otro calendario esa senal queda INVERTIDA:
+# ROSITA pico en feb/mar/may recibia TEMPORADA_ALTA=1 en jun-oct (su temporada
+# BAJA) -> feature enganosa, no ruido neutro. Con SEASON_AUTODETECT=1 (default),
+# si la variedad NO tiene meses fijados en VarietyConfig, FeatureGenerator.fit
+# los DERIVA de los datos del fold: meses cuya media de target esta sobre el
+# percentil SEASON_HIGH_PCTL = ALTA, bajo SEASON_LOW_PCTL = BAJA. Es CV-safe
+# (solo train de cada fold) y se hornea en el pickle (self-contained). Un mes
+# necesita >= SEASON_MIN_MONTH_OBS observaciones para clasificar (evita ruido).
+# SEASON_AUTODETECT=0 vuelve al literal POP (jun-oct / dic-abr) para A/B.
+SEASON_AUTODETECT: bool = bool(int(os.environ.get("SEASON_AUTODETECT", "1")))
+SEASON_HIGH_PCTL: float = float(os.environ.get("SEASON_HIGH_PCTL", "66"))
+SEASON_LOW_PCTL: float = float(os.environ.get("SEASON_LOW_PCTL", "33"))
+SEASON_MIN_MONTH_OBS: int = int(os.environ.get("SEASON_MIN_MONTH_OBS", "5"))
+
 # Skew mitigation: thresholds para auto-deteccion en FeatureGenerator.fit.
 # Reemplazo las listas hardcoded por variedad (eran fragiles cuando se entrena
 # variedades nuevas con distribuciones distintas). FeatureGenerator decide
@@ -191,6 +209,24 @@ RANDOM_STATE: int = int(os.environ.get("SEED", "42"))
 # incluido automaticamente.
 
 # ---------------------------------------------------------------------------
+# Piso de denominador para el MAPE de negocio (KG/JR).
+# ---------------------------------------------------------------------------
+# MAPE = mean(|y-yhat| / |y|); con y -> 0 el termino explota. KG/JR es kg por
+# jornal (dia-persona de cosecha): una fila con KG/JR ~ 0.004 (4 gramos por
+# jornal) es un artefacto de carga (dia de movilizacion / registro parcial),
+# no una observacion de productividad — misma categoria que los target <= 0 que
+# el data_loader ya descarta. `mape_safe` excluia solo y == 0 EXACTO, asi que
+# esas filas casi-cero sobrevivian: en ATLAS 5 filas (0.001-0.185 kg/jornal)
+# inflaron el MAPE_oof a 180% pese a R2=0.835 y MAE=3.53kg, lo que hizo que el
+# quality gate RECHAZARA un modelo sano (y disparo la alarma CloudWatch
+# ml-training-mape-atlas). El piso excluye del MAPE las observaciones con
+# |y| < MAPE_MIN_DENOM (se cuentan y loguean para transparencia); MAE/RMSE/R2 no
+# se tocan (son robustos a escala). 1.0 kg/jornal: por debajo no hay senal
+# productiva real. Uniforme a todas las variedades (KG/JR es la misma unidad
+# fisica). Hallazgo 2026-07-01.
+MAPE_MIN_DENOM: float = float(os.environ.get("MAPE_MIN_DENOM", "1.0"))
+
+# ---------------------------------------------------------------------------
 # Quality gates del campeon (umbrales minimos para considerar un modelo util)
 # ---------------------------------------------------------------------------
 # Un campeon que no supere estos umbrales se considera inutilizable y NO
@@ -226,6 +262,24 @@ CHAMPION_MAX_GAP: float = float(os.environ.get("CHAMPION_MAX_GAP", "18.0"))
 # actual da 0.30 -> pasa igual que antes (sin cambio de decision).
 CHAMPION_MAX_GAP_REL: float = float(os.environ.get("CHAMPION_MAX_GAP_REL", "0.40"))
 
+# CHAMPION_WARN_TEMPORAL_MAPE: umbral de AVISO (no bloqueante) sobre el MAPE del
+# chequeo honesto temporal (forecast de anio no visto, _temporal_honesty_check).
+#   El MAPE_oof stratified mide INTERPOLACION (mezcla anios vistos) y es
+#   optimista; el temporal mide EXTRAPOLACION a un anio nuevo. En el run del
+#   2026-06-25 las 4 variedades pasaron el gate stratified (13-15%) pero el
+#   temporal salio 22-34% (BEAUTY con R2 negativo). Este umbral NO rechaza ni
+#   degrada el registro — solo emite un WARNING para dar visibilidad al riesgo
+#   de drift en produccion. Mantener el registro intacto es deliberado: no
+#   rompe los campeones ya entrenados. 30.0 = ~2x el MAPE stratified tipico.
+CHAMPION_WARN_TEMPORAL_MAPE: float = float(
+    os.environ.get("CHAMPION_WARN_TEMPORAL_MAPE", "30.0")
+)
+# Piso de R2 temporal por debajo del cual el modelo practicamente no extrapola
+# mejor que la media del anio nuevo (BEAUTY dio -0.11 en el run citado).
+CHAMPION_WARN_TEMPORAL_R2: float = float(
+    os.environ.get("CHAMPION_WARN_TEMPORAL_R2", "0.20")
+)
+
 # ---------------------------------------------------------------------------
 # Decision lex-order del champion (champion.select_champion)
 # ---------------------------------------------------------------------------
@@ -243,6 +297,58 @@ CHAMPION_MAX_GAP_REL: float = float(os.environ.get("CHAMPION_MAX_GAP_REL", "0.40
 # menos de esto se consideran empate de rendimiento -> desempata por tiempo.
 # 0.5 pp de MAPE es ruido tipico entre seeds distintas.
 OOF_MAPE_TIE_TOLERANCE: float = 0.5
+
+# ---------------------------------------------------------------------------
+# Folds del nested CV ADAPTATIVOS por nº de filas (fix multi-variedad 2026-07-01)
+# ---------------------------------------------------------------------------
+# outer/inner_folds son constantes del perfil (prod_xl=6/3), IGUALES para POP
+# (9990) y para ROSITA (588) o TERRAPIN (105). Con 6 folds sobre 588 filas el
+# inner val queda ~54 filas: senal MAE ruidosa que hace que el TPE persiga ruido
+# (raiz del gap 0.55 de ROSITA). ADAPT_FOLDS_TO_N recorta los folds cuando n es
+# chico para que cada fold tenga masa suficiente. Solo REDUCE (nunca sube sobre
+# el perfil); n grande -> folds del perfil intactos (POP identico). El piso 2
+# preserva un minimo de CV. ADAPT_FOLDS_TO_N=0 lo desactiva (A/B).
+ADAPT_FOLDS_TO_N: bool = bool(int(os.environ.get("ADAPT_FOLDS_TO_N", "1")))
+# Filas objetivo por fold de TEST (outer) y de VAL (inner). ~120/150 dejan folds
+# con masa estadistica; derivados de que POP conserve 6/3 y ROSITA baje a ~4/2.
+ADAPT_FOLDS_ROWS_PER_OUTER: int = int(os.environ.get("ADAPT_FOLDS_ROWS_PER_OUTER", "120"))
+ADAPT_FOLDS_ROWS_PER_INNER: int = int(os.environ.get("ADAPT_FOLDS_ROWS_PER_INNER", "150"))
+
+# ---------------------------------------------------------------------------
+# Pruning de Optuna (MedianPruner) — libera presupuesto (fix 2026-07-01).
+# ---------------------------------------------------------------------------
+# Hasta hoy NO habia pruner: cada trial evaluaba el inner CV COMPLETO aunque
+# fuera claramente malo. Con el pruner, `_objective` reporta el MAE parcial tras
+# cada inner fold y MedianPruner mata los trials peores que la mediana -> el
+# presupuesto ahorrado se reinvierte en mas trials (lo que las variedades chicas
+# necesitan para que el TPE encuentre region estable). n_warmup_steps=1 asegura
+# que al menos 2 folds corran antes de poder podar (no mata por un fold con
+# suerte); n_startup_trials construye la mediana antes de podar nada. Cambia la
+# dinamica del tuning para TODAS las variedades (no bit-identico) pero solo
+# elimina trials dominados. ENABLE_PRUNER=0 vuelve al comportamiento sin pruner.
+ENABLE_PRUNER: bool = bool(int(os.environ.get("ENABLE_PRUNER", "1")))
+PRUNER_STARTUP_TRIALS: int = int(os.environ.get("PRUNER_STARTUP_TRIALS", "8"))
+PRUNER_WARMUP_STEPS: int = int(os.environ.get("PRUNER_WARMUP_STEPS", "1"))
+
+# ---------------------------------------------------------------------------
+# Persistencia de estudios Optuna (RDBStorage) — RESUME de la ronda final.
+# ---------------------------------------------------------------------------
+# Por default los estudios son en memoria: una interrupcion (Spot reclaim; el
+# job corre en la cola SPOT) tira TODO el tuning ya hecho. Con OPTUNA_STORAGE_URL
+# apuntando a un SQLAlchemy URL DIRECTO a Postgres (NO el MLFLOW_TRACKING_URI,
+# que es HTTP), la RONDA FINAL persiste y RESUME: al reintentar, retoma los
+# trials completados en vez de empezar de cero. Solo la ronda final persiste;
+# los outer folds quedan en memoria a proposito (son para la estimacion honesta
+# de gap/MAPE_oof, no conocimiento a acumular). El nombre del estudio incluye un
+# fingerprint de los datos de la variedad -> data nueva = estudio nuevo (no
+# mezcla valores viejos calculados sobre otro dataset). El warm-start
+# cross-reentreno sigue viniendo del enqueue del campeon (re-evaluado, limpio).
+#
+# Vacio = comportamiento actual (en memoria), BIT-IDENTICO. Requiere driver de
+# Postgres (psycopg2) en la imagen del trainer; si la conexion falla, cae a
+# memoria con un warning (nunca rompe el training). Ej:
+#   OPTUNA_STORAGE_URL=postgresql://user:pass@rds-host:5432/optuna
+OPTUNA_STORAGE_URL: str = os.environ.get("OPTUNA_STORAGE_URL", "")
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +424,16 @@ EARLY_STOPPING_ROUNDS: int = int(os.environ.get("EARLY_STOPPING_ROUNDS", "50"))
 EARLY_STOPPING_VAL_FRACTION: float = 0.1
 # Bajo este n de filas NO se hace early stopping (holdout demasiado chico
 # para ser senal; caso tipico: folds internos del perfil smoke).
-EARLY_STOPPING_MIN_ROWS: int = 200
+# Bajado 200 -> 60 (fix multi-variedad 2026-07-01): con 200, una variedad chica
+# (TERRAPIN n=105, y sus folds internos) perdia TODO early stopping y crecia
+# N_ESTIMATORS_MAX=1200 arboles SIN freno -> overfit garantizado justo donde el
+# dato es mas escaso. Con 60 el holdout minimo (EARLY_STOPPING_MIN_VAL) sigue
+# siendo senal usable. POP (n grande) no cambia: ya tenia ES activo.
+EARLY_STOPPING_MIN_ROWS: int = int(os.environ.get("EARLY_STOPPING_MIN_ROWS", "60"))
+# Holdout MINIMO (filas absolutas) para early stopping en n chico: el 10% de
+# fraccion daria 6 filas en n=60; forzamos >= este piso (capado a n/3 para no
+# vaciar el train). n grande -> domina la fraccion (POP identico).
+EARLY_STOPPING_MIN_VAL: int = int(os.environ.get("EARLY_STOPPING_MIN_VAL", "12"))
 # Techo de arboles cuando early stopping esta activo (el corte real lo
 # decide el holdout; esto es solo un fusible).
 # Bajado 2000 -> 1200 (2026-06-23): con el piso de learning_rate a 1e-2
@@ -339,20 +454,30 @@ OOF_ENSEMBLE_K: int = 5
 # (robustez del tuning, 2026-06-13): score = mean(MAE) + lambda * std(MAE).
 # Con lambda>0, TPE prefiere configs ESTABLES sobre configs con buen
 # promedio pero alta dispersion entre folds (que generalizan peor).
-# Default 0.0 = comportamiento historico bit-identico (solo media).
-# Valores razonables para activar: 0.5-1.0.
+#
+# Default 0.0 (MAE PURO): se mantiene en 0. Evaluado y DESCARTADO el 2026-06-25
+# como palanca anti-overfit: cualquier lambda>0 desvia el objetivo de minimizar
+# MAE (lo paga en MAE_val, ya observado historicamente). El anti-overfit de este
+# proyecto vive en la GRILLA (TREE_MAX_DEPTH/TREE_MAX_LEAVES en search_spaces) y
+# en el gate del campeon (select_champion), NO en el objetivo. Activar (0.5-1.0)
+# solo si se acepta explicitamente negociar MAE por estabilidad.
 OPTUNA_OBJECTIVE_STD_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_STD_PENALTY", "0.0"))
 
 # Penalizacion por GAP train->val en el objective de Optuna (anti-overfit del
 # tuning): score = mean(MAE_val) + std_penalty + lambda * mean(max(0, MAE_val - MAE_train)).
 # Con lambda>0, TPE EVITA configs que memorizan el train (gap alto) aunque tengan
 # buen MAE_val — exactamente las que luego falla el gate de gap del campeon
-# (select_champion). Es el lever honesto para que un backend de capacidad abierta
-# (p.ej. XGB, que quedo descalificado con gap_rel=0.42>0.40) tune hacia
-# GENERALIZACION en vez de hacia el gate por construccion: NO relaja el gate, hace
-# que el tuning lo respete. Default 0.0 = comportamiento historico bit-identico
-# (no calcula el gap, sin costo extra). Valores razonables para activar: 0.3-1.0.
-# Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
+# (select_champion). NO relaja el gate, hace que el tuning lo respete. Valores
+# razonables si se activa: 0.3-1.0. Ver ANALISIS_XGBOOST_SOBREAJUSTE.md.
+#
+# Default 0.0 (MAE PURO): se mantiene en 0. Evaluado y DESCARTADO el 2026-06-25
+# como palanca anti-overfit para las 4 variedades nuevas. Razon: con lambda>0 el
+# objetivo deja de minimizar MAE (negocia MAE_val por menor gap), efecto que ya
+# se observo al cambiarlo antes. La decision es atacar el overfit por CAPACIDAD
+# (grilla: TREE_MAX_DEPTH=7 / TREE_MAX_LEAVES=40 en search_spaces) manteniendo el
+# objetivo en MAE puro: el optimo de MAE dentro de una grilla mas chica ya cae en
+# zona menos sobreajustada, sin sacrificar MAE. El gap-penalty queda disponible
+# como palanca SOLO para rescatar a XGB si se quisiera (no es el plan actual).
 OPTUNA_OBJECTIVE_GAP_PENALTY: float = float(os.environ.get("OPTUNA_OBJECTIVE_GAP_PENALTY", "0.0"))
 
 # Sample weights por densidad del target (compute_sample_weights).
@@ -526,6 +651,15 @@ EXANTE_MODE: bool = _env_bool("EXANTE_MODE", False)
 #     forecast honesto (temporal) sin discusion de "cual es el numero real".
 DUAL_CV_REPORT: bool = _env_bool("DUAL_CV_REPORT", True)
 DUAL_CV_FOLDS: int = int(os.environ.get("DUAL_CV_FOLDS", "3"))
+# Piso RELATIVO de denominador para el MAPE del chequeo temporal (2026-07-01).
+# El chequeo calcula APE en espacio KG/JR_H (escala ~3, distinta del KG/JR de
+# negocio), asi que MAPE_MIN_DENOM no aplica directo. El umbral viejo (1e-9)
+# dejaba pasar los mismos artefactos casi-cero: ATLAS reporto temporal_MAPE
+# 720% por 8 filas con KG/JR_H ~ 0.0002-0.02. Se excluyen filas con
+# |y| < TEMPORAL_MAPE_REL_FLOOR * mediana(|y|). Validado contra el Excel
+# completo: 0.05 excluye exactamente esos artefactos (8 ATLAS + 1 POP) y CERO
+# filas legitimas en las otras 21 variedades (min legit = 0.32 vs piso ~0.15).
+TEMPORAL_MAPE_REL_FLOOR: float = float(os.environ.get("TEMPORAL_MAPE_REL_FLOOR", "0.05"))
 
 # G — CV outer strategy.
 #   "stratified"     : StratifiedKFold por FUNDO_FORMATO (DEFAULT — decision
@@ -574,6 +708,17 @@ MLFLOW_EXPERIMENT_PREFIX: str = os.environ.get("MLFLOW_EXPERIMENT_PREFIX", "")
 # server con backend SQL (Postgres en local + AWS), por lo que el Registry
 # esta disponible incondicionalmente.
 MODEL_REGISTRY_PREFIX: str = os.environ.get("MODEL_REGISTRY_PREFIX", "rnd-forest-")
+
+# Warm-start de Optuna desde el campeon registrado (2026-06-25,
+# step_04_train/warm_start.py). Si hay un `rnd-forest-<variety>` previo del
+# MISMO backend, se siembran sus best_params como primer trial del estudio
+# (study.enqueue_trial) para arrancar desde la zona ya-buena y solo mejorarla,
+# en vez de re-explorar a ciegas. Si no hay modelo previo -> arranque en frio.
+# Lee solo run.data.params (strings), nunca el .joblib -> sin riesgo de pickle.
+# Default ON; apagar con WARM_START_FROM_REGISTRY=0 (sin rebuild).
+WARM_START_FROM_REGISTRY: bool = bool(
+    int(os.environ.get("WARM_START_FROM_REGISTRY", "1"))
+)
 
 # Guard de registro (incidente 2026-06-13): un run dev con EXANTE_MODE=1
 # paso el quality gate (20.8% < 25%) y registro su campeon experimental
@@ -644,6 +789,19 @@ FULL_MAPE_CRITICAL_PCT: float = 25.0  # MAPE > 25% = critico
 # 'OTROS'. Solo se aplica a las columnas listadas en RARE_GROUP_COLS.
 RARE_MIN_COUNT: int = 50
 RARE_GROUP_COLS: list[str] = ["FORMATO"]
+# Umbral rare ADAPTATIVO por nº de filas (fix multi-variedad 2026-07-01).
+# 50 es ~0.5% de POP (9990) pero ~48% de una variedad de 105 filas: con el
+# umbral fijo, FORMATO (3-5 valores) colapsa CASI TODO a 'OTROS' en variedades
+# chicas -> dummy constante, senal de formato PERDIDA justo donde ya escasea.
+# Con ADAPT_RARE_MIN_COUNT el umbral efectivo (cuando la variedad NO fija
+# rare_min_count en VarietyConfig) es
+#   min(RARE_MIN_COUNT, max(RARE_MIN_COUNT_FLOOR, round(RARE_MIN_COUNT_FRAC*n))).
+# n grande -> 50 (POP/BEAUTY identico, el frac supera 50); n chico -> baja hasta
+# el piso, preservando las 2-3 categorias principales. ADAPT_RARE_MIN_COUNT=0
+# vuelve al fijo 50.
+ADAPT_RARE_MIN_COUNT: bool = bool(int(os.environ.get("ADAPT_RARE_MIN_COUNT", "1")))
+RARE_MIN_COUNT_FRAC: float = float(os.environ.get("RARE_MIN_COUNT_FRAC", "0.03"))
+RARE_MIN_COUNT_FLOOR: int = int(os.environ.get("RARE_MIN_COUNT_FLOOR", "15"))
 
 # Estado semaforo (VERDE/AMARILLO/ROJO) en la hoja Resumen del Excel:
 #   R2 OOF >= REPORT_R2_TARGET            -> VERDE

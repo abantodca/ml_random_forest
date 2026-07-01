@@ -108,13 +108,15 @@ resource "aws_lambda_function" "scheduler" {
 }
 
 resource "aws_cloudwatch_event_rule" "start" {
+  count               = var.enable_work_hours_cron ? 1 : 0
   name                = "${var.project}-start"
   description         = "L-V ${var.work_start_hour_local}:00 PET start RDS+Fargate"
   schedule_expression = "cron(0 ${local.start_hour_utc} ? * ${var.workdays_cron} *)"
 }
 
 resource "aws_cloudwatch_event_target" "start" {
-  rule      = aws_cloudwatch_event_rule.start.name
+  count     = var.enable_work_hours_cron ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.start[0].name
   target_id = "scheduler-start"
   arn       = aws_lambda_function.scheduler.arn
   input     = jsonencode({ action = "start" })
@@ -122,13 +124,15 @@ resource "aws_cloudwatch_event_target" "start" {
 
 # ----- EventBridge: cron STOP L-V <stop_hour_utc>:00 -----------------
 resource "aws_cloudwatch_event_rule" "stop" {
+  count               = var.enable_work_hours_cron ? 1 : 0
   name                = "${var.project}-stop"
   description         = "L-V ${var.work_end_hour_local}:00 PET stop RDS+Fargate"
   schedule_expression = "cron(0 ${local.stop_hour_utc} ? * ${var.workdays_cron} *)"
 }
 
 resource "aws_cloudwatch_event_target" "stop" {
-  rule      = aws_cloudwatch_event_rule.stop.name
+  count     = var.enable_work_hours_cron ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.stop[0].name
   target_id = "scheduler-stop"
   arn       = aws_lambda_function.scheduler.arn
   input     = jsonencode({ action = "stop" })
@@ -184,19 +188,21 @@ resource "aws_lambda_permission" "batch_autostop" {
 }
 
 resource "aws_lambda_permission" "start" {
+  count         = var.enable_work_hours_cron ? 1 : 0
   statement_id  = "AllowStart"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.scheduler.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.start.arn
+  source_arn    = aws_cloudwatch_event_rule.start[0].arn
 }
 
 resource "aws_lambda_permission" "stop" {
+  count         = var.enable_work_hours_cron ? 1 : 0
   statement_id  = "AllowStop"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.scheduler.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.stop.arn
+  source_arn    = aws_cloudwatch_event_rule.stop[0].arn
 }
 
 resource "aws_lambda_permission" "keepstop" {

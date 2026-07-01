@@ -69,98 +69,36 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   }
 }
 
-resource "aws_ecr_repository" "trainer" {
-  name                 = var.project
-  image_tag_mutability = "MUTABLE" # CI/CD reusa tag "latest" + sha
-  force_delete         = true      # destroy borra el repo aunque tenga imagenes
+# ── ECR (5 repos) ────────────────────────────────────────────────────────────
+# Tabla unica fuente de verdad. Antes eran 5 bloques aws_ecr_repository +
+# 3 aws_ecr_lifecycle_policy casi identicos (~109 lineas). `lifecycle` marca
+# que repos tienen politica de retencion (trainer/api/ui SI; mlflow/reports NO).
+# NOTA: refactor con cambio de direccion en el state -> requiere `terraform
+# state mv` antes del apply (ver header del PR / runbook). Sin migracion,
+# terraform destruiria y recrearia los repos.
+locals {
+  ecr_repos = {
+    trainer = { name = var.project, tag_mutability = "MUTABLE", lifecycle = true }                # CI/CD reusa "latest" + sha
+    mlflow  = { name = "${var.project}-mlflow", tag_mutability = "IMMUTABLE", lifecycle = false } # v3.12.0 nunca cambia
+    reports = { name = "${var.project}-reports", tag_mutability = "MUTABLE", lifecycle = false }  # iteramos nginx.conf seguido
+    api     = { name = "${var.project}-api", tag_mutability = "MUTABLE", lifecycle = true }       # CI/CD reusa "latest" + sha
+    ui      = { name = "${var.project}-ui", tag_mutability = "MUTABLE", lifecycle = true }
+  }
+  ecr_lifecycle_repos = { for k, v in local.ecr_repos : k => v if v.lifecycle }
+}
+
+resource "aws_ecr_repository" "this" {
+  for_each             = local.ecr_repos
+  name                 = each.value.name
+  image_tag_mutability = each.value.tag_mutability
+  force_delete         = true # destroy borra el repo aunque tenga imagenes
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
 }
 
-resource "aws_ecr_lifecycle_policy" "trainer" {
-  repository = aws_ecr_repository.trainer.name
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 10 tagged"
-        selection = {
-          tagStatus     = "tagged"
-          tagPrefixList = ["v", "sha-"]
-          countType     = "imageCountMoreThan"
-          countNumber   = 10
-        }
-        action = { type = "expire" }
-      },
-      {
-        rulePriority = 2
-        description  = "Expire untagged > 7 days"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 7
-        }
-        action = { type = "expire" }
-      }
-    ]
-  })
-}
-
-resource "aws_ecr_repository" "mlflow" {
-  name                 = "${var.project}-mlflow"
-  image_tag_mutability = "IMMUTABLE" # v3.12.0 nunca cambia
-  force_delete         = true        # destroy borra el repo aunque tenga imagenes
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration { encryption_type = "AES256" }
-}
-
-resource "aws_ecr_repository" "reports" {
-  name                 = "${var.project}-reports"
-  image_tag_mutability = "MUTABLE" # iteramos nginx.conf seguido
-  force_delete         = true      # destroy borra el repo aunque tenga imagenes
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration { encryption_type = "AES256" }
-}
-
-resource "aws_ecr_repository" "api" {
-  name                 = "${var.project}-api"
-  image_tag_mutability = "MUTABLE" # CI/CD reusa "latest" + sha por commit
-  force_delete         = true
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration { encryption_type = "AES256" }
-}
-
-resource "aws_ecr_lifecycle_policy" "api" {
-  repository = aws_ecr_repository.api.name
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 10 tagged"
-        selection    = { tagStatus = "tagged", tagPrefixList = ["v", "sha-"], countType = "imageCountMoreThan", countNumber = 10 }
-        action       = { type = "expire" }
-      },
-      {
-        rulePriority = 2
-        description  = "Expire untagged > 7 days"
-        selection    = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }
-        action       = { type = "expire" }
-      }
-    ]
-  })
-}
-
-resource "aws_ecr_repository" "ui" {
-  name                 = "${var.project}-ui"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration { encryption_type = "AES256" }
-}
-
-resource "aws_ecr_lifecycle_policy" "ui" {
-  repository = aws_ecr_repository.ui.name
+resource "aws_ecr_lifecycle_policy" "this" {
+  for_each   = local.ecr_lifecycle_repos
+  repository = aws_ecr_repository.this[each.key].name
   policy = jsonencode({
     rules = [
       {

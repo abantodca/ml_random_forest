@@ -8,9 +8,9 @@ calidad de modelos (métricas OOF + ranking). Sin `streamlit`: invoca los
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass, field
 
+from app.core import logger
 from app.dependencies import (
     get_cached_accuracy,
     get_cached_health,
@@ -98,9 +98,12 @@ def build_live_data_vm() -> LiveDataVM:
     points: list[AccuracyPoint] = []
     for name in get_loaded_variety_names():
         # Una variedad que falle (modelo recién registrado, backend ocupado)
-        # no debe tumbar el resumen de las demás.
-        with contextlib.suppress(Exception):
+        # no debe tumbar el resumen de las demás. Se loguea a debug para no
+        # ensuciar la consola pero dejar rastro diagnosticable.
+        try:
             points.extend(get_cached_accuracy(name, with_decomposition=False))
+        except Exception as exc:
+            logger.debug("Precisión en vivo: variedad %s omitida (%s)", name, exc)
 
     errs = [p.error_total for p in points]
     mae = _mean([abs(e) for e in errs])

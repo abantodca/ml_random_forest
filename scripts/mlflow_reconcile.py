@@ -139,7 +139,7 @@ def discover_champions(s3, bucket: str) -> dict[str, dict]:
         variety = parts[-1][len("champion_") : -len(".json")]
         try:
             doc = s3_get_json(s3, bucket, key)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log(f"  aviso: no pude leer {key}: {exc}")
             continue
         run_id = doc.get("champion_run_id")
@@ -163,7 +163,7 @@ def find_logged_model_prefix(s3, bucket: str, exp_id: str, run_id: str) -> str |
     for key in mlmodels:
         try:
             text = s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         if f"run_id: {run_id}" in text:
             return key.rsplit("/MLmodel", 1)[0] + "/"  # .../m-<id>/artifacts/
@@ -213,7 +213,7 @@ def already_registered(client: MlflowClient, model_name: str) -> bool:
     try:
         versions = client.search_model_versions(f"name='{model_name}'", max_results=1)
         return len(versions) > 0
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -360,7 +360,7 @@ def main() -> None:
             )
             reconciled += int(ok)
             failed += int(not ok)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failed += 1
             log(f"  {variety}: FALLO reconstruccion: {exc}")
 

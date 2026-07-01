@@ -52,7 +52,7 @@ _PLOTLY_LAYOUT_DEFAULTS = dict(
 
 # Alias retro-compatible para callers internos de este modulo. La fuente
 # de verdad es `html.helpers.plotly_div`.
-_plotly_div = plotly_div
+
 
 
 def plot_pred_vs_actual_plotly(
@@ -112,7 +112,7 @@ def plot_pred_vs_actual_plotly(
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
     fig.update_yaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
-    return _plotly_div(fig)
+    return plotly_div(fig)
 
 
 def plot_calibration_plotly(calibration_df) -> str:
@@ -181,7 +181,7 @@ def plot_calibration_plotly(calibration_df) -> str:
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
     fig.update_yaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
-    return _plotly_div(fig, div_id="calibration_plot")
+    return plotly_div(fig, div_id="calibration_plot")
 
 
 def plot_error_histogram_plotly(
@@ -247,7 +247,7 @@ def plot_error_histogram_plotly(
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
     fig.update_yaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
-    return _plotly_div(fig, div_id="error_hist")
+    return plotly_div(fig, div_id="error_hist")
 
 
 def plot_residuals_vs_predicted_plotly(
@@ -305,7 +305,7 @@ def plot_residuals_vs_predicted_plotly(
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
     fig.update_yaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
-    return _plotly_div(fig, div_id="residuals_plot")
+    return plotly_div(fig, div_id="residuals_plot")
 
 
 def plot_error_over_time_plotly(
@@ -377,7 +377,7 @@ def plot_error_over_time_plotly(
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
     fig.update_yaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
-    return _plotly_div(fig, div_id="error_time")
+    return plotly_div(fig, div_id="error_time")
 
 
 def plot_partial_dependence_plotly(
@@ -478,4 +478,4 @@ def plot_partial_dependence_plotly(
     )
     fig.update_xaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
     fig.update_yaxes(gridcolor="#e7eaf0", zerolinecolor="#cbd5e0")
-    return _plotly_div(fig, div_id="pdp_plot")
+    return plotly_div(fig, div_id="pdp_plot")

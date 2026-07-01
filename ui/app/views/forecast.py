@@ -132,12 +132,13 @@ def _render_results(result: F.BatchRunResult) -> None:
         render_drift_panel(opts[lbl].drift, expanded=True)
 
 
-@st.fragment
-def _render_new(all_names: list[str]) -> None:
-    catalogs = get_cached_catalogs()
-    fundos = list(catalogs.fundos)
-    formatos = list(catalogs.formatos)
-    fmt_default = catalogs.formato_default or (formatos[0] if formatos else "")
+def _render_defaults_section(
+    all_names: list[str], fundos: list[str], formatos: list[str], fmt_default: str
+) -> tuple[str, str, str]:
+    """Fila de defaults (variedad/fundo/formato) + botón de plantilla.
+
+    Devuelve los tres valores elegidos para sembrar la grilla nueva.
+    """
     default_variety = (get_loaded_variety_names() or all_names)[0]
 
     section_title("🌿 DEFAULTS (filas nuevas y plantilla)")
@@ -168,10 +169,11 @@ def _render_new(all_names: list[str]) -> None:
             use_container_width=True,
             key="grid_tpl",
         )
+    return variety, fundo, formato
 
-    if _SS_GRID not in st.session_state:
-        st.session_state[_SS_GRID] = F.empty_grid(variety, fundo, formato)
 
+def _render_upload_section() -> None:
+    """Expander para cargar un Excel/CSV de inputs a la grilla."""
     with st.expander(
         "📤 Cargar Excel de PRONÓSTICOS (inputs a predecir · SIN KG/JR_H)",
         expanded=False,
@@ -191,32 +193,9 @@ def _render_new(all_names: list[str]) -> None:
             except Exception as exc:
                 st.error(f"No se pudo leer el archivo: {exc}")
 
-    st.caption(
-        "**Cómo usar la grilla:** pegá desde Excel (Ctrl+V) en cualquier celda · "
-        "**agregar fila** → escribí en la fila vacía del final · "
-        "**borrar fila(s)** → marcá la casilla ☑ a la izquierda y apretá `Supr` (Delete). "
-        "Las columnas opcionales (%INDUS, P/BAYA, HORAS_EFECTIVAS) se pueden dejar vacías. "
-        "Nada se guarda hasta apretar **🔮 Predecir y guardar lote**; para editar o borrar "
-        "pronósticos ya guardados, usá la pestaña **📋 Historial**."
-    )
-    section_title("✏️ GRILLA — tecleá o pegá desde Excel · 1 fila = individual, N = lote")
-    edited = st.data_editor(
-        st.session_state[_SS_GRID],
-        column_config=_column_config(all_names, fundos, formatos),
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=_EDITOR_KEY,
-    )
 
-    # Resumen pre-predicción: n filas y variedades involucradas
-    _summary = F.pre_summary_text(edited)
-    if _summary:
-        st.info(_summary)
-
-    if not st.button("🔮 Predecir y guardar lote", type="primary", key="grid_predict"):
-        return
-
+def _handle_predict(edited: pd.DataFrame, all_names: list[str]) -> None:
+    """Coerción → validación → ejecución del lote → resultados."""
     clean = F.coerce(edited)
     if clean.empty:
         st.warning("La grilla está vacía — agregá al menos una fila con VARIEDAD y KG/HA.")
@@ -250,6 +229,49 @@ def _render_new(all_names: list[str]) -> None:
         st.error(err)
     if result.preds:
         _render_results(result)
+
+
+@st.fragment
+def _render_new(all_names: list[str]) -> None:
+    catalogs = get_cached_catalogs()
+    fundos = list(catalogs.fundos)
+    formatos = list(catalogs.formatos)
+    fmt_default = catalogs.formato_default or (formatos[0] if formatos else "")
+
+    variety, fundo, formato = _render_defaults_section(all_names, fundos, formatos, fmt_default)
+
+    if _SS_GRID not in st.session_state:
+        st.session_state[_SS_GRID] = F.empty_grid(variety, fundo, formato)
+
+    _render_upload_section()
+
+    st.caption(
+        "**Cómo usar la grilla:** pegá desde Excel (Ctrl+V) en cualquier celda · "
+        "**agregar fila** → escribí en la fila vacía del final · "
+        "**borrar fila(s)** → marcá la casilla ☑ a la izquierda y apretá `Supr` (Delete). "
+        "Las columnas opcionales (%INDUS, P/BAYA, HORAS_EFECTIVAS) se pueden dejar vacías. "
+        "Nada se guarda hasta apretar **🔮 Predecir y guardar lote**; para editar o borrar "
+        "pronósticos ya guardados, usá la pestaña **📋 Historial**."
+    )
+    section_title("✏️ GRILLA — tecleá o pegá desde Excel · 1 fila = individual, N = lote")
+    edited = st.data_editor(
+        st.session_state[_SS_GRID],
+        column_config=_column_config(all_names, fundos, formatos),
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=_EDITOR_KEY,
+    )
+
+    # Resumen pre-predicción: n filas y variedades involucradas
+    _summary = F.pre_summary_text(edited)
+    if _summary:
+        st.info(_summary)
+
+    if not st.button("🔮 Predecir y guardar lote", type="primary", key="grid_predict"):
+        return
+
+    _handle_predict(edited, all_names)
 
 
 # ── Render principal ────────────────────────────────────────────────────
