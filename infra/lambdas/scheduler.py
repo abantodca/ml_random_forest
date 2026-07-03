@@ -78,6 +78,23 @@ def _running_jobs() -> list[str]:
     return ids
 
 
+def _set_desired(service: str, count: int) -> bool:
+    """update_service tolerante a service inexistente o INACTIVE.
+
+    `task sleep` (hibernacion) destruye el ALB y arrastra el service de MLflow
+    (depends_on del listener). Los triggers que siguen vivos mientras tanto
+    (batch_autostop, cron stop si esta habilitado) no deben romper por eso.
+    """
+    try:
+        ecs.update_service(cluster=ECS_CLUSTER, service=service, desiredCount=count)
+        log.info("ecs %s -> desiredCount=%d", service, count)
+        return True
+    except (ecs.exceptions.ServiceNotFoundException,
+            ecs.exceptions.ServiceNotActiveException):
+        log.warning("ecs %s no existe o esta INACTIVE (stack hibernado?) -> skip", service)
+        return False
+
+
 def _start():
     """Wake secuencial: RDS -> MLflow -> Reports (Patch 13.3).
 
@@ -111,25 +128,22 @@ def _start():
     log.info("rds OK -> arrancando MLflow")
 
     # Etapa 2: MLflow Fargate
-    ecs.update_service(cluster=ECS_CLUSTER, service=ECS_SVC_MLFLOW, desiredCount=1)
-    log.info("ecs %s -> desiredCount=1", ECS_SVC_MLFLOW)
-
-    # Esperar hasta running (max ~5 min). Si no llega, igual arrancamos reports.
-    for i in range(30):
-        svc = ecs.describe_services(cluster=ECS_CLUSTER, services=[ECS_SVC_MLFLOW])["services"][0]
-        running = svc.get("runningCount", 0)
-        log.info("mlflow[%d]: running=%d desired=%d", i, running, svc.get("desiredCount", 0))
-        if running >= 1:
-            break
-        time.sleep(10)
-    else:
-        log.warning("MLflow no esta running tras 5 min, arrancamos reports igual")
+    if _set_desired(ECS_SVC_MLFLOW, 1):
+        # Esperar hasta running (max ~5 min). Si no llega, igual arrancamos reports.
+        for i in range(30):
+            svc = ecs.describe_services(cluster=ECS_CLUSTER, services=[ECS_SVC_MLFLOW])["services"][0]
+            running = svc.get("runningCount", 0)
+            log.info("mlflow[%d]: running=%d desired=%d", i, running, svc.get("desiredCount", 0))
+            if running >= 1:
+                break
+            time.sleep(10)
+        else:
+            log.warning("MLflow no esta running tras 5 min, arrancamos reports igual")
 
     # Etapa 3: Reports + API + UI Fargate (no esperan, son no-bloqueantes).
     # La API tolera que MLflow aun no este listo (lazy-load); RDS ya esta up.
     for svc in (ECS_SVC_REPORTS, ECS_SVC_API, ECS_SVC_UI):
-        ecs.update_service(cluster=ECS_CLUSTER, service=svc, desiredCount=1)
-        log.info("ecs %s -> desiredCount=1", svc)
+        _set_desired(svc, 1)
     log.info("=== START OK ===")
 
 
@@ -145,8 +159,7 @@ def _stop():
 
     # ECS: desired_count = 0 (incluye app stack api + ui)
     for svc in (ECS_SVC_MLFLOW, ECS_SVC_REPORTS, ECS_SVC_API, ECS_SVC_UI):
-        ecs.update_service(cluster=ECS_CLUSTER, service=svc, desiredCount=0)
-        log.info("ecs %s -> desiredCount=0", svc)
+        _set_desired(svc, 0)
 
     # RDS: stop si esta RUNNING
     db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]

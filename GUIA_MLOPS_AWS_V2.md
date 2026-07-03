@@ -6311,6 +6311,23 @@ def _running_jobs() -> list[str]:
     return ids
 
 
+def _set_desired(service: str, count: int) -> bool:
+    """update_service tolerante a service inexistente o INACTIVE.
+
+    `task sleep` (hibernacion) destruye el ALB y arrastra el service de MLflow
+    (depends_on del listener). Los triggers que siguen vivos mientras tanto
+    (batch_autostop, cron stop si esta habilitado) no deben romper por eso.
+    """
+    try:
+        ecs.update_service(cluster=ECS_CLUSTER, service=service, desiredCount=count)
+        log.info("ecs %s -> desiredCount=%d", service, count)
+        return True
+    except (ecs.exceptions.ServiceNotFoundException,
+            ecs.exceptions.ServiceNotActiveException):
+        log.warning("ecs %s no existe o esta INACTIVE (stack hibernado?) -> skip", service)
+        return False
+
+
 def _start():
     """Wake secuencial: RDS -> MLflow -> Reports (Patch 13.3).
 
@@ -6344,25 +6361,22 @@ def _start():
     log.info("rds OK -> arrancando MLflow")
 
     # Etapa 2: MLflow Fargate
-    ecs.update_service(cluster=ECS_CLUSTER, service=ECS_SVC_MLFLOW, desiredCount=1)
-    log.info("ecs %s -> desiredCount=1", ECS_SVC_MLFLOW)
-
-    # Esperar hasta running (max ~5 min). Si no llega, igual arrancamos reports.
-    for i in range(30):
-        svc = ecs.describe_services(cluster=ECS_CLUSTER, services=[ECS_SVC_MLFLOW])["services"][0]
-        running = svc.get("runningCount", 0)
-        log.info("mlflow[%d]: running=%d desired=%d", i, running, svc.get("desiredCount", 0))
-        if running >= 1:
-            break
-        time.sleep(10)
-    else:
-        log.warning("MLflow no esta running tras 5 min, arrancamos reports igual")
+    if _set_desired(ECS_SVC_MLFLOW, 1):
+        # Esperar hasta running (max ~5 min). Si no llega, igual arrancamos reports.
+        for i in range(30):
+            svc = ecs.describe_services(cluster=ECS_CLUSTER, services=[ECS_SVC_MLFLOW])["services"][0]
+            running = svc.get("runningCount", 0)
+            log.info("mlflow[%d]: running=%d desired=%d", i, running, svc.get("desiredCount", 0))
+            if running >= 1:
+                break
+            time.sleep(10)
+        else:
+            log.warning("MLflow no esta running tras 5 min, arrancamos reports igual")
 
     # Etapa 3: Reports + API + UI Fargate (no esperan, son no-bloqueantes).
     # La API tolera que MLflow aun no este listo (lazy-load); RDS ya esta up.
     for svc in (ECS_SVC_REPORTS, ECS_SVC_API, ECS_SVC_UI):
-        ecs.update_service(cluster=ECS_CLUSTER, service=svc, desiredCount=1)
-        log.info("ecs %s -> desiredCount=1", svc)
+        _set_desired(svc, 1)
     log.info("=== START OK ===")
 
 
@@ -6378,8 +6392,7 @@ def _stop():
 
     # ECS: desired_count = 0 (incluye app stack api + ui)
     for svc in (ECS_SVC_MLFLOW, ECS_SVC_REPORTS, ECS_SVC_API, ECS_SVC_UI):
-        ecs.update_service(cluster=ECS_CLUSTER, service=svc, desiredCount=0)
-        log.info("ecs %s -> desiredCount=0", svc)
+        _set_desired(svc, 0)
 
     # RDS: stop si esta RUNNING
     db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]
@@ -8283,18 +8296,31 @@ tasks:
   # ═══ Lifecycle: up (idempotente) / down (con cooldown opcional) ═════════════
 
   up:
-    desc: "Encender stack (idempotente: skip si MLflow ya UP, sino invoca scheduler.start y espera RDS+ALB healthy)"
+    desc: "Encender stack (idempotente: recrea ALB+NAT si down los libero, invoca scheduler.start y espera RDS+ALB healthy)"
     silent: true
     cmds:
       - |
         set -e
+        # down (hibernacion) destruyo el ALB y todo lo que dependia de el
+        # (NAT, listener+rules, ECS services, task defs, modulos ui/reports
+        # via depends_on, lambdas scheduler/dispatcher via outputs). Un apply
+        # COMPLETO (como rebuild) recrea exactamente lo que falte y es
+        # inmune a que el grafo de dependencias arrastre mas de lo previsto.
+        if ! aws elbv2 describe-load-balancers --names {{.PROJECT}}-alb >/dev/null 2>&1; then
+          echo ">>> ALB no existe (stack hibernado) -> terraform apply completo (~3-5 min)..."
+          terraform -chdir={{.TF_DIR}} apply -auto-approve
+          # El DNS del ALB cambia al recrearlo -> descartar cualquier valor
+          # stale del env y resolver fresco desde terraform output.
+          unset MLFLOW_ALB_DNS
+        fi
         source tasks/lib/wake.sh
         PROJECT={{.PROJECT}} TF_DIR={{.TF_DIR}} SCHEDULER_FN={{.SCHEDULER_FN}} wake_cluster
 
   down:
-    desc: "Apagar stack (aborta si Batch RUNNING). Opcional COOLDOWN=N (segundos antes de apagar)"
+    desc: "Apagar stack + liberar ALB y NAT (aborta si Batch RUNNING). Vars: COOLDOWN=N, RELEASE_NET=false (mantiene red, wake instantaneo)"
     vars:
-      COOLDOWN: '{{.COOLDOWN | default "0"}}'
+      COOLDOWN:    '{{.COOLDOWN | default "0"}}'
+      RELEASE_NET: '{{.RELEASE_NET | default "true"}}'
     cmds:
       - 'echo ">>> Pre-check Batch jobs activos"'
       - task: _batch-jobs
@@ -8318,6 +8344,29 @@ tasks:
         else
           echo "  Lambda {{.SCHEDULER_FN}} no existe -> skip (probablemente ya destruido)"
         fi
+      # Hibernacion: ALB (~$16/mes) + NAT (~$33/mes) + IPv4 publicas (~$7/mes)
+      # son el costo idle dominante con el stack "dormido". El destroy targeted
+      # del ALB arrastra a TODOS sus dependientes en el grafo: listener + rules,
+      # los 4 ECS services + task defs, los modulos ui/reports completos
+      # (depends_on de modulo), la alarma alb-5xx y las lambdas scheduler/
+      # dispatcher (sus env vars usan outputs de los services/ALB). Todo es
+      # stateless y `up` lo recrea con un apply completo. RDS/S3 no se tocan.
+      # OJO: (1) el DNS del ALB cambia en cada ciclo sleep/wake;
+      #      (2) sin la lambda keepstop, si la hibernacion pasa de 7 dias AWS
+      #          re-arranca el RDS solo y nadie lo re-para -> para idle largo
+      #          usar `task ops:teardown` (destruye RDS con snapshot final).
+      - |
+        if [ "{{.RELEASE_NET}}" != "true" ]; then
+          echo ">>> RELEASE_NET=false -> ALB + NAT quedan encendidos (~\$1.8/dia idle)"
+          exit 0
+        fi
+        set -e
+        echo ">>> Liberando ALB + dependientes (el DNS cambiara al recrearlo)..."
+        terraform -chdir={{.TF_DIR}} destroy -target=module.mlflow.aws_lb.main -auto-approve
+        echo ">>> Liberando NAT gateway + EIP (enable_nat=false)..."
+        terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
+        echo "OK stack hibernado (piso ~\$4/mes: storage + Route53). Volver: task wake"
+        echo "AVISO: hibernacion >7 dias -> RDS auto-arranca (keepstop hibernado); usar teardown para idle largo"
 
   # ═══ Teardown / Rebuild ═════════════════════════════════════════════════════
 
@@ -8325,7 +8374,10 @@ tasks:
     desc: "Down + terraform destroy de modulos volatiles. Preserva storage + network"
     prompt: "Destruira los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
     cmds:
+      # RELEASE_NET=false: liberar ALB/NAT aqui seria redundante — el destroy
+      # de module.mlflow y el apply enable_nat=false de abajo hacen lo mismo.
       - task: down
+        vars: { RELEASE_NET: "false" }
       - 'echo ">>> Destroy modulos volatiles (orden reverso de apply)..."'
       - |
         for mod in {{.VOLATILE_MODULES}}; do

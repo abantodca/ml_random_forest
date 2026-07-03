@@ -320,12 +320,12 @@ tasks:
       - task: batch:smoke
 
   wake:
-    desc: "AWS: encender un stack YA desplegado y dormido (sleep). Reanuda RDS+Fargate. Idempotente. (Tras teardown usa `rebuild`; desde cero, `deploy`)"
+    desc: "AWS: encender un stack dormido. Recrea ALB+NAT y dependientes si sleep los libero (apply completo ~3-5 min, el DNS del ALB cambia) y reanuda RDS+Fargate. Idempotente. (Tras teardown usa `rebuild`; desde cero, `deploy`)"
     cmds:
       - task: ops:up
 
   sleep:
-    desc: "AWS: apagar stack (pausa corta). Para RDS+Fargate pero MANTIENE el NAT (~$3/mes idle). Para liberar NAT usa `teardown`"
+    desc: "AWS: apagar stack + liberar ALB y NAT (piso ~$4/mes; >7 dias idle usar teardown, el RDS auto-arranca). RELEASE_NET=false mantiene la red (wake instantaneo, ~$1.8/dia idle)"
     cmds:
       - task: ops:down
 
