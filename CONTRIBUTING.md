@@ -2,7 +2,8 @@
 
 Guía de onboarding para desarrolladores. El **qué/por qué** del ML vive en
 `README.md`; las **invariantes** en `CLAUDE.md`; el **runbook AWS** en
-`GUIA_MLOPS_AWS_V2.md`; la **vista visual** en `ARCHITECTURE.md`. Esta guía es
+`docs/01-local.md` y `docs/02-produccion-aws.md`; la **vista visual** en
+`docs/03-arquitectura.md`; las decisiones ratificadas en `docs/adr/`. Esta guía es
 el **cómo trabajar** en el repo.
 
 ## 1. Setup local (una vez)
@@ -85,4 +86,4 @@ Romper uno de estos invalida modelos en producción o despliegues. Detalle en
 | `docs/` | planes y notas de diseño |
 
 El árbol detallado y el flujo del pipeline: `README.md` #197 y #264.
-Los diagramas visuales: `ARCHITECTURE.md`.
+Los diagramas visuales: `docs/03-arquitectura.md`.

@@ -8,7 +8,7 @@
 #
 # Uso: ensure-s3-bucket.sh <name> <region>
 # Consumido por: tasks/local.yml `_ensure-bucket` y el bootstrap del tfstate
-# documentado en GUIA_MLOPS_AWS_V2.md (no hay carpeta `infra/` en este repo).
+# documentado en docs/02-produccion-aws.md; el Terraform vive en `infra/`.
 set -euo pipefail
 
 name="${1:?falta <name>}"

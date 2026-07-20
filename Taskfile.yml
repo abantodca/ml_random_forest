@@ -57,7 +57,7 @@ tasks:
     cmds:
       # Quickstart curado (los 15-20 comandos del 90% del dia). El catalogo
       # completo y exacto vive en `task --list`; el runbook paso-a-paso del
-      # primer stand-up AWS, en GUIA_MLOPS_AWS_V2.md. Aqui solo lo esencial,
+      # primer stand-up AWS, en docs/02-produccion-aws.md. Aqui solo lo esencial,
       # para que no derive cada vez que se agrega una tarea.
       - |
         cat <<'EOF'
@@ -151,7 +151,7 @@ tasks:
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║  Mas detalle                                                              ║
           ╠═══════════════════════════════════════════════════════════════════════════╣
-          ║  Catalogo completo:  task --list     Runbook AWS:  GUIA_MLOPS_AWS_V2.md   ║
+          ║  Catalogo completo:  task --list     Runbook AWS: docs/02-produccion-aws.md ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
 
         EOF

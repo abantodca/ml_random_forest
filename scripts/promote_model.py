@@ -12,7 +12,8 @@ La URI de MLflow se resuelve desde:
   2. env MLFLOW_ALB_DNS  (http://$MLFLOW_ALB_DNS).
 
 Nota: el fallback historico `terraform output -raw alb_dns` se removio cuando
-la carpeta `infra/` migro a codigo pegable en GUIA_MLOPS_AWS_V2.md. Para
+la infra vive en `infra/` (Terraform) y esta documentada en
+docs/02-produccion-aws.md. Para
 obtener el DNS sin tener Terraform a mano: `aws elbv2 describe-load-balancers
 --query 'LoadBalancers[?contains(LoadBalancerName,\\`mlflow\\`)].DNSName' --output text`.
 """

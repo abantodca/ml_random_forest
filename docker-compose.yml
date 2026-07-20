@@ -228,7 +228,7 @@ services:
       # desde S3 al boot y corre split_workbook() — replica el flujo
       # productivo end-to-end. Si quedan vacias, lee ./data del bind-mount.
       # El default de S3_DATA_KEY coincide con el del Lambda dispatcher
-      # (codigo pegable en GUIA_MLOPS_AWS_V2.md #3.8, modulo lambdas/):
+      # (codigo pegable en docs/02-produccion-aws.md #3.8, modulo lambdas/):
       # el archivo acumulado, no el split. Ver #4.13 (Proximo paso: Tramo II).
       S3_DATA_BUCKET: ${S3_DATA_BUCKET:-}
       S3_DATA_KEY: ${S3_DATA_KEY:-BD_HISTORICO_ACUMULADO.xlsx}

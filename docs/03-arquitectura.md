@@ -3,10 +3,11 @@
 Vista **visual** (C4 + secuencia + despliegue) del sistema end-to-end. Es la capa
 de diagramas que complementa, sin duplicar, las fuentes autoritativas:
 
-- **`README.md`** — diseño ML a fondo: features, champion, nested-CV, anti-overfitting,
+- **`../README.md`** — diseño ML a fondo: features, champion, nested-CV, anti-overfitting,
   convenciones MLflow (`#197 Mapa de la arquitectura`, `#264 Flujo del pipeline`).
-- **`GUIA_MLOPS_AWS_V2.md`** — runbook local + AWS y los **ADR-001..004**.
-- **`CLAUDE.md`** — invariantes no-obvios (leer antes de tocar código).
+- **[`01-local.md`](01-local.md)** y **[`02-produccion-aws.md`](02-produccion-aws.md)** — los runbooks local y AWS.
+- **[`adr/`](adr/)** — las decisiones ratificadas (ADR-001..009), con su contexto y sus consecuencias.
+- **`../CLAUDE.md`** — invariantes no-obvios (leer antes de tocar código).
 
 > Los diagramas son Mermaid: GitHub los renderiza nativo. En local, cualquier
 > previsualizador de Markdown con Mermaid (VS Code + extensión) los muestra.
@@ -94,7 +95,7 @@ graph TB
 | Trainer | — (job) | entrena XGB+LGB, elige champion, registra | README #264 |
 | API (FastAPI) | `:8000/docs` | sirve modelos + persiste forecasts a Postgres | — |
 | UI (Streamlit) | `:8501` | dashboard de gestión | — |
-| MLflow | `:5000` | tracking + registry (backend **siempre** PG+S3, ADR-001/003) | GUIA ADR-001 |
+| MLflow | `:5000` | tracking + registry (backend **siempre** PG+S3, ADR-001/003) | [ADR-001](adr/ADR-001-mlflow-backend-postgres-s3.md) |
 | Postgres | interno | DB de MLflow **+** DB `forecasts` (separadas, invariante #7) | — |
 | nginx reports | `:8080` | HTML/Excel estáticos del dashboard | — |
 
@@ -249,7 +250,7 @@ Módulos Terraform: `network · storage · mlflow · api · ui · reports · bat
 scheduler · lambdas · monitoring · cicd · _shared`. El módulo **`cicd` es
 opcional**: `enable_cicd=false` (default) levanta todo el stack **sin** depender
 del bootstrap OIDC (`task infra:bootstrap-oidc`); se activa después con
-`enable_cicd=true`. Detalle CI/CD en `GUIA_MLOPS_AWS_V2.md #3.10`.
+`enable_cicd=true`. Detalle CI/CD en `[`02-produccion-aws.md` #3.10](02-produccion-aws.md#parte-3--modulos-terraform)`.
 
 **Modelo de costo (dos palancas, sin cambiar la topología):**
 - **`task wake/sleep`** — para pausas cortas: el scheduler escala Fargate a 0 y
@@ -295,23 +296,60 @@ Los artifacts de MLflow (modelos, reports) ya viven en S3 y no dependen de esto.
 > error. El primer snapshot lo produce el primer `task teardown`; recién desde
 > ahí el `rebuild` tiene algo que restaurar. `latest_snapshot()` devuelve vacío
 > en ese caso y el apply corre sin `-var`, así que las mismas tareas sirven para
-> el estreno y para los ciclos siguientes. Detalle en `GUIA #8.5`.
+> el estreno y para los ciclos siguientes. Detalle en [`02-produccion-aws.md` #8.5](02-produccion-aws.md#parte-8--runbook-operativo-extendido).
 
 ---
 
 ## 7. Invariantes que la arquitectura DEBE preservar
 
-Resumen accionable; el detalle vive en `CLAUDE.md` (#1–#10).
+Resumen accionable; el detalle vive en `../CLAUDE.md` (#1–#10) y el rationale
+completo, en los [ADR](adr/).
 
-| # | Invariante | Por qué |
-|---|---|---|
-| 1 | `src/` única fuente de verdad; API la `COPY`a (no vendoring) | trainer y API comparten pipeline; vendoring → drift silencioso |
-| 4 | No renombrar `step_XX_verbo/` | paths horneados en `.joblib` serializados |
-| 8 | Prefijo `rnd-forest-<variety>` es contrato trainer↔API | la API carga por ese nombre |
-| 9 | Lags **dentro** del Pipeline | evita leakage entre folds de CV |
-| 1/3 | MLflow backend **siempre** PG+S3 | nunca `file://mlruns`, sqlite, LocalStack |
+| # | Invariante | Por qué | ADR |
+|---|---|---|---|
+| 1 | `src/` única fuente de verdad; API la `COPY`a (no vendoring) | trainer y API comparten pipeline; vendoring → drift silencioso | [005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md) |
+| 2 | El sistema elige el campeón; sin flag para forzar backend | decisión auditable y reproducible | [002](adr/ADR-002-campeon-automatico.md) |
+| 4 | No renombrar `step_XX_verbo/` | paths horneados en `.joblib` serializados | [005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md) |
+| 6 | ALB por prefijos específicos, nunca `/api/*` | MLflow es dueño de `/api/2.0/mlflow-artifacts/*` | [006](adr/ADR-006-ruteo-alb-por-prefijos.md) |
+| 8 | Prefijo `rnd-forest-<variety>` es contrato trainer↔API | la API carga por ese nombre | — |
+| 9 | Lags **dentro** del Pipeline | evita leakage entre folds de CV | [007](adr/ADR-007-lags-dentro-del-pipeline.md) |
+| 1/3 | MLflow backend **siempre** PG+S3 | nunca `file://mlruns`, sqlite, LocalStack | [001](adr/ADR-001-mlflow-backend-postgres-s3.md) · [003](adr/ADR-003-s3-real-sin-localstack.md) |
 
 ---
 
-*Para profundidad de cada decisión: `README.md` (#305 Decisiones técnicas con
-respaldo estadístico) y los ADR en `GUIA_MLOPS_AWS_V2.md`.*
+## 8. Qué NO usa (y por qué)
+
+Las ausencias son decisiones, y a esta escala pesan más que las presencias. Cada
+descarte con su **punto de cruce**: la condición concreta que lo volvería correcto.
+
+| No se usa | Qué costaría | Por qué no, hoy | Punto de cruce |
+|---|---|---|---|
+| **SageMaker** (training o endpoints) | ~2× el cómputo equivalente + lock-in del formato | Batch corre el **mismo contenedor** que probaste en local. SageMaker exige empaquetar a su manera y rompe la paridad local↔prod que sostiene todo el Tramo I | Cuando necesites autoscaling de inferencia real o multi-model endpoints |
+| **Step Functions** | ~$0 a este volumen | La orquestación cabe en Task + Lambda dispatcher. Una máquina de estados para "entrená N variedades" es infraestructura sin problema que resolver | Cuando el pipeline tenga ramas condicionales y reintentos por paso |
+| **Feature store** (SageMaker FS / Feast) | ~$50+/mes + un servicio más | Las features se generan **dentro** del Pipeline y se serializan con él ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)). Un feature store agrega la sincronización train/serving que hoy no existe porque no hace falta | Cuando haya features online, o varios equipos consumiendo las mismas |
+| **Kubernetes / EKS** | ~$73/mes solo el control plane | ECS Fargate cubre 4 servicios stateless sin plano de control que mantener | Cuando el equipo ya opere EKS para otra cosa |
+| **Multi-AZ en RDS** | ~2× el costo del RDS | El RPO real lo da el snapshot del ciclo teardown/rebuild ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)). Una caída de AZ cuesta un rebuild, no datos | Cuando la API pase a ser crítica de negocio en horario continuo |
+| **Airflow / MWAA** | ~$350/mes (MWAA) | No hay DAGs: hay un job de training disparado por cron o a mano | Cuando haya dependencias entre pipelines de varios equipos |
+| **Tests en CI** | — | Ver [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). **No es una decisión de arquitectura, es deuda asumida y fechada** | Ya. Es lo primero que agregaría |
+
+## 9. Los gotchas que te van a morder
+
+Cosas que ya fallaron o que fallan de forma que el mensaje de error no explica.
+
+| # | Gotcha | Síntoma | Solución |
+|---|---|---|---|
+| 1 | Router nuevo en la API sin regla en el ALB | funciona local, **404 en prod** | Agregar el prefijo a la listener rule de priority 88 ([ADR-006](adr/ADR-006-ruteo-alb-por-prefijos.md)) |
+| 2 | `/api/*` genérico en el ALB | MLflow UI carga pero **revienta al abrir un artifact** | Nunca comodín; enumerar prefijos ([ADR-006](adr/ADR-006-ruteo-alb-por-prefijos.md)) |
+| 3 | Mover el cómputo de lags al loader | el MAPE de CV **mejora** — y es mentira | Los lags van dentro del Pipeline ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)) |
+| 4 | Leer env flags en `transform()` | el `.joblib` produce columnas distintas en otra máquina | Hornear flags en `flags_` durante el `fit` ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)) |
+| 5 | Renombrar un `step_XX_verbo/` | los `.joblib` viejos dejan de deserializar | No se renombran ([ADR-005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md)) |
+| 6 | `random_password` del RDS dentro de `module.mlflow` | el rebuild restaura el snapshot y **no autentica**: backup inservible | El secreto vive en `envs/prod/` ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)) |
+| 7 | `teardown` con el RDS parado | `InvalidDBInstanceState`, destroy a medias y **sin snapshot** | `ensure_rds_available` lo re-arranca antes (`tasks/lib/nuke.sh`) |
+| 8 | `snapshot_identifier` sin `ignore_changes` | cualquier apply posterior **recrea el RDS** | Es `ForceNew`: el `ignore_changes` es obligatorio |
+| 9 | Cambiar `MODEL_REGISTRY_PREFIX` de un lado solo | la API no encuentra los modelos que el trainer registró | Es un contrato: se cambia en los dos lados a la vez |
+| 10 | Correr `python main.py` en el host en vez del contenedor | resultados que no reproducen los de producción | Las dependencias pineadas viven en la imagen |
+
+---
+
+*Para profundidad de cada decisión: `../README.md` (#305 Decisiones técnicas con
+respaldo estadístico) y los [ADR](adr/).*

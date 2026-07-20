@@ -24,9 +24,10 @@ reference sections as `#N`, not `§N`.
 
 - **`README.md`** — the full ML design: pipeline flow, feature schema, champion selection,
   nested-CV, anti-overfitting, MLflow conventions, outputs. This is the deepest source.
-- **`GUIA_MLOPS_AWS_V2.md`** — step-by-step runbook for local + AWS stand-up, and the **ADRs**
-  (ADR-001/002/003/004 referenced throughout the code).
-- **`ARCHITECTURE.md`** — visual layer (Mermaid C4 + sequence + deployment diagrams) of the
+- **`docs/01-local.md`** and **`docs/02-produccion-aws.md`** — step-by-step runbooks for local and
+  AWS stand-up.
+- **`docs/adr/`** — the ratified decisions (ADR-001..009), referenced throughout the code.
+- **`docs/03-arquitectura.md`** — visual layer (Mermaid C4 + sequence + deployment diagrams) of the
   end-to-end system. Complements the README's ASCII map; does not duplicate it.
 - **`CONTRIBUTING.md`** — onboarding/how-to-work: setup, dev loop, commit convention, and the
   invariants checklist for structural PRs.
@@ -68,7 +69,7 @@ owner). La validación es lint + stack local: `task build` → `task train VARIE
 TUNING=smoke` → revisar UI/MLflow.
 
 El **CD** (GHA OIDC → ECR/ECS deploy) es deliberadamente Terraform pegable en
-`GUIA_MLOPS_AWS_V2.md` #3.10 (`infra/modules/cicd/`), no un workflow committeado.
+`docs/02-produccion-aws.md` #3.10 (`infra/modules/cicd/`), no un workflow committeado.
 
 ### Running the apps standalone (rarely needed; compose is the norm)
 

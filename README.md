@@ -98,7 +98,7 @@ en su primer arranque (`api/app/models/database.ensure_database`, idempotente).
 Las tasks Fargate están dimensionadas para el caso real y son **escalables por
 tfvars** sin tocar código (`api_cpu`, `api_memory`, `ui_cpu`, `ui_memory`,
 `api_preload_models` en el `envs/prod/terraform.tfvars` que se construye desde
-`GUIA_MLOPS_AWS_V2.md` #3.2.4):
+`docs/02-produccion-aws.md` #3.2.4):
 
 | Servicio | vCPU / RAM | Por qué |
 |---|---|---|
@@ -127,7 +127,7 @@ el RDS de MLflow.
 | **Fargate Spot** | `reports` + `ui` corren en `FARGATE_SPOT` (~70% más baratos, stateless). MLflow + API quedan on-demand a propósito (MLflow es crítico durante runs largos de training). | ~70% en reports+ui |
 | **RDS `db.t4g.small`** | No se baja a `micro`: hostea MLflow + `forecasts` y, con 32 variedades + training en paralelo, micro queda justo en RAM/conexiones (ahorro de solo ~$1.4/mes). `deletion_protection` + snapshot final por default; las tareas de teardown levantan la protección vía AWS CLI para permitir el destroy. | — (decisión consciente) |
 
-Detalle completo por servicio y por modo de lifecycle en `GUIA_MLOPS_AWS_V2.md`
+Detalle completo por servicio y por modo de lifecycle en `docs/02-produccion-aws.md`
 #9 (Costos detallados).
 
 ## CLI directa (sin Taskfile, sin Docker — requiere venv + MLflow server)
@@ -154,7 +154,7 @@ python main.py --tuning prod --skip-final-tuning           # ahorra ~1/(outer+1)
 python main.py --tuning prod --varieties POP --no-register                 # no toca el Registry
 python main.py --tuning prod --varieties POP --registry-stage Staging      # registra y promueve
 # Para Production, se recomienda usar el workflow `promote.yml` con gates
-# de calidad (GUIA_MLOPS_AWS_V2.md #12) en vez del flag.
+# de calidad (docs/02-produccion-aws.md #12) en vez del flag.
 ```
 
 ### Tuning profiles (`src/config.py`)
@@ -236,7 +236,7 @@ ml_training/
     │   └── _helpers.py
     ├── step_03_features/
     │   ├── feature_engineering.py           # FeatureGenerator (cíclicas + ratios estructurales + one-hot)
-    │   └── lag_features.py                  # add_lag_features (~35 features rolling/seasonal/ratios) — invocado desde data_loader.py
+    │   └── lag_features.py                  # LagFeatureTransformer (~35 features rolling/seasonal/ratios) — paso 0 del Pipeline
     ├── pipeline/build_pipeline.py           # missing_flags → imputer → outliers → features → variance_filter
     ├── step_04_train/
     │   ├── registry.py                      # BACKEND_REGISTRY: lista los backends entrenables (XGB, LGB)
@@ -340,7 +340,9 @@ Tras EDA sobre 10 073 filas:
 Además de las 6 numéricas raw, 2 categóricas one-hot y 13 cíclicas/temporales,
 el pipeline genera dos bloques de features derivadas:
 
-**Lag features** (`step_03_features/lag_features.py`, ~31 columnas, calculadas en `data_loader.py` antes del CV split):
+**Lag features** (`step_03_features/lag_features.py`, ~31 columnas, calculadas **dentro** del
+`sklearn.Pipeline` como paso 0 vía `LagFeatureTransformer` — nunca en `data_loader.py`, para que cada
+fold de CV compute lags solo desde su propio slice de train; ver [ADR-007](docs/adr/ADR-007-lags-dentro-del-pipeline.md)):
 
 - **Rolling por grupo × variable × ventana** (24 cols): mediana de las N obs anteriores con `shift(1)` para excluir la fila actual.
   - Grupos: `FUNDO+FORMATO` (FF), `FUNDO` (F), `FORMATO` (FMT) — cascada de densidad.
@@ -440,7 +442,7 @@ así por:
 
 - **Un experimento por variedad**: `MLFLOW_EXPERIMENT_PREFIX + variety`. Default prefix vacío → el experimento es el nombre de la variedad (`POP`, `JUPITER`, …).
 - **Run versionado dentro del experimento**: `xgb_v1`, `xgb_v2`, …, `lgb_v1`, … (`next_run_version` autoincrementa por modelo). El campeón histórico vive en el mismo experimento que sus rivales y se distingue por sus tags.
-- **Model Registry**: `MODEL_REGISTRY_PREFIX + variety` (default `rnd-forest-POP`, `rnd-forest-JUPITER`, …). Cada training del campeón crea una nueva versión del registered model. La promoción a `Staging` / `Production` NO es parte del training run — se hace fuera del pipeline (manual desde la UI, vía `mlflow models transition`, o vía el workflow CI/CD `promote.yml` descripto en `GUIA_MLOPS_AWS_V2.md` #12, que aplica gates de calidad antes de promover).
+- **Model Registry**: `MODEL_REGISTRY_PREFIX + variety` (default `rnd-forest-POP`, `rnd-forest-JUPITER`, …). Cada training del campeón crea una nueva versión del registered model. La promoción a `Staging` / `Production` NO es parte del training run — se hace fuera del pipeline (manual desde la UI, vía `mlflow models transition`, o vía el workflow CI/CD `promote.yml` descripto en `docs/02-produccion-aws.md` #12, que aplica gates de calidad antes de promover).
 
 > El `MODEL_REGISTRY_PREFIX` por default está alineado con cualquier servicio
 > downstream que cargue modelos como `f"rnd-forest-{variety}"`. Cambiarlo

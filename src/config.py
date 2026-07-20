@@ -61,7 +61,7 @@ REPORTS_DIR: Path = BASE_DIR / "reports"
 # ---------------------------------------------------------------------------
 # Apunta SIEMPRE a un bucket S3 real (ADR-003: no usamos LocalStack).
 # En local lo configurás vía .env (S3_ARTIFACTS_BUCKET=<tu-bucket>).
-# En AWS Batch lo inyecta la job-def definida en GUIA_MLOPS_AWS.md #4.4.
+# En AWS Batch lo inyecta la job-def definida en docs/02-produccion-aws.md #4.4.
 # El upload ocurre al final de main.py si el bucket esta configurado;
 # scripts/s3_sync.py es defensivo: si S3 falla, el training termina OK
 # igual y los artefactos quedan en disco local del container.

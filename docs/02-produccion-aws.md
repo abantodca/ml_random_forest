@@ -1,1984 +1,75 @@
-# Guía MLOps AWS — Despliegue a producción de `ml_training`
+# Guía experta — Producción en AWS (Terraform, AWS Batch + ECS Fargate + MLflow)
 
-> Manual operativo para llevar el trainer (`src/`, `main.py`) desde una laptop
-> hasta AWS Batch con MLflow Tracking + Registry. La guía se lee en dos
-> tramos: **Tramo I (Local)**, Capítulos 1-4, donde se construye el entorno
-> Docker desde cero a partir del código fuente; y **Tramo II (AWS)**, Partes
-> 1-13, donde el mismo binario se promueve a producción. Cada sección
-> termina con una verificación; si falla, no se avanza.
+> Tramo II del stack: promover a AWS el **mismo binario** que validaste en local
+> ([`docs/01-local.md`](01-local.md)). Terraform copy-paste por módulos, estado remoto en S3, apply
+> incremental en olas con checkpoint, y un lifecycle de cuatro modos —STAND-UP, TEAR-DOWN, REBUILD,
+> DESTROY— para que la infra se apague cuando no la usás.
+>
+> La arquitectura, en un solo camino: el **entrenamiento** corre en **AWS Batch** (colas Spot +
+> On-Demand, `c6i.4xlarge`, escala a cero entre corridas); **MLflow** vive en **ECS Fargate** detrás
+> de un ALB con **RDS Postgres** + S3 como backend
+> ([ADR-001](adr/ADR-001-mlflow-backend-postgres-s3.md)); la **API FastAPI** y la **UI Streamlit**
+> corren como servicios ECS en ese mismo cluster y ALB; los **reports** los sirve un nginx Fargate
+> Spot. Alrededor: **Lambdas** para disparar jobs y notificar, un **scheduler** que prende y apaga
+> RDS + Fargate por cron, **CloudWatch + SNS** para alarmas, y **GitHub Actions con OIDC** (sin
+> access keys) para deploy, training y destroy.
+>
+> Regla mental: **almacenar es barato y constante; computar es lo que cuesta, y solo cuando corrés.**
+> Por eso Batch escala a cero, el scheduler apaga RDS y Fargate fuera de horario, y los artefactos
+> viven en S3. **~$75/mes** con el scheduler en L-V 08-12 PET (#9).
 
----
+Índice:
 
-## Tabla de contenidos
+- **Parte 1** — [Overview del lifecycle y stand-up](#parte-1--overview-del-lifecycle-y-stand-up)
+- **Parte 2** — [Bootstrap irreversible](#parte-2--bootstrap-irreversible)
+- **Parte 3** — [Módulos Terraform](#parte-3--modulos-terraform)
+- **Parte 4** — [Apply incremental + smoke test](#parte-4--apply-incremental--smoke-test)
+- **Parte 5** — [Patch del trainer (emitir MAPE a CloudWatch)](#parte-5--patch-del-trainer-emitir-mape-a-cloudwatch)
+- **Parte 6** — [CI/CD con GitHub Actions](#parte-6--cicd-con-github-actions)
+- **Parte 7** — [Promotion gate](#parte-7--promotion-gate-extendido)
+- **Parte 8** — [Runbook operativo](#parte-8--runbook-operativo-extendido)
+- **Parte 9** — [Costos detallados](#parte-9--costos-detallados)
+- **Parte 11** — [Troubleshooting](#parte-11--troubleshooting-catalogo)
+- **Parte 12** — [Apéndices](#parte-12--apendices)
 
-### 🏠 Tramo I — Entorno local (Capítulos 1-4)
-
-> Construir el binario y validarlo en tu máquina, con Docker. **No avances al Tramo II** hasta que el smoke local termine en verde.
-
-| # | Capítulo | Qué se hace |
-|---|---|---|
-| 1 | [Visión general](#capítulo-1--visión-general) | Qué entrenamos, dos entornos una imagen, endpoints, costo objetivo |
-| 2 | [Decisiones fijas](#capítulo-2--decisiones-fijas) | Qué no se discute (lenguaje, runtime, region, modelos) |
-| 3 | [Prerrequisitos del host](#capítulo-3--prerrequisitos-del-host) | Herramientas, WSL, credenciales AWS, variables de sesión |
-| 4 | [Entorno local desde cero](#capítulo-4--entorno-local-desde-cero) | `.dockerignore`, `Dockerfile`, compose, Taskfile, smoke + verificación |
-
-### ☁️ Tramo II — Producción AWS (Partes 1-12)
-
-> Mismo binario, promovido a AWS Batch + MLflow productivo via Terraform + Task + GitHub Actions.
-
-| # | Parte | Qué se hace |
-|---|---|---|
-| 1 | [Lifecycle](#parte-1--overview-del-lifecycle-y-stand-up) | Modos: STAND-UP / TEAR-DOWN / REBUILD / DESTROY |
-| 2 | [Bootstrap irreversible](#parte-2--bootstrap-irreversible) | Backend Terraform (S3 + lock nativo) + OIDC (UNA VEZ) |
-| 3 | [Módulos Terraform](#parte-3--modulos-terraform) | network · storage · mlflow · reports · batch · monitoring · lambdas · scheduler · cicd · consumer-iam |
-| 4 | [Apply incremental + smoke](#parte-4--apply-incremental--smoke-test) | 4 `tasks/*.yml` + helpers `lib/` + Olas A/B/C + smoke end-to-end |
-| 5 | [Patch trainer → CloudWatch](#parte-5--patch-del-trainer-emitir-mape-a-cloudwatch) | Emitir métrica MAPE custom |
-| 6 | [CI/CD con GitHub Actions](#parte-6--cicd-con-github-actions) | Workflows `deploy.yml` · `training.yml` · `destroy.yml` |
-| 7 | [Promotion gate](#parte-7--promotion-gate-extendido) | Staging → Production con MAPE + A/B + approval |
-| 8 | [Runbook operativo](#parte-8--runbook-operativo-extendido) | Diario · semanal · incidentes · TEAR-DOWN · REBUILD · DESTROY |
-| 9 | [Costos detallados](#parte-9--costos-detallados) | ~$75/mes con scheduler L-V 08-12 PET (incluye API + UI) |
-| 11 | [Troubleshooting (catálogo)](#parte-11--troubleshooting-catalogo) | Errores comunes y fixes |
-| 12 | [Apéndices](#parte-12--apendices) | Glosario · conceptos · mapa de archivos |
+> **No hay Parte 10.** El salto de la 9 a la 11 es histórico y se conserva a propósito: la
+> numeración se referencia desde el código y desde otros documentos (`GUIA #3.10`, `#4.4`, `#12`), y
+> renumerar rompería esas referencias sin ganar nada.
 
 ---
 
 ## Cómo leer esta guía
 
-- **Orden de lectura**: local primero, AWS después. No avances al Tramo II
-  sin que el smoke local del Capítulo 4 termine en verde.
-- **Punto de partida real**: la única asunción es que el repo tiene `src/`,
-  `main.py`, `scripts/` y `requirements.txt`. Todo lo demás — Dockerfile,
-  compose, Taskfile, `.env` — se construye en el Capítulo 4.
-- **Convención de comandos**: todos los bloques `bash` se ejecutan desde la
-  raíz del repo. En Windows, exclusivamente desde **WSL Ubuntu** (no Git
-  Bash, no PowerShell).
-- **Una sola imagen**: el `Dockerfile` que usa `task build` localmente es el
-  mismo binario que `task ecr:build IMG=trainer` empuja a ECR en producción.
-- **Convención de avisos**:
-  - `> **Nota** — …` aclara el porqué de una decisión (inline, dentro de pasos).
-  - `> **Warning** — …` señala riesgos reales (pérdida de datos, costo
-    inesperado, operación irreversible) dentro de pasos.
-  - Para transiciones críticas entre Partes/Capítulos se usan **callouts
-    GitHub-flavored**, que en GitHub.com y la mayoría de previews renderean
-    como cajas coloreadas:
-    - `> [!NOTE]` — información complementaria.
-    - `> [!TIP]` — atajo o mejor práctica.
-    - `> [!IMPORTANT]` — paso que **no se puede saltear**.
-    - `> [!WARNING]` — operación con riesgo de pérdida de tiempo o datos.
-    - `> [!CAUTION]` — operación **irreversible** (destroy, nuke, force-push).
-- **Convención de verificación**: cada bloque importante cierra con un
-  comando o tabla que valida el estado. Si falla, parar y resolver antes
-  de seguir.
-- **Re-ejecutabilidad**: toda sección que produce archivos o recursos AWS
-  es idempotente (correr N veces da el mismo estado). El commit sugerido
-  aparece al final cuando aplica. Las secciones sin gotchas únicos NO
-  llevan callout `🔄 Al re-ejecutar` — solo se incluye cuando hay un
-  pitfall o checkpoint específico que no esté en el cuerpo de la sección.
+**Cada bloque dice dónde corre.** `[LOCAL]` es tu máquina, parada en la raíz del repo, con tus
+credenciales AWS. `[AWS]` es un recurso gestionado (una task de ECS, un job de Batch), que se toca
+por CLI o consola. `[CI]` corre dentro de GitHub Actions con el rol asumido por OIDC. La distinción
+no es cosmética: `[LOCAL]` prueba que el recurso **existe**; `[CI]` prueba que el **rol de OIDC**
+tiene los permisos, que es un fallo completamente distinto y se diagnostica distinto.
+
+**Terraform es la fuente de verdad.** Todo lo que esta guía crea está en `infra/` y se aplica con
+`task`. No toques recursos a mano en la consola: mientras Terraform los gestione, el próximo `apply`
+revierte el cambio en silencio, y a los tres meses nadie sabe por qué el security group tiene esa
+regla. Si algo ya lo creaste a mano y querés pasarlo a Terraform, primero `terraform import`.
+
+**El orden de las Partes son las dependencias reales.** El bootstrap (Parte 2) es irreversible y va
+primero porque crea el bucket del state; los módulos (Parte 3) se aplican en olas (Parte 4) porque
+el grafo tiene puntos donde conviene frenar y verificar antes de seguir. Saltarse el orden funciona
+hasta que falla, y cuando falla el error no señala la causa.
+
+**Las decisiones ya tomadas no se discuten acá.** Están ratificadas en
+[`docs/adr/`](adr/) y en la tabla de *Decisiones fijas* de
+[`docs/01-local.md` Capítulo 2](01-local.md#capítulo-2--decisiones-fijas). Cambiar alguna implica un
+ADR previo y reescribir las secciones afectadas — no un parche local.
+
+> **Estado real del repo, para que no busques archivos que no existen.** `infra/` **sí** existe (45
+> archivos `.tf`, 11 módulos + `envs/prod`). Lo que **no** existe todavía es
+> `.github/workflows/{deploy,training,destroy}.yml`: los YAML de la Parte 6 son material **por
+> crear**, y el módulo `infra/modules/cicd/` viene con `enable_cicd = false` por defecto. Tampoco hay
+> `tests/` ([ADR-008](adr/ADR-008-ci-sin-tests-todavia.md)). Los ADR sí existen ahora, en
+> [`docs/adr/`](adr/) — antes eran links rotos.
 
 ---
 
-# Tramo I — Entorno local
-
-## Capítulo 1 · Visión general
-
-### 1.1 Qué entrenamos
-
-`ml_training` predice **kg/jornal-hora** (`KG/JR_H`) por variedad a partir
-de un Excel histórico de cosechas (`data/BD_HISTORICO_ACUMULADO.xlsx`). El
-sistema entrena **XGBoost** y **LightGBM** con Optuna, evalúa con
-`TimeSeriesSplit`, y elige campeón por variedad según orden lexicográfico
-(gap → MAPE → tiempo).
-
-> **Nota** — Pese al nombre del repo (`ml_random_forest`), los backends
-> activos son XGBoost + LightGBM. Random Forest fue reemplazado por
-> estabilidad numérica del target con `log1p` + cap-p99.
-
-### 1.2 Dos entornos, las mismas imágenes
-
-| | Local | Producción AWS |
-|---|---|---|
-| Compute training | Docker compose (laptop) | AWS Batch + EC2 c6i.2xlarge |
-| Compute serving (API+UI) | Docker compose (`api` + `ui`) | ECS Fargate detrás del ALB (Capa 4.5) |
-| Tracking server | MLflow container, Postgres en volumen | MLflow en ECS Fargate, RDS Postgres |
-| Artifacts store | S3 sandbox | S3 productivo + Model Registry |
-| Trigger | `task train` (manual) | GitHub Actions / Lambda dispatcher |
-| Imágenes | 5 (trainer, mlflow, reports, api, ui) build local | Las mismas 5, push a ECR (#4.4) |
-
-### 1.3 Endpoints en producción
-
-```
-http://<ALB-DNS>/             MLflow UI (tracking + Model Registry)
-http://<ALB-DNS>/app/         UI Streamlit (dashboard gerencial de pronosticos)
-http://<ALB-DNS>/docs         API FastAPI — Swagger (POST /api/forecasts, GET /api/varieties/history)
-http://<ALB-DNS>/reports/     Dashboards HTML por variedad
-http://<ALB-DNS>/artifacts/   Artifacts crudos por run
-```
-
-> Todo cuelga del **:80 de un solo ALB** ruteado por path (ver #3.12 para el
-> App stack API+UI, Capa 4.5). El DNS del ALB lo imprime `task infra:urls`.
-
-### 1.4 Flujo end-to-end
-
-```
-Developer
-  │ push a main
-  ▼
-GitHub Actions (deploy.yml)
-  │ lint + build + push a ECR (via OIDC; sin job test — ver ADR-008)
-  ▼
-ECR ml-training:<sha>
-  │ workflow_dispatch training.yml  (o `aws lambda invoke ml-training-dispatcher`)
-  ▼
-Lambda dispatcher → AWS Batch SubmitJob (Spot queue)
-  │ autoscale 0 → 1 EC2 c6i.2xlarge
-  ▼
-Container del trainer
-  │ 1. hydrate S3_DATA_BUCKET/S3_DATA_KEY → data/training/DB-HISTORICA.xlsx
-  │ 2. main.py: por variedad entrena XGB + LGB con Optuna
-  │ 3. champion.select_champion()
-  │ 4. log a MLflow (Postgres backend + S3 artifacts)
-  │ 5. sync_to_s3(artifacts/, reports/) a S3_ARTIFACTS_BUCKET
-  ▼
-MLflow Model Registry: nueva versión en stage "None"
-  │ workflow_dispatch training.yml (action=promote)
-  ▼
-Quality gate (MAPE < umbral && A/B contra Production actual)
-  │ approval humano en GitHub Environments
-  ▼
-MLflow Model Registry: versión transicionada a "Production"
-```
-
-> **Sobre el Model Registry en Tramo Local.** El diagrama es el flujo
-> **productivo** (Tramo II). En local, `task train` loggea runs al MLflow del
-> compose y sube el `.joblib` a S3 sandbox, **pero no registra el modelo en el
-> Registry** — deliberado: versiones/stages/transitions no aportan mientras
-> iterás código. El patch de Parte 5 inyecta `mlflow.register_model()` al
-> promover a Tramo II, y de ahí cada run aparece como versión nueva en stage
-> `None` para el quality gate de Parte 7. Para verlo en local sin esperar,
-> apuntar el trainer al MLflow productivo vía `docker-compose.override.yml.example`.
-
-### 1.5 Contrato del run MLflow
-
-Cualquier run que el trainer escriba — local en tu laptop o productivo
-en Batch — cumple un **contrato fijo**, alineado con Cap 2. Quien
-revise el run después (vos, un colega, el quality gate de Parte 7) lo
-puede auditar end-to-end sin inspeccionar el código del trainer:
-
-**Tags de trazabilidad** (set en `mlflow.set_tags({...})` por `run_metadata.py` + `single_run.py`):
-
-| Tag | Valor | Por qué importa |
-|---|---|---|
-| `git_commit` | SHA corto del `HEAD` al lanzar el run | Reproducibilidad del binario. |
-| `git_dirty` | `true` / `false` (`git diff --quiet HEAD`) | Si `true`, el run **no es promovible**: hay código sin commit. |
-| `dataset_sha256` | hash SHA-256 de `data/training/DB-HISTORICA.xlsx` | Distingue dos runs con mismo `git_commit` pero data distinta. |
-| `dataset_n_rows` | filas totales agregadas sobre todas las hojas | Detecta truncamientos accidentales del Excel. |
-| `tuning` | `smoke` / `dev` / `prod` / `prod_xl` | Contexto de búsqueda (presupuesto de trials). |
-| `variety` | `POP` / `VENTURA` / … | Necesario porque el experimento es uno por variedad. |
-
-**Artifacts obligatorios** (loggueados con `mlflow.sklearn.log_model(...)`):
-
-| Artifact | Generador | Por qué |
-|---|---|---|
-| `model/MLmodel` + `model.pkl` | `mlflow.sklearn.log_model(model, "model", signature=..., input_example=...)` | El joblib del campeón persistido por MLflow (separado del `joblib` que sube `s3_sync`). |
-| **`signature`** | `mlflow.models.infer_signature(X_train, model.predict(X_train))` | Schema de input/output. Sin esto, el Registry no valida payloads en serving futuro. |
-| **`input_example`** | `X_train.head(5)` | Permite `mlflow models predict --input-path example.json` sin saber qué columnas espera el modelo. |
-| `requirements.txt` | `mlflow.utils.environment._mlflow_conda_env(...)` o equivalente | Snapshot de deps del run. Útil para reconstruir el entorno 6 meses después. |
-
-**Metrics esperadas** (mínimas, además de las que loguee Optuna):
-
-- `mape_oof` (out-of-fold del CV, **emitida también a CloudWatch** por el patch de Parte 5).
-- `mape_test` (sobre el holdout final).
-- `gap_oof_test` (diferencia absoluta — detecta sobreajuste al CV).
-
-> **Verificación**: el #4.10 check #7 confirma que estos 8 tags están
-> presentes después de `task train`. Si alguno falta, el run no
-> califica para `task ops:promote` (Parte 7) — el gate lo
-> rechazará.
-
-### 1.6 Costo objetivo
-
-| Configuración | Costo mensual aproximado |
-|---|---|
-| **Tramo Local (laptop + 2 buckets sandbox)** | **~$0.05** (sólo storage S3) |
-| Tramo II — Scheduler L-V 08-12 PET (default, incluye API + UI) | ~$75 |
-| Tramo II — Sin scheduler (24/7) | ~$195 |
-| Tramo II — Hibernado (tear-down: NAT liberado en teardown vía `enable_nat=false`, solo storage) | ~$3 |
-
-Detalle en Parte 9 (costos por servicio y por modo de lifecycle).
-
----
-
-## Capítulo 2 · Decisiones fijas
-
-Las siguientes decisiones no se discuten dentro de esta guía. Cambiar
-alguna implica un ADR previo y reescritura de las secciones afectadas.
-
-| Decisión | Elección | Por qué | Cambia a futuro |
-|---|---|---|---|
-| Región AWS | `us-east-1` | Latencia razonable desde Perú, todos los servicios disponibles, mejor precio Spot. | `us-east-2` o `sa-east-1` por compliance. |
-| Compute training | Batch + EC2 c6i.2xlarge, queues Spot + On-Demand, `retry=2`. El dispatcher rutea `prod_xl` → On-Demand (sin interrupciones para jobs de ~4-6h) y el resto (`smoke`/`dev`/`prod`) → Spot. El default de `task batch:train` es `prod_xl` (converge con local) → On-Demand; usá `TUNING=prod` para Spot (−70% costo). | −70% costo con Spot; retry cubre interrupciones (~5-10% en c6i.2xlarge). | Fargate Spot, o `g5.xlarge` si pasás a DL. |
-| Compute serving | ECS Fargate | Sin gestión de host, autoscale, integración nativa con ALB. | EC2 con AMI custom para aceleración. |
-| Backend MLflow | Postgres + S3 (artifacts) | Estándar industria; soporta concurrencia. | Filesystem sólo en dev. |
-| RDS | Postgres 15, `db.t4g.small`, single-AZ | ~$23/mes 24/7 (mucho menos con scheduler); hostea MLflow + la base `forecasts` de la API. | Multi-AZ (hardening, futuro). |
-| Auto on/off de **servicios** | Scheduler EventBridge L-V 08-12 PET wake/sleep de RDS + Fargate (MLflow + Reports); chequeo de Batch RUNNING antes de apagar. | UI 4 h/día; training off-window despierta servicios on-demand. **Esto es scheduling de servicios, no de jobs de training** (ver fila "Trigger training"). | 24/7 si hay equipo distribuido. |
-| TLS / WAF / Multi-AZ | NO (ALB :80 HTTP, sin WAF, RDS single-AZ) | Default barato. MLflow con basic auth + SG restrictivo. | TLS/WAF/Multi-AZ antes de exponer a Internet (hardening, futuro). |
-| Egress privado | NAT GW single-AZ ($32/mes) | Setup simple si tráfico <10 GB/mes. | VPC endpoints (hardening, futuro). |
-| Trigger training (de los **jobs**, no de los servicios) | (a) GHA `training.yml` workflow_dispatch (wake-train-sleep); (b) `aws lambda invoke ml-training-dispatcher`. **Sin cron de jobs**, sin S3 PutObject trigger — el scheduler de la fila anterior solo wake/sleep-ea servicios, nunca dispara entrenamientos. | Click desde GitHub UI eligiendo variedad. Training off-window wake-ea servicios y los apaga al terminar. | EventBridge cron diario de training / S3 trigger (Parte 7.5). |
-| Modelos entrenables | **XGBoost + LightGBM** sobre `KG/JR_H`, con `TransformedTargetRegressor` (`log1p` + cap-p99). Champion automático. | Lo que vive en `src/step_04_train/registry.py`. | Stacking (eliminado, no existe). |
-| Variedades válidas | **Dinámicas**: hojas del Excel `BD_HISTORICO_ACUMULADO.xlsx`. | Source of truth = el Excel. `list_varieties()` enumera `pd.ExcelFile(path).sheet_names`. La variable Terraform `varieties_allowed` es un allow-list defensivo del Lambda dispatcher, no la definición. | Agregar variedad = agregar hoja + `aws s3 cp` + opcional ampliar `varieties_allowed`. |
-| Auth CI/CD | OIDC (sin access keys de larga duración) | Auditable en CloudTrail, sin rotación manual, blast-radius limitado al repo. | Keys sólo en CI legacy. |
-| Promotion | Quality gate (MAPE < umbral) + A/B contra Production + approval en GitHub Environments | Defense in depth; un MAPE menor no garantiza modelo mejor sin baseline. | Auto-promote si MAPE absoluto <5% (no recomendado). |
-| Reproducibilidad | `SEED=42` propagado a `np.random`, `random.seed`, `xgb.random_state`, `lgb.seed`, `TimeSeriesSplit(random_state=...)` y `optuna.create_study(sampler=TPESampler(seed=...))`. Fijado en config (no se loggea como tag). | Sin seed, dos runs idénticos producen campeones distintos por orden de trials. El "smoke OK" deja de ser auditoría. | Bayesian sin sampler determinístico (no recomendado). |
-| Lineage del dataset | Tag MLflow `dataset_sha256=<sha>` + `dataset_n_rows=<N>` calculados sobre `data/training/DB-HISTORICA.xlsx` antes de cada run. | Permite responder "¿qué cambió entre el run que regresionó y el anterior?" cuando el código (`git_commit`) es idéntico. | DVC / lakeFS si el dataset crece a TB. |
-| Contrato del run MLflow | Cada run loggea **tags obligatorios** (`git_commit`, `git_dirty`, `dataset_sha256`, `dataset_n_rows`, `tuning`, `variety`) **+ signature** (`infer_signature(X, y_pred)`) **+ input_example** (`X.head(5)`) **+ requirements snapshot** (`pip freeze`). Verificado en #4.10 check #7. | Sin signature, el Registry no valida payloads en serving; sin tags el quality gate de Parte 7 audita una caja negra. | Custom evaluators de MLflow (`mlflow.evaluate`) si pasás a regresión multi-target. |
-| Code-quality gates | `ruff check src/ main.py scripts/` (local, manual + CI). El job `lint` de `deploy.yml` lo invoca + `task infra:validate`. **No hay tests todavía**: el pipeline se valida con smoke runs (`task train TUNING=smoke`, ~1 min) y los gates de modelo (`CHAMPION_MAX_MAPE`, `CHAMPION_MAX_GAP`). Ver [ADR-008](docs/adr/ADR-008-ci-sin-tests-todavia.md). | Un job `test` con `pytest tests/` que "saltea si no hay tests" es código aspiracional que oculta cobertura cero. Mejor reflejar el estado real y agregar el job cuando exista `tests/`. | Agregar `mypy --strict src/` + `bandit -r src/` + `pytest --cov-fail-under=N` cuando exista `tests/`. Tests mínimos candidatos: champion selector con empate, shape contract del `prepare_data`, joblib roundtrip. |
-| CVE policy | `trivy image ml-training:local --severity HIGH,CRITICAL`. **Tramo Local**: warn-only. **Tramo II** (push a ECR): bloqueante. SBOM generado con `docker sbom` en cada `task ecr:build`. | Imagen base `python:3.13.1-slim-bookworm` tiene CVEs conocidos; para clientes regulados (HIPAA, SOC2, banca) el SBOM es requisito formal. | `cosign` para signing + admission controller en ECR. |
-| Drift gate (PSI) | `task eda` calcula `psi_train_test` por feature numérica y escribe `artifacts/eda_<variety>.json`. `task train` lee ese JSON: `psi > 0.25` en cualquier feature **warn-loud** en stdout y se tagea el run con `psi_warn=true`. Bloqueante a futuro si pasa a ser política. | Drift severo entre train/test indica que el split de validación no representa training — un campeón sobre data drifteada es modelo sobre ruido. | `psi > 0.10` como warn temprano + `psi > 0.25` como bloqueante. |
-
----
-
-## Capítulo 3 · Prerrequisitos del host
-
-### 3.1 Herramientas
-
-| Herramienta | Versión mínima | Verificación |
-|---|---|---|
-| Docker | 24+ con BuildKit | `docker version`, `docker info \| grep "Server Version"` |
-| Git | 2.30+ | `git --version` |
-| AWS CLI v2 | 2.0+ | `aws --version` |
-| Task | 3.34+ | `task --version` |
-| Terraform | 1.6+ (sólo Tramo II) | `terraform version` |
-| jq | 1.6+ (post-apply checks) | `jq --version` |
-
-Instalación de Task en Linux / WSL Ubuntu:
-
-```bash
-sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/bin
-export PATH="$HOME/bin:$PATH"   # persistir en ~/.bashrc
-task --version
-```
-
-macOS:
-
-```bash
-brew install go-task
-```
-
-### 3.2 Windows: WSL Ubuntu obligatorio
-
-El repo vive típicamente en disco Windows
-(`C:\Users\<user>\Documents\Proyectos\ml_random_forest\ml_training`) y se
-opera **desde WSL Ubuntu** vía el mount `/mnt/c/...`. Toda la guía asume
-esa terminal.
-
-```bash
-# Desde PowerShell:
-wsl -d Ubuntu
-
-# Dentro de WSL:
-cd /mnt/c/Users/<user>/Documents/Proyectos/ml_random_forest/ml_training
-pwd
-```
-
-Tres ajustes una sola vez:
-
-1. **Docker Desktop** → Settings → Resources → WSL integration → enable
-   "Ubuntu". El comando `docker` desde WSL pega contra el mismo daemon
-   que Docker Desktop.
-2. **CRLF / LF**: en WSL sobre NTFS, git puede marcar todo como
-   modificado. Normalizar una vez:
-   ```bash
-   git config --global core.autocrlf input
-   git add --renormalize .
-   ```
-3. **Permisos POSIX**: NTFS no persiste el bit ejecutable. Invocá scripts
-   con `bash infra/<script>.sh`, no `./<script>.sh`.
-
-> **Warning** — En Windows, NO mezclar Git Bash ni PowerShell con WSL.
-> Diferencias sutiles de line endings y rutas rompen Terraform, Task y
-> Docker. Una sola terminal de principio a fin: WSL Ubuntu.
-
-### 3.3 Credenciales AWS
-
-Aunque el Tramo I es "local", el trainer sube artifacts a S3 y MLflow
-escribe sus runs a S3, así que necesitás credenciales válidas desde el
-primer `task build`.
-
-```bash
-aws configure --profile default
-# Access Key ID, Secret Access Key, region us-east-1, output json
-
-aws sts get-caller-identity
-# { "UserId": "...", "Account": "<12-digitos>", "Arn": "arn:aws:iam::...:user/..." }
-```
-
-> **Warning** — Las credenciales viven **siempre** en `~/.aws/credentials`
-> del host. `docker-compose.yml` monta `~/.aws:/aws:ro` en los containers
-> y el SDK las lee de ahí. Nunca pongas `AWS_ACCESS_KEY_ID` ni
-> `AWS_SECRET_ACCESS_KEY` en `.env` ni en el `Dockerfile`.
-
-### 3.4 Service quotas (sólo para Tramo II)
-
-> [!NOTE]
-> **Salteable si solo vas a trabajar en Tramo I (local con Docker).** Los
-> aumentos de quota de EC2 son únicamente necesarios para AWS Batch (Tramo
-> II Parte 4). Si por ahora solo querés validar el binario en tu laptop,
-> volvé a esta sección antes de la Parte 2 del Tramo II.
-
-Los aumentos tardan 24-48 h: pedirlos **antes** del primer `terraform apply`.
-
-| Servicio | Quota | Mínimo |
-|---|---|---|
-| EC2 Running On-Demand Standard (A/C/D/H/I/M/R/T/Z) | `L-1216C47A` | 32 vCPU |
-| EC2 All Standard Spot Instance Requests | `L-34B43A08` | 32 vCPU |
-| VPC NAT gateways per AZ | `L-FE5A380F` | 5 (default) |
-
-```bash
-aws service-quotas request-service-quota-increase \
-  --service-code ec2 \
-  --quota-code L-1216C47A \
-  --desired-value 32
-```
-
-### 3.5 Variables de sesión
-
-> [!TIP]
-> **Tramo I** (local con Docker) sólo *usa* `AWS_PROFILE` y
-> `AWS_DEFAULT_REGION` (los buckets sandbox los resuelve `tasks/local.yml`
-> internamente via `aws sts get-caller-identity`); `PROJECT`, `ACCOUNT_ID` y
-> `ACCOUNT_SUFFIX` recién hacen falta en **Tramo II** (los bloques `bash`
-> manuales de Partes 1-2 los referencian de tu shell). Igual podés
-> `source scripts/prod.env` desde el arranque: setea todo de una y las vars de
-> más quedan inertes hasta que las necesites.
-
-Setear **una vez por terminal nueva** (los `export` viven sólo en ese shell):
-
-```bash
-source scripts/prod.env
-```
-
-Esto exporta `AWS_PROFILE` + region (Tramo I) y `PROJECT` / `ACCOUNT_ID` /
-`ACCOUNT_SUFFIX` (Tramo II), y **además deriva `DATA_BUCKET` / `ARTIFACTS_BUCKET`**
-(vía `ensure-env.sh`), de modo que cualquier snippet del runbook usa
-`"$DATA_BUCKET"` directo sin recomponer `"${PROJECT}-data-${ACCOUNT_SUFFIX}"`.
-`ACCOUNT_SUFFIX` se deriva dinámicamente de `aws sts get-caller-identity`, así que
-el archivo es portable entre cuentas; el único valor que quizá edites es
-`AWS_PROFILE` (default `default`).
-
-El repo ya trae los dos archivos (`prod.env` sourcea a `ensure-env.sh`); si
-necesitás recrearlos:
-
-> 📂 **Pegar este bloque en**: `scripts/prod.env`
-
-```bash
-# Variables de sesion para el runbook (GUIA_MLOPS_AWS_V2.md #3.5) en un solo
-# archivo sourceable: setea AWS_PROFILE + region (Tramo I) y PROJECT/ACCOUNT_*
-# (Tramo II), y deriva DATA_BUCKET / ARTIFACTS_BUCKET via ensure-env.sh.
-# Uso: `source scripts/prod.env` (una vez por terminal nueva).
-
-# === MINIMO para Tramo I (local con Docker) ===
-export AWS_DEFAULT_REGION="us-east-1"
-export AWS_REGION="$AWS_DEFAULT_REGION"   # alias requerido por el backend S3 de Terraform (#4.2)
-export AWS_PROFILE="default"              # o el profile que uses (debe quedar antes del STS de abajo)
-
-# === ADICIONALES para Tramo II (AWS) ===
-export PROJECT="ml-training"
-export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-export ACCOUNT_SUFFIX="${ACCOUNT_ID: -7}"
-
-# Deriva y exporta los nombres de bucket canonicos (DATA_BUCKET / ARTIFACTS_BUCKET)
-# desde una fuente unica de verdad. Tras esto, cualquier snippet del runbook puede
-# usar "$DATA_BUCKET" directamente sin recomponer "${PROJECT}-data-${ACCOUNT_SUFFIX}".
-source "$(dirname "${BASH_SOURCE[0]}")/ensure-env.sh"
-```
-
-> 📂 **Pegar este bloque en**: `scripts/ensure-env.sh`
-
-```bash
-#!/usr/bin/env bash
-# Guard + derivacion de nombres compuestos para apuntar al stack prod.
-# Uso: `source scripts/ensure-env.sh` antes de cualquier `aws ... | terraform ...`
-# que componga nombres de bucket / role / ARN con $PROJECT y $ACCOUNT_SUFFIX.
-#
-# Aborta si las vars base estan vacias (tipico: terminal nueva sin
-# `source scripts/prod.env`): sin esto los exports posteriores producen
-# strings tipo "-data-" (sin prefijo ni suffix) y el comando aws falla con
-# `Invalid bucket name ""` / `argument --bucket: expected one argument`.
-#
-# Ademas DERIVA los nombres de bucket canonicos para que ningun snippet del
-# runbook tenga que recomponerlos a mano (origen del bug Parte 4.3: el snippet
-# usaba $DATA_BUCKET, que nunca se exportaba).
-
-: "${PROJECT:?ERROR: \$PROJECT vacia. Correr 'source scripts/prod.env' primero.}"
-: "${ACCOUNT_SUFFIX:?ERROR: \$ACCOUNT_SUFFIX vacia. Correr 'source scripts/prod.env' primero.}"
-
-# Nombres canonicos de bucket — fuente unica de verdad.
-# `:=` respeta un override explicito en el shell y es idempotente al re-sourcear.
-: "${DATA_BUCKET:=${PROJECT}-data-${ACCOUNT_SUFFIX}}"
-: "${ARTIFACTS_BUCKET:=${PROJECT}-artifacts-${ACCOUNT_SUFFIX}}"
-export DATA_BUCKET ARTIFACTS_BUCKET
-```
-
-**(Opcional)** En vez de sourcear `prod.env` podés exportar estas variables a
-mano; si lo hacés, corré también `source scripts/ensure-env.sh` para derivar
-`DATA_BUCKET` / `ARTIFACTS_BUCKET`.
-
-> **Por qué exportar `AWS_REGION` además de `AWS_DEFAULT_REGION`** — el AWS
-> CLI y el SDK Python aceptan ambas, pero el backend `s3` de Terraform sólo
-> reconoce `AWS_REGION` o `AWS_DEFAULT_REGION` cuando no hay un `region` en
-> `~/.aws/config`. La task `infra:_init` (única invocación canónica de
-> `terraform init -reconfigure` en este proyecto — definida en
-> `tasks/infra.yml`) inyecta `region=${AWS_REGION}` por `-backend-config`;
-> si solo exportás `AWS_DEFAULT_REGION` el flag se expande a `region=` y
-> el init falla con `Missing region value`. Exportar las dos elimina el
-> footgun. **No correr `terraform init` a mano** — usar siempre `task
-> infra:plan`/`apply`/`validate`, que disparan `_init` como dep.
-
-| Variable | Valor | Tramo | Usada para |
-|---|---|---|---|
-| `$AWS_DEFAULT_REGION` | `us-east-1` | I + II | Scope (compose lo lee, Taskfile lo propaga). |
-| `$AWS_REGION` | `us-east-1` | II | Alias para el backend S3 de Terraform (`-backend-config="region=..."` en #4.2). |
-| `$AWS_PROFILE` | `default` | I + II | Credenciales AWS (compose monta `~/.aws:ro`). |
-| `$PROJECT` | `ml-training` | II | Prefijo de todos los recursos AWS. |
-| `$ACCOUNT_ID` | 12 dígitos | II | tfstate bucket, ECR URIs, role ARNs. |
-| `$ACCOUNT_SUFFIX` | 7 dígitos | II | Sufijo de buckets, evita colisión cross-account. Coincide con `scripts/aws-suffix.sh` (fuente única). |
-
-> **Nota** — En Tramo II, estas variables las usan los bloques `bash`
-> manuales (Partes 1-2). Los Taskfiles (`tasks/*.yml`) las recalculan
-> internamente con `aws sts get-caller-identity`; no las heredan del shell.
-
-> **Gotchas Capítulo 3 (prereqs host)**:
-> - **Tooling**: `docker --version && task --version && terraform version && aws --version` debe imprimir las 4 versiones sin error.
-> - **Variables**: `echo "$AWS_REGION $AWS_DEFAULT_REGION $PROJECT $ACCOUNT_ID $ACCOUNT_SUFFIX"` debe imprimir `us-east-1 us-east-1 ml-training <12 digitos> <7 digitos>` (ninguno vacío). En terminal nueva, `source scripts/prod.env` — la guía asume "una vez por terminal".
-> - **Host**: WSL sin systemd o Docker Desktop sin WSL integration → `docker` falla con `Cannot connect to the Docker daemon`.
-> - **Vars**: si `aws sts get-caller-identity` falla, `AWS_PROFILE` no está seteado o las credenciales expiraron → re-correr `aws configure` o renovar token SSO.
-
----
-
-## Capítulo 4 · Entorno local desde cero
-
-> **Objetivo del capítulo** — Tomar un repo con sólo el código fuente
-> (`src/`, `main.py`, `scripts/`, `requirements.txt`) y montar a su
-> alrededor toda la maquinaria de Docker, Compose, Task y `.env` necesaria
-> para correr un smoke training de ~1 minuto contra MLflow y S3 sandbox.
-> Al final del capítulo tenés un loop de desarrollo cerrado en tu laptop,
-> sin haber tocado un solo recurso de AWS más allá de dos buckets S3.
-
-### 4.1 Punto de partida
-
-Antes de empezar, confirmá que el repo tiene los cuatro artefactos
-mínimos sobre los que vamos a construir el resto. Todo lo demás
-(Dockerfile, compose, Taskfile, `.env`) se genera en este capítulo:
-
-```bash
-ls -1 src main.py requirements.txt scripts/prepare_data.py
-# src
-# main.py
-# requirements.txt
-# scripts/prepare_data.py
-```
-
-Si alguno falta, parate acá: ese material viene del repo y la guía no
-intenta reconstruirlo.
-
-### 4.2 Layout objetivo
-
-Para anclar mentalmente lo que sigue, este es el árbol que vas a tener al
-cerrar el capítulo. En **negrita conceptual** lo que se construye aquí
-(todo lo que aparece con un `(#4.x)` al costado); el resto es código
-preexistente del repo o material que llega recién en Tramo II.
-
-```
-ml_training/
-├── src/                          (existente)  código del trainer
-├── main.py                       (existente)  CLI entrypoint
-├── requirements.txt              (existente)  deps Python (runtime trainer)
-├── requirements-dev.txt          (existente)  deps Python dev (ruff, pytest)
-├── pyproject.toml                (existente)  config ruff + project metadata
-├── scripts/prepare_data.py       (existente)  data split
-├── Dockerfile                    (#4.4)       imagen del trainer
-├── .dockerignore                 (#4.3)       qué NO va al build
-├── docker/
-│   ├── mlflow/Dockerfile         (#4.5.1)     MLflow + psycopg2 + boto3
-│   ├── nginx-reports.conf        (#4.5.2)     nginx static (Tramo I local)
-│   └── reports/                  (Tramo II)   imagen ECS reports (S3-sync + nginx)
-│       ├── Dockerfile                          nginx:1.27 (Debian) + AWS CLI v2 + dumb-init
-│       ├── nginx.conf                          config para servir /reports y /artifacts
-│       └── entrypoint.sh                       aws s3 sync inicial + nginx -g daemon off
-├── docker-compose.yml            (#4.5.3)     postgres + mlflow + reports + trainer
-├── docker-compose.override.yml.example  template para apuntar el trainer local a MLflow prod
-├── Taskfile.yml                  (#4.6)       tasks locales (atajos AWS se agregan en #4.1.8)
-├── tasks/local.yml               (#4.6.2)     helper para buckets sandbox
-├── .env.example                  (#4.7)       plantilla de variables
-└── .env                          (#4.7)       tu copia con buckets reales
-```
-
-### 4.3 `.dockerignore`
-
-El Dockerfile usa `COPY` selectivo (sólo `src/`, `scripts/`, `main.py` y
-`requirements.txt`), pero eso sirve de poco sin recortar antes el **build
-context**: la carpeta entera que Docker empaqueta y envía al daemon. Sin
-`.dockerignore` ese paquete arrastra `.git/` (cientos de MB), los Excel de
-`data/`, los `artifacts/`/`reports/` de corridas previas, el legacy `mlruns/`
-y los caches Python — y builds de segundos pasan a minutos.
-
-Crear `.dockerignore` en la raíz:
-
-```gitignore
-# =============================================================================
-# .dockerignore — qué NO entra al build context que se envia al daemon
-# =============================================================================
-# Filosofia: el Dockerfile usa COPY selectivo (solo src/, scripts/, main.py,
-# requirements.txt). Este archivo acelera el envio al daemon ignorando todo
-# lo que no se va a usar nunca durante el build.
-
-# ── Git ──────────────────────────────────────────────────────────────────
-.git/
-.gitignore
-.gitattributes
-
-# ── Datos locales (se montan como volumen en runtime, no van en la imagen)
-data/
-
-# ── Salidas (se generan en runtime, montadas como volumen) ───────────────
-artifacts/
-logs/
-reports/
-
-# ── Legacy del modo file:// (ADR-001) ────────────────────────────────────
-mlruns/
-
-# ── Notebooks y experimentacion ──────────────────────────────────────────
-notebooks/
-
-# ── Subproyectos que NO entran al contexto raiz (trainer/api) ─────────────
-# La UI buildea con su propio contexto (ui/), e infra/ es solo Terraform.
-# La API SI necesita api/ + src/ (no excluir), pero no ui/ ni infra/.
-ui/
-infra/
-
-# ── Cache Python ─────────────────────────────────────────────────────────
-__pycache__/
-**/__pycache__/
-*.py[cod]
-*.pyo
-
-# ── Tests y caches de tooling (no van a la imagen de runtime) ────────────
-tests/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
-# ── Entornos virtuales ───────────────────────────────────────────────────
-.venv/
-venv/
-env/
-
-# ── IDE ──────────────────────────────────────────────────────────────────
-.vscode/
-.idea/
-
-# ── Documentacion (no necesaria en runtime; el build context vuela menos) ─
-docs/
-*.md
-LICENSE
-
-# ── Meta de build / orquestacion del HOST (el container no las necesita) ──
-Taskfile.yml
-Taskfile.*.yml
-docker-compose.yml
-docker-compose.*.yml
-# Excluye el contenido de docker/ (mlflow/, nginx-reports.conf: solo host/compose)
-# salvo docker/reports/, cuyo Dockerfile hace COPY de nginx.conf + entrypoint.sh
-# desde el build context. Glob `docker/*` + re-inclusion: el padre docker/ queda
-# "caminable", requisito para que BuildKit pueda re-incluir el subdirectorio.
-docker/*
-!docker/reports
-Dockerfile
-.dockerignore
-
-# ── Dev-only deps (la imagen runtime usa solo requirements.txt) ──────────
-requirements-dev.txt
-
-# ── Variables de entorno locales (NUNCA en la imagen) ────────────────────
-.env
-.env.*
-!.env.example
-
-# ── Claude Code / agentes ────────────────────────────────────────────────
-.claude/
-
-# ── Sistema operativo ────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-
-# ── Archivos temporales ──────────────────────────────────────────────────
-*.log
-*.tmp
-*.bak
-```
-
-> **Nota** — Las secciones críticas son **"Meta de build"**, **"Variables de
-> entorno locales"** y **`.claude/`**: sin ellas horneás en la imagen el
-> `Taskfile.yml`, el `docker-compose.yml`, tu `.env` con los buckets reales y
-> la config de agentes de `.claude/` — inútil en runtime y, en el caso del
-> `.env`, riesgo de filtración de secretos. `!.env.example` re-incluye la
-> plantilla pública, que sí queremos que viaje con el repo.
-
-**Verificación**
-
-```bash
-# Tras crearlo, una build dry-run sólo debería transferir KBs, no MBs
-docker build --progress=plain --no-cache -t ml-training:dryrun . 2>&1 | head -5
-# transferring context: ...kB     ← debe ser kB, no MB
-```
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-### 4.4 `Dockerfile`
-
-La imagen del trainer es **multi-stage** para separar lo que compila
-dependencias de lo que corre en producción. El **stage `builder`** trae
-`build-essential` y compila las wheels de paquetes nativos (`lightgbm`,
-`xgboost`, `psycopg2-binary`); el **stage `runtime`** arranca limpio, instala
-esas wheels y descarta el toolchain. La imagen final pesa ~1.2 GB (vs ~2 GB
-single-stage), sin compiladores que amplíen la superficie de ataque, y los
-rebuilds hacen cache hit en el stage costoso mientras `requirements.txt` no
-cambie.
-
-#### 4.4.1 Stage 1 — builder
-
-```Dockerfile
-# syntax=docker/dockerfile:1.7
-ARG PYTHON_VERSION=3.13.1-slim-bookworm
-
-FROM python:${PYTHON_VERSION} AS builder
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY requirements.txt ./
-
-# Cache mount de BuildKit: el pip cache persiste entre builds
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip wheel --wheel-dir /wheels -r requirements.txt
-```
-
-> **Nota** — La directiva `# syntax=docker/dockerfile:1.7` habilita la sintaxis
-> extendida de BuildKit; sin ella el `RUN --mount=type=cache,target=/root/.cache/pip`
-> se ignora en silencio y cada build vuelve a bajar las wheels desde PyPI
-> (segundos → minutos).
-
-#### 4.4.2 Stage 2 — runtime
-
-```Dockerfile
-FROM python:${PYTHON_VERSION} AS runtime
-
-ARG GIT_SHA=unknown
-ARG VERSION=dev
-# created/timestamp NO va aqui: se inyecta como --label en `docker build` para
-# no invalidar la cache ni cambiar el digest de capas en cada rebuild del commit.
-LABEL org.opencontainers.image.title="ml-training" \
-      org.opencontainers.image.description="Random Forest training pipeline" \
-      org.opencontainers.image.source="https://github.com/abantodca/ml_training" \
-      org.opencontainers.image.revision="${GIT_SHA}" \
-      org.opencontainers.image.version="${VERSION}"
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    APP_HOME=/app
-
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends libgomp1 ca-certificates tini git \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 1001 mluser \
-    && useradd  --system --uid 1001 --gid mluser --home ${APP_HOME} mluser
-
-WORKDIR ${APP_HOME}
-
-COPY --from=builder /wheels /wheels
-COPY requirements.txt ./
-RUN pip install --no-index --find-links=/wheels -r requirements.txt \
-    && rm -rf /wheels
-
-# Orden de COPY: de mejor cache (cambia poco) a peor cache (cambia más)
-COPY --chown=mluser:mluser src/    ./src/
-COPY --chown=mluser:mluser scripts/ ./scripts/
-COPY --chown=mluser:mluser main.py  ./
-
-# Directorios que init_dirs() asume (idempotente)
-RUN mkdir -p data/training logs artifacts reports \
-    && chown -R mluser:mluser ${APP_HOME}
-
-# MLflow llama `getpass.getuser()` para taggear `mlflow.user` en cada run; sin
-# USER/LOGNAME en el environment (el `USER mluser` de abajo NO setea la env var)
-# emite "No username set in the environment" varias veces por modelo. Fijarlo
-# explicito silencia el warning y deja un tag legible en la UI de MLflow. Vale
-# tanto en compose como en AWS Batch (misma imagen).
-ENV USER=mluser
-USER mluser
-STOPSIGNAL SIGTERM
-
-# tini propaga SIGTERM correctamente cuando Batch mata el job
-ENTRYPOINT ["/usr/bin/tini", "--", "python", "main.py"]
-CMD ["--varieties", "POP", "--tuning", "smoke"]
-```
-
-> **Nota — por qué `git` viaja en el runtime.** `mlflow.utils.git_utils` y
-> nuestro `collect_run_metadata` lo invocan en entrenamiento para taggear el
-> run con el SHA del commit. Sin el binario todos los runs salen con
-> `git_commit=unknown` y perdés la trazabilidad **modelo → commit**, la primera
-> pregunta cuando un campeón regresione.
-
-> **Nota — el uid 1001 no es casualidad.** `USER mluser` (uid 1001) está
-> alineado con los bind-mount targets que crea `task _ensure_dirs` (#4.6.1) en
-> el host. Si los dejás crear al vuelo, Docker los hace con uid `root` y el
-> primer write del container falla con `Permission denied`.
-
-**Verificación**
-
-```bash
-docker build -t ml-training:local .
-docker images ml-training:local
-# REPOSITORY    TAG     IMAGE ID       SIZE
-# ml-training   local   <id>           ~1.2 GB
-```
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-> **Auditoría de CVEs** — la base `python:3.13.1-slim-bookworm` y las deps
-> (`xgboost`, `lightgbm`, `psycopg2-binary`, `pandas`) heredan CVEs. Tramo
-> Local: warn-only/opcional, `trivy image ml-training:local --severity HIGH,CRITICAL --ignore-unfixed`.
-> Tramo II (push a ECR): scan-on-push del ECR + `trivy` en CI (`task ecr:scan`
-> pendiente). No la corras aún: la imagen todavía no existe.
-
-### 4.5 Servicios `docker/` y `docker-compose.yml`
-
-El stack local se compone de **seis servicios**: `postgres` y `mlflow` corren
-en background como tracking backend; `reports` es un nginx estático que expone
-los HTML y joblibs; `api` (FastAPI) sirve los modelos y persiste pronósticos, y
-`ui` (Streamlit) los consume; `trainer` es one-shot — vive lo que dura un
-entrenamiento, invocado por `task train`. La tabla es el mapa rápido; las
-subsecciones siguientes entran al detalle de cada componente `docker/`.
-
-| Servicio | Imagen | Rol | Puerto host |
-|---|---|---|---|
-| `postgres` | `postgres:15-alpine` | Backend store de MLflow (metadata, Registry) + base `forecasts` | — (interno) |
-| `mlflow` | Build de `docker/mlflow/Dockerfile` | Tracking server v3.12 + UI | `127.0.0.1:5000` |
-| `reports` | `nginx:1.27-alpine` | Sirve `./reports/` y `./artifacts/` del host | `127.0.0.1:8080` |
-| `api` | Build de `api/Dockerfile` (contexto raíz) | FastAPI: sirve modelos + persiste pronósticos | `127.0.0.1:8000` |
-| `ui` | Build de `ui/Dockerfile` | Streamlit: dashboard que consume la API | `127.0.0.1:8501` |
-| `trainer` | Build del `Dockerfile` raíz | One-shot `main.py` con args | — |
-
-#### 4.5.1 `docker/mlflow/Dockerfile`
-
-La imagen oficial de MLflow es **minimalista**: server + SQLite. Para un
-backend real (Postgres) y artifact store en S3 faltan dos paquetes que
-upstream no incluye: `psycopg2-binary` (sin él `--backend-store-uri
-postgresql://...` falla con `ModuleNotFoundError`) y `boto3` (sin él MLflow no
-firma requests a S3). De ahí esta imagen custom — el Dockerfile más corto del
-repo:
-
-```Dockerfile
-FROM ghcr.io/mlflow/mlflow:v3.12.0
-
-RUN pip install --no-cache-dir \
-        psycopg2-binary==2.9.9 \
-        boto3==1.38.0
-
-LABEL org.opencontainers.image.title="mlflow-with-pg-s3" \
-      org.opencontainers.image.description="MLflow 3.12.0 + psycopg2-binary + boto3" \
-      org.opencontainers.image.source="https://github.com/abantodca/ml_training" \
-      org.opencontainers.image.base.name="ghcr.io/mlflow/mlflow:v3.12.0"
-```
-
-#### 4.5.2 `docker/nginx-reports.conf`
-
-Convierte un nginx vanilla en servidor de archivos estáticos para `reports/` y
-`artifacts/` del host. Dos detalles: `autoindex on` deja navegables los
-directorios (sin él, `/reports/` tira 403); y `Content-Disposition: attachment`
-sobre `.joblib`/`.xlsx`/`.json` fuerza descarga en vez de render inline.
-
-```nginx
-server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-
-    autoindex on;
-    autoindex_exact_size off;
-    autoindex_localtime on;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    location ~ \.(joblib|xlsx|json)$ {
-        add_header Content-Disposition 'attachment';
-    }
-}
-```
-
-#### 4.5.3 `docker-compose.yml`
-
-Seis servicios (`postgres`, `mlflow`, `reports`, `api`, `ui`, `trainer`),
-con decisiones de robustez que viven como comentarios in-line en el YAML:
-logging con rotación, healthchecks reales (no nominales), `--allowed-hosts`
-más artifacts en modo proxy (`--artifacts-destination --serve-artifacts`)
-de MLflow 3.x, credenciales AWS por bind-mount, y loopback bind para los
-`ports:`. La **API** y la **UI** comparten el `src/` raíz (contexto de build
-= raíz del repo) y la base `forecasts` del mismo Postgres (creada por
-`docker/postgres/initdb`); la UI arranca sólo cuando la API está healthy.
-
-```yaml
-# Logging con rotación. Sin esto json-file crece sin bound.
-x-logging: &default-logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "3"
-
-services:
-  postgres:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: mlflow
-      POSTGRES_USER: mlflow
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
-    volumes:
-      - pg-data:/var/lib/postgresql/data
-      # initdb crea la base `forecasts` (API) junto a `mlflow`. Solo corre al
-      # inicializar el volumen; si ya existe pg-data, no re-ejecuta (la API
-      # igual la auto-crea si faltara — ensure_database).
-      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
-      interval: 5s
-      retries: 10
-    logging: *default-logging
-
-  mlflow:
-    build:
-      context: .
-      dockerfile: docker/mlflow/Dockerfile
-    restart: unless-stopped
-    depends_on:
-      postgres: { condition: service_healthy }
-    environment:
-      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
-      AWS_CONFIG_FILE: /aws/config
-      AWS_PROFILE: ${AWS_PROFILE:-default}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
-    volumes:
-      - ~/.aws:/aws:ro
-    # Artifacts en modo PROXY (recomendado): el server es el único que toca S3.
-    # `--artifacts-destination` (en vez de `--default-artifact-root`) hace que
-    # los runs nuevos tengan artifact_uri `mlflow-artifacts:/…` y que TODO el
-    # IO de artifacts (subida del trainer, listado/descarga de la UI y del API)
-    # pase por el server — sin que cada cliente necesite creds S3. Evita el
-    # "Loading artifact failed / INTERNAL_ERROR" del modo mixto anterior.
-    # Requiere que el server alcance S3: revisar AWS_DEFAULT_REGION (= región
-    # real del bucket) y las creds montadas en ~/.aws.
-    command: >
-      sh -c "mlflow server
-      --host 0.0.0.0 --port 5000
-      --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
-      --backend-store-uri postgresql://mlflow:$${POSTGRES_PASSWORD}@postgres:5432/mlflow
-      --artifacts-destination s3://${S3_MLFLOW_BUCKET:?Set S3_MLFLOW_BUCKET in .env}/artifacts
-      --serve-artifacts"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health',timeout=3).status==200 else 1)"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    ports:
-      - "127.0.0.1:5000:5000"
-    logging: *default-logging
-
-  reports:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
-    volumes:
-      - ./reports:/usr/share/nginx/html/reports:ro
-      - ./artifacts:/usr/share/nginx/html/artifacts:ro
-      - ./docker/nginx-reports.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "127.0.0.1:8080:80"
-    logging: *default-logging
-
-  # ── API (FastAPI) ────────────────────────────────────────────────────────
-  # Sirve los modelos rnd-forest-* registrados en MLflow y persiste pronósticos
-  # en la base `forecasts`. Comparte el `src/` raíz vía contexto de build = raíz.
-  api:
-    build:
-      context: .
-      dockerfile: api/Dockerfile
-    image: ml-training-api:local
-    restart: unless-stopped
-    depends_on:
-      postgres: { condition: service_healthy }
-      mlflow:   { condition: service_healthy }
-    environment:
-      DATABASE_URL: postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/forecasts
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_PRELOAD_MODELS: ${MLFLOW_PRELOAD_MODELS:-false}
-      # Mismo prefijo que registra el trainer (src/config.py MODEL_REGISTRY_PREFIX).
-      EXPERIMENT_PREFIX: ${MODEL_REGISTRY_PREFIX:-rnd-forest-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8501}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      # boto3 (vía cliente MLflow) descarga los artifacts desde S3 real.
-      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
-      AWS_CONFIG_FILE: /aws/config
-      AWS_PROFILE: ${AWS_PROFILE:-default}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-    volumes:
-      - ~/.aws:/aws:ro
-    ports:
-      - "127.0.0.1:8000:8000"
-    # Healthcheck explicito: el gate `service_healthy` del que cuelga `ui`.
-    # /api/health responde 200 aunque MLflow aun no tenga modelos (lazy-load),
-    # asi la UI arranca apenas la API esta lista. start_period cubre init_db.
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 40s
-    logging: *default-logging
-
-  # ── UI (Streamlit) ───────────────────────────────────────────────────────
-  # Arranca SOLO cuando la API esta healthy (depends_on -> service_healthy).
-  ui:
-    build:
-      context: ui
-      dockerfile: Dockerfile
-    image: ml-training-ui:local
-    restart: unless-stopped
-    depends_on:
-      api: { condition: service_healthy }
-    environment:
-      API_URL: ${UI_API_URL:-http://api:8000}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    # Bind-mount de DEV (read-only): el código del host queda siempre vivo, así
-    # editar una vista se refleja al instante (Streamlit runOnSave) sin esperar
-    # un rebuild. Es seguro: las dependencias viven en /opt/venv (no en /app),
-    # así que el mount NO las pisa. Para una imagen 100% limpia (sin host),
-    # comentá esta línea y reconstruí con `task build`.
-    volumes:
-      - ./ui:/app:ro
-    ports:
-      - "127.0.0.1:8501:8501"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 25s
-    logging: *default-logging
-
-  trainer:
-    build: .
-    depends_on:
-      mlflow: { condition: service_healthy }
-    environment:
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
-      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
-      AWS_CONFIG_FILE: /aws/config
-      AWS_PROFILE: ${AWS_PROFILE:-default}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-      S3_ARTIFACTS_BUCKET: ${S3_ARTIFACTS_BUCKET:?Set S3_ARTIFACTS_BUCKET in .env}
-      S3_ARTIFACTS_PREFIX: artifacts
-      S3_REPORTS_PREFIX: reports
-      # Hydrate paritario con AWS Batch (opcional en Tramo Local).
-      # Si estas dos estan seteadas, el trainer baja el Excel ACUMULADO
-      # desde S3 al boot y corre split_workbook() — replica el flujo
-      # productivo end-to-end. Si quedan vacias, lee ./data del bind-mount.
-      # El default de S3_DATA_KEY coincide con el del Lambda dispatcher
-      # (infra/lambdas/dispatcher.py): el archivo acumulado, no el split.
-      # Ver #4.13 (Proximo paso: Tramo II).
-      S3_DATA_BUCKET: ${S3_DATA_BUCKET:-}
-      S3_DATA_KEY: ${S3_DATA_KEY:-BD_HISTORICO_ACUMULADO.xlsx}
-    volumes:
-      - ~/.aws:/aws:ro
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./artifacts:/app/artifacts
-      - ./reports:/app/reports
-    mem_limit: ${TRAINER_MEM:-8g}
-    cpus: ${TRAINER_CPUS:-4}
-    command: ["--varieties", "${VARIETIES:-POP}", "--tuning", "${TUNING:-smoke}"]
-    logging: *default-logging
-
-volumes:
-  pg-data:
-```
-
-> **Nota — la puerta al MLflow productivo.** Exponer `MLFLOW_TRACKING_URI` como
-> shell var (default `http://mlflow:5000`) habilita entrenar desde tu laptop
-> loggeando contra el MLflow productivo (`export MLFLOW_TRACKING_URI=http://<ALB-DNS>`):
-> útil para validar features sin contaminar el Postgres local, o reproducir un
-> run de producción que regresionó. Procedimiento completo en
-> `docker-compose.override.yml.example`.
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-#### 4.5.4 `docker/postgres/initdb/01-create-forecasts.sql`
-
-El servicio `postgres` (4.5.3) monta `./docker/postgres/initdb` en
-`/docker-entrypoint-initdb.d`. La imagen oficial de Postgres corre los scripts
-de ese directorio **una sola vez**, al inicializar el volumen `pg-data`. Este
-crea la base `forecasts` (de la API) junto a `mlflow`, idempotente. En
-producción NO se usa: la API auto-crea `forecasts` en el RDS de MLflow en su
-primer arranque (`app/models/database.ensure_database`).
-
-> 📂 **Pegar este bloque en**: `docker/postgres/initdb/01-create-forecasts.sql`
-
-```sql
--- Crea la base `forecasts` (de la API) junto a la base `mlflow` en el MISMO
--- Postgres local. Idempotente: solo crea si no existe. El entrypoint de la
--- imagen postgres ejecuta este script una vez, al inicializar el volumen.
---
--- En producción NO se usa este script: la API auto-crea la base `forecasts`
--- en el RDS de MLflow en su primer arranque (app/models/database.ensure_database).
-SELECT 'CREATE DATABASE forecasts'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'forecasts')\gexec
-```
-
-### 4.6 `Taskfile.yml`
-
-[Task](https://taskfile.dev) es el orquestador: Makefile moderno en
-YAML, con `includes:` y variables tipadas. Tres responsabilidades:
-
-1. **Lifecycle Docker local** — `task build` / `task down`.
-2. **Trainer parametrizado** — `task train VARIETIES=... TUNING=... PARALLEL=...`, más `task eda` y `task data:split`.
-3. **AWS namespaced** — `infra:`, `ecr:`, `batch:`, `ops:` (archivos separados bajo `tasks/`, cargados vía `includes:`) + atajos high-level a nivel root (`deploy`, `wake`, `sleep`, `teardown`, `destroy`, `nuke`, `status`).
-
-En Tramo I construimos las dos primeras + el namespace `local:`
-(buckets sandbox). Los namespaces AWS productivos se agregan en
-**Tramo II Parte 4 #4.1.8**, cuando ya existen los `tasks/*.yml` que
-los respaldan — si los declarás antes, `task --list` falla con
-`open ./tasks/X.yml: no such file`.
-
-#### 4.6.1 Raíz `Taskfile.yml`
-
-```yaml
-version: "3"
-
-# `.env` es opcional. Si no existe, los defaults de config.py aplican.
-dotenv: [ ".env" ]
-
-# Tramo I: solo importamos el namespace `local:` (buckets sandbox S3).
-# Los namespaces AWS se agregan en Tramo II Parte 4 #4.1.8.
-includes:
-  local:
-    taskfile: ./tasks/local.yml
-    vars:
-      PROJECT: '{{.PROJECT}}'
-      REGION: '{{.REGION}}'
-
-vars:
-  # TUNING se define a nivel-tarea (default "prod_xl"), NO como var global:
-  # un default global pisaria el del include batch: (ver tasks/batch.yml).
-  VARIETIES: '{{.VARIETIES | default "POP"}}'
-  PARALLEL:  '{{.PARALLEL  | default "1"}}'
-  PROJECT:   '{{.PROJECT   | default "ml-training"}}'
-  REGION:    '{{.AWS_DEFAULT_REGION | default "us-east-1"}}'
-  HOST_UID:  { sh: id -u }
-  HOST_GID:  { sh: id -g }
-  # Patron reutilizado: correr un modulo Python en el container trainer sin
-  # levantar mlflow/postgres. Lo usan data:split y eda.
-  # --user fija el uid/gid del host: lo que el contenedor escriba al bind-mount
-  # (./data, ./reports) sale con tu ownership, no como mluser (uid 1001) — evita
-  # el PermissionError al sobrescribir DB-HISTORICA.xlsx. MPLCONFIGDIR=/tmp porque
-  # con --user el $HOME de la imagen no es escribible por el uid del host (matplotlib en eda).
-  DC_PY: docker compose run --rm --no-deps --user "{{.HOST_UID}}:{{.HOST_GID}}" -e MPLCONFIGDIR=/tmp --entrypoint python trainer
-
-tasks:
-
-  default:
-    desc: "Lista comandos del pipeline + ejemplos TUNING/VARIETIES"
-    silent: true
-    cmds:
-      - |
-        cat <<'EOF'
-
-        ml_training — predice productividad de cosecha (KG/JR_H)
-        ─────────────────────────────────────────────────────────
-
-        Pipeline (correr en orden):
-          task build              1ª vez o tras cambiar codigo/Dockerfile (stack completo)
-          task up                 levanta db + mlflow + reports + api + ui (sin rebuild)
-          task data:split         genera data/training/DB-HISTORICA.xlsx
-          task data:upload        (opcional) sube el Excel acumulado a S3 (hydrate paritario con Batch)
-          task eda VARIETIES=POP  (opcional) analisis exploratorio
-          task train              entrena + genera HTML en reports/
-          task down               apaga servicios al terminar
-
-        Ejemplos de entrenamiento (TUNING × VARIETIES × PARALLEL):
-          task train VARIETIES=POP                   overnight (DEFAULT) ~4-6 h prod_xl
-          task train VARIETIES=POP TUNING=smoke      sanity check    ~1 min
-          task train VARIETIES=POP TUNING=dev        baseline        ~20 min
-          task train VARIETIES=POP TUNING=prod       produccion      ~2 h
-          task train VARIETIES=POP,VENTURA           multiples variedades
-          task train VARIETIES=all PARALLEL=3        todas, 3 en paralelo
-
-        Variables (override por CLI, formato VAR=valor):
-          VARIETIES   POP (default) | POP,VENTURA,... | all
-          TUNING      smoke ~1m | dev ~20m | prod ~2h | prod_xl ~4-6h (default)
-          PARALLEL    1 (default) | N variedades en paralelo
-          SEED        42 (default) | reproducibilidad
-
-        URLs (servicios up):
-          http://localhost:8501             UI Streamlit (dashboard gerencial)
-          http://localhost:8000/docs        API FastAPI (Swagger)
-          http://localhost:5000             MLflow UI (tracking + runs)
-          http://localhost:8080/reports/    dashboards HTML por variedad
-          http://localhost:8080/artifacts/  joblib + best_params
-
-        Mas info:  task --list   GUIA_MLOPS_AWS_V2.md
-        EOF
-
-  build:
-    desc: "1ª vez o al cambiar codigo/Dockerfile: rebuild imagenes (trainer+api+ui) + levanta TODO el stack"
-    cmds:
-      - task: _ensure_dirs
-      - docker compose build trainer api ui
-      - docker compose up -d postgres mlflow reports api ui
-      - task: _print_urls
-
-  up:
-    desc: "Levanta el stack local completo (db + mlflow + reports + api + ui) sin rebuild"
-    cmds:
-      - task: _ensure_dirs
-      - docker compose up -d postgres mlflow reports api ui
-      - task: _print_urls
-
-  data:split:
-    desc: "Paso 1: genera data/training/DB-HISTORICA.xlsx desde el Excel historico"
-    cmds:
-      - >-
-        {{.DC_PY}} -m scripts.prepare_data
-        --input  data/BD_HISTORICO_ACUMULADO.xlsx
-        --output data/training/DB-HISTORICA.xlsx
-        --min-rows 100
-
-  data:upload:
-    desc: "Paso 1b (opcional): sube el Excel acumulado a s3://$S3_DATA_BUCKET/$S3_DATA_KEY. Solo si .env activa el hydrate (replica el flujo prod/Batch); si no, `train` lee ./data y este paso sobra."
-    cmds:
-      # El trainer (main.py::_hydrate_data_from_s3) baja este Excel al boot SOLO
-      # si S3_DATA_BUCKET+S3_DATA_KEY estan en .env. Sin el objeto en S3 -> 404 y
-      # `train` aborta. Esta task lo sube para que el hydrate funcione local igual
-      # que en AWS Batch. Ver #4.13.
-      - |
-        : "${S3_DATA_BUCKET:?S3_DATA_BUCKET no esta en .env -> hydrate S3 desactivado; nada que subir (train leeria ./data)}"
-        KEY="${S3_DATA_KEY:-BD_HISTORICO_ACUMULADO.xlsx}"
-        if [ ! -f data/BD_HISTORICO_ACUMULADO.xlsx ]; then
-          echo "ERROR: data/BD_HISTORICO_ACUMULADO.xlsx no existe localmente."
-          exit 1
-        fi
-        aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx "s3://${S3_DATA_BUCKET}/${KEY}" --region "{{.REGION}}"
-
-  eda:
-    desc: "Paso 2 (opcional): EDA estadistico standalone. Args: VARIETIES=POP"
-    cmds:
-      - "{{.DC_PY}} -m src.diagnostics.eda --variety {{.VARIETIES}}"
-
-  train:
-    desc: "Paso 3: entrena + genera HTML estatico en reports/. Vars: VARIETIES TUNING PARALLEL SEED"
-    deps: [_up]
-    vars:
-      GIT_SHA:   { sh: bash scripts/metadata.sh git-sha }
-      GIT_DIRTY: { sh: bash scripts/metadata.sh git-dirty }
-      DATA_SHA:  { sh: bash scripts/metadata.sh data-sha }
-      SEED: '{{.SEED | default "42"}}'
-    cmds:
-      - |
-        if [ "{{.DATA_SHA}}" = "missing" ]; then
-          echo "ERROR: data/training/DB-HISTORICA.xlsx no existe. Correr 'task data:split' primero."
-          exit 1
-        fi
-      # --user/MPLCONFIGDIR: misma razon que DC_PY (ver vars). Sin --user el
-      # trainer corre como mluser (uid 1001) y no puede escribir los bind-mounts
-      # (./logs ./artifacts ./reports) que data:split dejo con tu ownership ->
-      # PermissionError en logs/pipeline_run.log. MPLCONFIGDIR=/tmp porque con
-      # --user el $HOME de la imagen no es escribible (matplotlib en los HTML).
-      - >-
-        docker compose run --rm
-        --user "{{.HOST_UID}}:{{.HOST_GID}}"
-        -e MPLCONFIGDIR=/tmp
-        -e GIT_SHA={{.GIT_SHA}}
-        -e GIT_DIRTY={{.GIT_DIRTY}}
-        -e DATA_SHA={{.DATA_SHA}}
-        -e SEED={{.SEED}}
-        trainer
-        --varieties {{.VARIETIES}}
-        --tuning {{.TUNING}}
-        --parallel-varieties {{.PARALLEL}}
-      - task: _print_urls
-
-  down:
-    desc: "Detiene servicios. Preserva volumen Postgres"
-    cmds:
-      - docker compose down
-
-  _up:
-    internal: true
-    cmds:
-      - task: _ensure_dirs
-      - docker compose up -d postgres mlflow reports
-      - task: _print_urls
-
-  _ensure_dirs:
-    internal: true
-    silent: true
-    cmds:
-      - mkdir -p artifacts reports logs data/training
-
-  _print_urls:
-    internal: true
-    silent: true
-    cmds:
-      - |
-        cat <<EOF
-
-        ════════════════════════════════════════════════════════════════════
-         Servicios LOCAL listos:
-           UI (dashboard gerencial)   http://localhost:8501
-           API (Swagger)              http://localhost:8000/docs
-           MLflow runs                http://localhost:5000
-           MLflow Model Registry      http://localhost:5000/#/models
-           Reports (campeon HTML)     http://localhost:8080/reports/
-           Artifacts                  http://localhost:8080/artifacts/
-           S3 backend                 s3://${S3_MLFLOW_BUCKET}/
-        ────────────────────────────────────────────────────────────────────
-         Nota: en local NO hay :80 (eso es el ALB de produccion). Cada
-         servicio expone su propio puerto. Entrena con: task train VARIETIES=POP TUNING=smoke
-        ════════════════════════════════════════════════════════════════════
-        EOF
-```
-
-> **Decisiones del Taskfile mínimo**:
-> - **6 tasks públicas** (`build`, `up`, `data:split`, `eda`, `train`, `down`)
->   reflejan el flujo end-to-end. Lint, scans, logs o cleanup van por comando
->   directo (`ruff check …`, `docker compose logs -f …`, `docker compose down -v`):
->   una task por cosa de un solo uso es ruido.
-> - **`default` justifica su lugar**: `task` sin args lista los cruces útiles de
->   TUNING × VARIETIES que `task --list` no comunica (~35 líneas, valor real),
->   a diferencia del `help`/`doctor`/`scan` que borramos.
-> - **`_up` es interno**: `train` lo invoca via `deps: [_up]` para garantizar
->   mlflow/postgres arriba aunque hayas hecho `task down`. No sale en `--list`.
-> - **`data:split` y `eda` usan `--no-deps`** (`{{.DC_PY}}`): corren el trainer
->   aislado, sin mlflow/postgres — son scripts standalone.
-> - **`train` genera el HTML**: `variety_runner.py` regenera `reports/index.html`
->   al final de cada variedad; no hace falta una task `reports:dashboard`.
-> - **No hay job `test` en CI** porque no hay `tests/` (ver
->   [ADR-008](docs/adr/ADR-008-ci-sin-tests-todavia.md)): un task que pasa
->   trivialmente es deuda encubierta.
-
-| Variable | Default | Override por CLI |
-|---|---|---|
-| `VARIETIES` | `POP` | `task train VARIETIES=POP,VENTURA` |
-| `TUNING` | `prod_xl` | `task train TUNING=smoke` (`smoke` / `dev` / `prod` / `prod_xl`) |
-| `PARALLEL` | `1` | `task train VARIETIES=all PARALLEL=3` |
-| `SEED` | `42` (decisión Cap 2) | `task train SEED=1337` (reproducibilidad — el código del trainer la lee de `os.environ["SEED"]`) |
-
-> **Vars auto-calculadas** (no se override, salen del entorno):
-> `GIT_SHA` (`git rev-parse HEAD`), `GIT_DIRTY` (`git diff --quiet`),
-> `DATA_SHA` (primeros 12 chars del `sha256sum` de
-> `data/training/DB-HISTORICA.xlsx`). Se inyectan como env-vars al
-> container y el trainer las loguea como tags MLflow — son el núcleo
-> del **contrato del run** (Cap 1.5). Si `data/training/DB-HISTORICA.xlsx`
-> no existe, el `task train` aborta antes de levantar el container con
-> un mensaje pidiendo correr `task data:split`.
-
-(Los perfiles `smoke` / `dev` / `prod` / `prod_xl` ya aparecen con tiempos en el output de `task` sin argumentos; los detalles de folds y CV viven en `src/config.py`.)
-
-#### 4.6.2 `tasks/local.yml` (canónico, único)
-
-**Qué hace.** Crea (o reusa, si ya existen) los dos buckets S3 sandbox
-— `{project}-data-<suffix6>` y `{project}-artifacts-<suffix6>` — con
-el mismo naming + hardening que usaría Terraform en producción
-(versioning + AES256 + Public Access Block). Es idempotente: correrlo
-dos veces no falla ni duplica recursos.
-
-**Cómo se usa** (después de pegar el archivo abajo, lo invocamos por
-primera vez en #4.8):
-
-```bash
-task local:ensure-buckets               # crea o reusa los 2 buckets
-task local:bucket-name KIND=data        # imprime el nombre completo
-task local:bucket-name KIND=artifacts
-```
-
-> **Dónde se invoca.** El bloque `includes: local:` ya está pegado en
-> #4.6.1 (entre `dotenv:` y `vars:` del Taskfile raíz) — no hay que
-> agregar nada más. Este archivo se define **una sola vez acá**; en
-> Tramo II Parte 4 #4.1.8 solo se lo referencia para evitar drift.
-
-```yaml
-# =============================================================================
-# tasks/local.yml  -  Helpers para desarrollo local que toca AWS
-# =============================================================================
-# Incluido por Taskfile.yml raiz con namespace "local:".
-#
-# USO TIPICO:
-#   task local:ensure-buckets        crea data + artifacts S3 si no existen (idempotente)
-#                                    Reusa los nombres de prod ({project}-data-<suffix>),
-#                                    asi un sync local puede compartir bucket con AWS Batch.
-#   task local:bucket-name KIND=X    imprime nombre completo (KIND=data|artifacts)
-# =============================================================================
-
-version: "3"
-
-# SUFFIX (ultimos 7 digitos del Account ID) se calcula via scripts/aws-suffix.sh.
-# NO se define a nivel archivo a proposito: si estuviera aqui, Task lo evaluaria
-# al cargar el namespace y dispararia `aws sts get-caller-identity` incluso para
-# `task` (sin args) o `task --list`. Por-tarea => solo corre cuando se invoca.
-
-tasks:
-
-  ensure-buckets:
-    desc: "Crea S3 buckets data + artifacts si no existen (idempotente). Misma cuenta+region que prod."
-    silent: true
-    vars:
-      SUFFIX: { sh: bash scripts/aws-suffix.sh }
-    cmds:
-      - for: [data, artifacts]
-        task: _ensure-bucket
-        vars: { NAME: '{{.PROJECT}}-{{.ITEM}}-{{.SUFFIX}}' }
-      - |
-        cat <<EOF
-
-        Listo. Para que el trainer local sincronice a estos buckets, exporta:
-          export S3_DATA_BUCKET={{.PROJECT}}-data-{{.SUFFIX}}
-          export S3_ARTIFACTS_BUCKET={{.PROJECT}}-artifacts-{{.SUFFIX}}
-        EOF
-
-  bucket-name:
-    desc: "Imprime el nombre del bucket. Var: KIND=data|artifacts (REQ)"
-    silent: true
-    requires: { vars: [KIND] }
-    vars:
-      SUFFIX: { sh: bash scripts/aws-suffix.sh }
-    cmds:
-      - echo "{{.PROJECT}}-{{.KIND}}-{{.SUFFIX}}"
-
-  _ensure-bucket:
-    internal: true
-    silent: true
-    requires: { vars: [NAME] }
-    cmds:
-      - bash scripts/ensure-s3-bucket.sh "{{.NAME}}" "{{.REGION}}"
-```
-
-> **Detalles de diseño** (informativo):
->
-> - **Reusa naming de prod**: si Tramo II ya aplicó `module.storage`,
->   `head-bucket` devuelve `EXISTE (reuso)` — mismo bucket que el productivo,
->   sin migración entre tramos.
-> - **`if us-east-1`**: S3 rechaza `--create-bucket-configuration` en su región
->   default; el `if` abstrae esa aspereza.
-> - **`local:` vs `aws:`**: `aws:` orquesta el stack productivo; `local:` agrupa
->   helpers que corren en tu máquina pero tocan AWS (`ensure-buckets`, futuros
->   `download-latest-model`…). La separación evita que `aws:` se llene de dev-utils.
-
-**Verificación**
-
-```bash
-task --list
-# Debe mostrar las 6 publicas: build, up, data:split, eda, train, down,
-# mas las 2 del namespace local: ensure-buckets, bucket-name.
-# Las internas (_up, _ensure_dirs, _print_urls) NO aparecen en --list.
-```
-
-Si `task --list` falla con `failed to read taskfile` o un error YAML
-genérico, la causa casi siempre es **indentación con tabs**. Task es
-estricto: el YAML spec exige espacios, y un solo tab en cualquier nivel
-rompe el parser con un mensaje que no apunta a la línea ofensora.
-Solución rápida: `expand -t 2 Taskfile.yml > /tmp/t && mv /tmp/t
-Taskfile.yml` (y lo mismo con `tasks/local.yml`).
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-#### 4.6.3 `scripts/` — helpers de los Taskfiles locales
-
-Tres scripts cortos que los Taskfiles invocan via `sh:` / `cmds:`. Viven en
-`scripts/` (no en `tasks/lib/`) porque también los reusa el Tramo II:
-`metadata.sh` lo llama `task train` (tags del run MLflow); `aws-suffix.sh` y
-`ensure-s3-bucket.sh` los usan `tasks/local.yml` y #4.8 — y más tarde el
-bootstrap de tfstate (Parte 2) reusa los mismos dos.
-
-> 📂 **Pegar este bloque en**: `scripts/metadata.sh`
-
-```bash
-#!/usr/bin/env bash
-# Metadata del run de training. Cada subcomando imprime un valor en stdout
-# y lo consume Taskfile.yml `train.vars` via `sh:`.
-#
-# Sin `set -e`: los comandos usan `||` para fallback ("unknown", "missing").
-
-case "${1:-}" in
-  git-sha)
-    git rev-parse HEAD 2>/dev/null || echo unknown
-    ;;
-  git-dirty)
-    git diff --quiet HEAD 2>/dev/null && echo false || echo true
-    ;;
-  data-sha)
-    f=data/training/DB-HISTORICA.xlsx
-    [ -f "$f" ] && sha256sum "$f" | cut -d' ' -f1 | cut -c1-12 || echo missing
-    ;;
-  *)
-    echo "Usage: $0 {git-sha|git-dirty|data-sha}" >&2
-    exit 1
-    ;;
-esac
-```
-
-> 📂 **Pegar este bloque en**: `scripts/aws-suffix.sh`
-
-```bash
-#!/usr/bin/env bash
-# Imprime los ultimos 7 digitos del AWS Account ID (sufijo de bucket).
-# Consumido por tasks/local.yml `vars.SUFFIX.sh`.
-#
-# `${acct#?????}` (POSIX) quita los primeros 5 chars del Account ID de 12.
-# Evita `tail -c 7` que en Windows-coreutils (scoop) parsea el `7` como filename.
-set -euo pipefail
-
-acct=$(aws sts get-caller-identity --query Account --output text)
-echo "${acct#?????}"
-```
-
-> 📂 **Pegar este bloque en**: `scripts/ensure-s3-bucket.sh`
-
-```bash
-#!/usr/bin/env bash
-# Crea bucket S3 si no existe + aplica hardening (versioning, AES256, no public).
-# Idempotente en dos niveles:
-#   1) Si el bucket no existe, lo crea.
-#   2) Aplica versioning + encryption + public-access-block SIEMPRE (no solo al
-#      crear). Los tres son PUT idempotentes; re-aplicarlos auto-corrige drift
-#      si alguien tocó el bucket a mano sin esos settings.
-#
-# Uso: ensure-s3-bucket.sh <name> <region>
-# Consumido por: tasks/local.yml `_ensure-bucket` y infra/bootstrap.sh (tfstate).
-set -euo pipefail
-
-name="${1:?falta <name>}"
-region="${2:?falta <region>}"
-
-if aws s3api head-bucket --bucket "$name" 2>/dev/null; then
-  echo "  $name  EXISTE (reaplicando hardening)"
-else
-  echo "  $name  no existe -> creando..."
-  # us-east-1 NO acepta --create-bucket-configuration (es la default; AWS lo rechaza)
-  if [ "$region" = "us-east-1" ]; then
-    aws s3api create-bucket --bucket "$name" --region "$region"
-  else
-    aws s3api create-bucket --bucket "$name" --region "$region" \
-      --create-bucket-configuration "LocationConstraint=$region"
-  fi
-fi
-
-# Hardening idempotente (mismas defaults que el modulo storage de prod).
-aws s3api put-bucket-versioning --bucket "$name" \
-  --versioning-configuration Status=Enabled
-
-aws s3api put-bucket-encryption --bucket "$name" \
-  --server-side-encryption-configuration \
-  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
-
-aws s3api put-public-access-block --bucket "$name" \
-  --public-access-block-configuration \
-  'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true'
-
-echo "  $name  OK (versioning + AES256 + no public)"
-```
-
-> Los tres son ejecutables: tras pegarlos, `chmod +x scripts/*.sh`.
-
-### 4.7 `.env.example` y `.env`
-
-> [!NOTE]
-> Este `.env.example` es **self-contained para Tramo I**. Las **únicas
-> variables obligatorias** son `S3_MLFLOW_BUCKET` y `S3_ARTIFACTS_BUCKET` (los
-> buckets sandbox de #4.8 vía `task local:ensure-buckets`); el resto tiene
-> defaults sanos en `config.py` / `docker-compose.yml`, y las líneas comentadas
-> son overrides opcionales.
->
-> En Tramo II se reusa **tal cual**: misma imagen y código, sólo cambia el
-> contenido — buckets sandbox → productivos (Terraform) y `MLFLOW_TRACKING_URI`
-> → ALB en vez de `mlflow:5000`.
-
-El `docker-compose.yml` valida en parse-time que `S3_MLFLOW_BUCKET` y
-`S3_ARTIFACTS_BUCKET` estén seteadas (la sintaxis `${VAR:?mensaje}`
-aborta con un error explícito si la variable está vacía o ausente).
-Todas las demás variables del compose tienen defaults sensatos via
-`${VAR:-default}` y no hace falta declararlas.
-
-#### 4.7.1 Crear `.env.example`
-
-```bash
-# AWS (sin secrets)
-# Las credenciales VIVEN EN ~/.aws/credentials del host (creado con
-# `aws configure`). docker-compose monta ~/.aws:ro en los containers
-# y el SDK las lee via AWS_PROFILE + AWS_SHARED_CREDENTIALS_FILE.
-AWS_PROFILE=default
-AWS_DEFAULT_REGION=us-east-1
-
-# Postgres (MLflow backend store local)
-# Default sano para localhost-only. Override en cualquier entorno
-# compartido o VM en red.
-# POSTGRES_PASSWORD=mlflow
-
-# Trainer resource limits (opcional)
-# TRAINER_MEM=8g
-# TRAINER_CPUS=4
-
-# Buckets S3 SANDBOX (REQUERIDOS para Tramo I)
-# Crear con `task local:ensure-buckets` (#4.8).
-#
-# Estas DOS variables apuntan habitualmente al MISMO bucket:
-#   - S3_MLFLOW_BUCKET     lo consume el server MLflow como --artifacts-destination
-#                          (modo proxy: el server es el único que toca S3; los
-#                          runs nuevos quedan como mlflow-artifacts:/...).
-#                          IMPORTANTE: el server debe poder alcanzar S3 →
-#                          AWS_DEFAULT_REGION debe ser la región REAL del bucket.
-#   - S3_ARTIFACTS_BUCKET  lo consume el trainer en scripts/s3_sync.py
-#                          (sube reports/<variety>/ y artifacts/*.joblib)
-#
-# Conviven en un solo bucket porque van a prefijos distintos y no colisionan.
-# Separarlas solo si necesitas politicas IAM o lifecycle diferenciadas (Tramo II).
-# En Terraform productivo existe solo `artifacts_bucket` — ambas resuelven a el.
-S3_MLFLOW_BUCKET=ml-training-artifacts-XXXXXX
-S3_ARTIFACTS_BUCKET=ml-training-artifacts-XXXXXX
-
-# MLflow (opcional — útil si querés apuntar a un MLflow remoto)
-# MLFLOW_TRACKING_URI=http://localhost:5000
-# MLFLOW_EXPERIMENT_PREFIX=
-# MODEL_REGISTRY_PREFIX=rnd-forest-       # (consumida solo en Tramo II; Tramo Local no registra modelos)
-
-# Hydrate de data desde S3 (paridad con AWS Batch — OPCIONAL en Tramo Local)
-# Si estas dos estan seteadas, el trainer baja el Excel ACUMULADO desde S3
-# al boot y corre split_workbook() (replicando el flujo de Batch).
-# Si quedan vacias, lee ./data/BD_HISTORICO_ACUMULADO.xlsx del bind-mount.
-#
-# OJO con S3_DATA_KEY: apunta al Excel ACUMULADO (input de
-# scripts/prepare_data.split_workbook), NO al split DB-HISTORICA.xlsx.
-# `main.py::_hydrate_data_from_s3` baja S3_DATA_KEY -> ACCUMULATED_FILE
-# y luego split_workbook genera TRAINING_FILE. El default coincide con
-# el del Lambda dispatcher (infra/lambdas/dispatcher.py L5112).
-#
-# Util para validar el contrato `s3_hydrate` antes de Tramo II (ver #4.5.3).
-# S3_DATA_BUCKET=ml-training-data-XXXXXX
-# S3_DATA_KEY=BD_HISTORICO_ACUMULADO.xlsx
-
-# Reporte gerencial (opcional)
-# REPORT_PLOTLY_OFFLINE=1
-
-# ── App stack: API (FastAPI) + UI (Streamlit) ─────────────────────────────
-# La API sirve los modelos rnd-forest-* desde MLflow y persiste pronosticos en
-# la base `forecasts` (mismo Postgres local, otra DB). La UI consume la API.
-#
-# Prefijo del registered model — DEBE coincidir entre trainer y API.
-# MODEL_REGISTRY_PREFIX=rnd-forest-
-# Precarga de modelos en la API: false = lazy (arranque rapido, menos RAM).
-# MLFLOW_PRELOAD_MODELS=false
-# Origenes CORS permitidos por la API (coma-separados).
-# CORS_ORIGINS=http://localhost:8501
-# URL con la que la UI llama a la API (en compose: http://api:8000).
-# UI_API_URL=http://api:8000
-# Nivel de log compartido por api + ui.
-# LOG_LEVEL=info
-```
-
-#### 4.7.2 Copia para uso real
-
-```bash
-cp .env.example .env
-# Editar .env: completar los dos buckets con valores reales
-```
-
-Completá los dos buckets sandbox; el resto tiene defaults sensatos y los
-comentarios in-line del `.env.example` explican cuándo activar cada override y
-por qué las dos vars S3 suelen apuntar al mismo bucket.
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-### 4.8 Buckets S3 sandbox
-
-Es la **única dependencia AWS** del smoke local: el resto del stack vive en
-containers en tu laptop. Los buckets son el backend remoto de artifacts y un
-avance del Tramo II (mismos artefactos, luego apuntando a la cuenta productiva).
-
-`task local:ensure-buckets` los crea idempotentemente con el mismo hardening que
-el módulo `storage` de prod: versioning (rollback de artifacts pisados), SSE-S3
-AES256 (encryption-at-rest sin KMS) y Public Access Block en sus cuatro flags.
-
-```bash
-export PROJECT="ml-training"
-export AWS_DEFAULT_REGION="us-east-1"
-
-task local:ensure-buckets
-#   ml-training-data-<suffix>       CREADO (o EXISTE)
-#   ml-training-artifacts-<suffix>  CREADO (o EXISTE)
-```
-
-Completar `.env` con los nombres reales:
-
-```bash
-SUFFIX=$(bash scripts/aws-suffix.sh)
-sed -i "s|S3_MLFLOW_BUCKET=.*|S3_MLFLOW_BUCKET=ml-training-artifacts-${SUFFIX}|"     .env
-sed -i "s|S3_ARTIFACTS_BUCKET=.*|S3_ARTIFACTS_BUCKET=ml-training-artifacts-${SUFFIX}|" .env
-```
-
-> **Por qué `scripts/aws-suffix.sh` y no `tail -c 7`** — `tail -c 7`
-> incluye el `\n` final del `aws` CLI (devuelve 6 dígitos en Linux) y
-> peor en Windows con CRLF (devuelve 5 dígitos, suffix inválido). El
-> script POSIX `${acct#?????}` extrae los 7 dígitos correctos de forma
-> portable y es la fuente única usada también por `tasks/local.yml`.
-
-**Verificación**
-
-```bash
-SUFFIX=$(bash scripts/aws-suffix.sh)
-aws s3api get-bucket-versioning --bucket "ml-training-artifacts-${SUFFIX}"
-# { "Status": "Enabled" }
-```
-
-> **Los dos buckets quedan vacíos — es lo esperado.** `ensure-buckets` solo los
-> **crea**, no sube datos:
->
-> - `{project}-artifacts-<suffix>` lo puebla el trainer al final de `task train`
->   ([scripts/s3_sync.py](scripts/s3_sync.py)) y el server MLflow durante el run.
-> - `{project}-data-<suffix>` queda **vacío** todo Tramo I (la data se lee del
->   bind-mount `./data → /app/data`); solo se puebla si validás el contrato
->   `s3_hydrate` antes de Batch (procedimiento con `aws s3 cp`, ver #4.13). En
->   Tramo II #4.2 se sube el Excel al bucket productivo (mismo nombre por SUFFIX).
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-### 4.9 Primera ejecución
-
-> [!TIP]
-> Este es el **smoke test del Tramo I**. Asume que ya hiciste el setup de
-> una sola vez: buckets S3 creados (#4.8) y `.env` completado (#4.7) — sin
-> eso el paso 1 (`task build`) aborta **antes** de arrancar MLflow con
-> `Set S3_MLFLOW_BUCKET in .env`. Si los cuatro comandos del pipeline de
-> abajo terminan sin error, tenés infra local sana y un loop de
-> desarrollo cerrado en tu laptop. La secuencia es estricta — cada
-> paso asume el éxito del anterior. **El EDA (paso 3) va antes del
-> `train` (paso 4) intencionalmente**: es el gate de calidad de datos
-> — si muestra PSI alto, VIF explotado o BP/DW fuera de rango,
-> entrenar es regalar CPU a un modelo que el quality gate de Parte 7
-> va a rechazar igual. Si algo rompe: #4.10 valida el resultado (5
-> checks) y #4.12 enumera fallos comunes con fixes.
-
-```bash
-# 0) PREREQUISITO (solo 1ª vez) — buckets S3 + .env. Ver #4.8 y #4.7.
-#    task local:ensure-buckets  y luego completar S3_MLFLOW_BUCKET /
-#    S3_ARTIFACTS_BUCKET en .env con los nombres reales. Sin esto, el
-#    paso 1 aborta con "Set S3_MLFLOW_BUCKET in .env" (lo exige
-#    docker-compose.yml en --artifacts-destination del server MLflow).
-
-# 1) Build de la imagen + arranque de servicios
-task build
-# Tarda 5-10 min la primera vez (compila wheels en stage 1).
-# Al final imprime las URLs:
-#   UI (dashboard)  http://localhost:8501
-#   API (Swagger)   http://localhost:8000/docs
-#   MLflow UI       http://localhost:5000
-#   Reports HTML    http://localhost:8080/reports/
-#   Artifacts       http://localhost:8080/artifacts/
-
-# 2) Generar el dataset de training
-task data:split
-# Lee  data/BD_HISTORICO_ACUMULADO.xlsx
-# Escribe data/training/DB-HISTORICA.xlsx (1 hoja por variedad)
-
-# 3) EDA estadistico - gate de calidad de datos (~30 s)
-task eda VARIETIES=POP
-# Carga data/training/DB-HISTORICA.xlsx hoja POP y genera:
-#   reports/EDA_POP_<ts>.html   dashboard renderizado (BP/DW/ADF/VIF/MI/PSI)
-#   reports/EDA_POP_<ts>.json   mismos hallazgos en JSON parseable
-# Abrir el HTML en http://localhost:8080/reports/ y revisar la
-# seccion "Hallazgos" (top 5 con severity). Si hay severity=high
-# por PSI > 0.25 o VIF > 10, pausar y entender ANTES de entrenar.
-
-# 4) Smoke test (~1 min)
-task train VARIETIES=POP TUNING=smoke
-# Al final del log:
-#   FIN | variedades=1 | falladas=0 | tiempo_total=...s
-#   Campeones por variedad:
-#     POP                       -> xgb composite=...
-```
-
-> *Para verificar / re-ejecutar esta sección, ver #4.A.*
-
-### 4.10 Verificación post-smoke (7 checks)
-
-Exit code 0 es **necesario pero no suficiente**: hay caminos donde el proceso
-termina limpio pero los artifacts no llegan a S3, MLflow registra el run sin
-params, o nginx no expone los reports. Los cinco primeros checks cubren cada
-componente del stack (MLflow, Postgres, S3, nginx, agregado); los dos últimos
-validan el **contrato del run MLflow** (Cap 1.5: joblib usable + tags
-obligatorios):
-
-```bash
-# 1) MLflow server responde
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5000/health
-# 200
-
-# 2) Postgres tiene el experimento POP con 2 runs (xgb + lgb)
-docker compose exec postgres psql -U mlflow -d mlflow -c \
-  "SELECT name, (SELECT COUNT(*) FROM runs WHERE experiment_id = e.experiment_id) AS n_runs
-   FROM experiments e WHERE name = 'POP';"
-# POP | 2
-
-# 3) joblib del campeón en S3
-SUFFIX=$(bash scripts/aws-suffix.sh)
-aws s3 ls "s3://ml-training-artifacts-${SUFFIX}/artifacts/" --recursive \
-  | grep -E "final_pipeline_POP_.*\.joblib$"
-# Al menos un match con timestamp reciente
-
-# 4) nginx sirve los reports
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/reports/
-# 200 (o 301 si autoindex redirige)
-
-# 5) run_summary del agregado existe en host
-cat artifacts/run_summary_AGGREGATE.json | jq '.champions'
-# { "POP": "xgb" }   (o "lgb", depende del run)
-
-# 6) joblib roundtrip: el campeón se puede recargar y predecir
-#    Detecta pickles corruptos / sklearn version mismatch / signature ausente
-docker compose run --rm --no-deps --entrypoint python trainer -c '
-import glob, joblib, pandas as pd
-path = sorted(glob.glob("artifacts/final_pipeline_POP_*.joblib"))[-1]
-m = joblib.load(path)
-sample = pd.read_excel("data/training/DB-HISTORICA.xlsx", sheet_name="POP").head(1)
-y = m.predict(sample.drop(columns=["KG/JR_H"], errors="ignore"))
-assert y.shape == (1,), f"prediccion mal: {y.shape}"
-print(f"OK  joblib={path}  y[0]={y[0]:.3f}")
-'
-# OK  joblib=artifacts/final_pipeline_POP_<ts>.joblib  y[0]=<float>
-
-# 7) Contrato del run MLflow (Cap 1.5): los 8 tags obligatorios presentes
-#    Si alguno falla, el run no es promovible al gate de Parte 7.
-docker compose exec postgres psql -U mlflow -d mlflow -tA -c "
-WITH last_run AS (
-  SELECT r.run_uuid
-  FROM runs r JOIN experiments e ON r.experiment_id = e.experiment_id
-  WHERE e.name = 'POP' ORDER BY r.start_time DESC LIMIT 1
-),
-need AS (
-  SELECT unnest(ARRAY['git_commit','git_dirty','dataset_sha256','dataset_n_rows',
-                      'tuning','variety']) AS k
-),
-have AS (SELECT key AS k FROM tags WHERE run_uuid IN (SELECT run_uuid FROM last_run))
-SELECT n.k AS missing FROM need n LEFT JOIN have h USING(k) WHERE h.k IS NULL;
-"
-# (esperado: cero filas)  -> si lista alguna, falta tag en el codigo del trainer
-```
-
-> **Si el check #6 falla** con `ModuleNotFoundError` al cargar el
-> joblib, es señal de sklearn version mismatch entre el run y la
-> imagen actual (cambiaron `requirements.txt`). Re-correr `task build`
-> y reintentar.
->
-> **Si el check #7 lista filas**, falta tagear en el código. El
-> trainer (`src/orchestration/single_run.py` o similar) debe llamar
-> `mlflow.set_tags({...})` al inicio del run con los 8 keys
-> enumerados. Sin estos tags, `task ops:promote` aborta —
-> documentado en Parte 7.
-
-Si los siete checks dan verde, **el setup local está validado**. El Tramo II no
-tiene urgencia: el stand-up de AWS toma 2–3 horas y no aporta nada hasta que el
-código del trainer esté donde lo querés. Iterá local lo que necesites antes de subir.
-
-### 4.11 Workflow día a día
-
-Con la imagen ya cacheada, el ciclo cotidiano son unos pocos comandos: disparás
-entrenamientos con perfiles cada vez más exigentes a medida que confiás en los
-cambios, y apagás todo al final del día (los datos persisten en el volumen de
-Postgres y en S3, así que el `down` es seguro).
-
-```bash
-# Iterar (task train levanta los servicios automaticamente via deps:[_up])
-task train VARIETIES=POP TUNING=dev          # ~20 min, baseline
-task train VARIETIES=POP TUNING=prod         # ~2 h, producción
-task train VARIETIES=all PARALLEL=3          # todas en paralelo
-
-# Seguir progreso en vivo (comando directo a docker compose)
-docker compose logs -f --tail=200 trainer mlflow
-
-# Tras tocar src/ o requirements.txt: rebuild + servicios up
-task build
-
-# Opcional tras un rebuild que toco deps: auditar CVEs HIGH/CRITICAL
-# (requiere `trivy` instalado en el host)
-trivy image ml-training:local --severity HIGH,CRITICAL --ignore-unfixed
-
-# Noche: apagar (preserva volumen Postgres + S3)
-task down
-```
-
-> **Nota — dashboard `reports/index.html`**: se regenera
-> automáticamente al final de cada `task train` (vía
-> `variety_runner.py:_write_global_dashboard_index`). No hace falta una
-> task aparte. Si por algún motivo el archivo quedó desactualizado (ej.
-> borraste manualmente algún HTML de `reports/`):
-> `docker compose run --rm --no-deps --user "$(id -u):$(id -g)" -e MPLCONFIGDIR=/tmp --entrypoint python trainer -m src.diagnostics.dashboard_index`
-> (el `--user` evita el `PermissionError` al reescribir `reports/index.html`, igual que `{{.DC_PY}}`).
-
-### 4.12 Troubleshooting local
-
-La tabla cataloga los quince fallos más frecuentes al construir el entorno por
-primera vez: **síntoma observable** (el mensaje exacto), causa raíz y fix mínimo.
-Si tu error no encaja literal, leelo igual — la mayoría son variantes de estos.
-
-| Síntoma | Causa probable | Fix |
-|---|---|---|
-| `ERROR: Set S3_MLFLOW_BUCKET in .env` | `.env` ausente o variable vacía | `cp .env.example .env` + completar #4.7 |
-| `Unable to locate credentials` en logs MLflow / trainer | `~/.aws/credentials` no existe, o `AWS_PROFILE` apunta a un profile inexistente | `aws configure` + `cat ~/.aws/credentials` |
-| `NoSuchBucket` al arrancar mlflow | Buckets en `.env` no existen | `task local:ensure-buckets` |
-| `Host header ... not allowed` | Cliente pega contra un host fuera del `--allowed-hosts` | Usar `mlflow:5000` o `localhost:5000`; o editar el `command:` del compose |
-| Trainer muere con `OOMKilled` (exit 137) | `mem_limit: 8g` insuficiente | `TRAINER_MEM=16g` en `.env`, después `task down && task build` |
-| `Port 5000/8080 already allocated` | Otro proceso usa esos puertos | `lsof -i :5000` (o `:8080`), matar o cambiar `ports:` |
-| `task train` no encuentra `DB-HISTORICA.xlsx` | Saltaste `task data:split` | Correr `task data:split` primero |
-| `git_commit=unknown` en MLflow tag | El container no monta `.git/` (excluido por `.dockerignore`) | OK en dev local; `task train` ya inyecta `GIT_SHA` via `-e` |
-| Postgres healthcheck en `starting` para siempre | Imagen corrupta o disco lleno | `docker compose down -v` (DESTRUCTIVO: borra volumen Postgres), `docker system prune`, reintentar |
-| `Connection refused: mlflow:5000` desde trainer | Red Docker rota | `task down && task build`; si persiste, `docker network prune` |
-| `nginx 403 Forbidden` en `/reports/` | `reports/` vacío o sin permisos | Correr al menos un `task train`; revisar `ls -la reports/` |
-| `task train TUNING=prod` se cuelga | `PARALLEL` alto + `TRAINER_CPUS` bajo → oversubscription | Bajar `PARALLEL` o subir `TRAINER_CPUS` |
-| `Stage 'builder' failed: target stage not found` o build mucho más lento que lo esperado | BuildKit no habilitado: la directiva `# syntax=docker/dockerfile:1.7` se ignora | `export DOCKER_BUILDKIT=1` en la shell, o instalar Docker Buildx (`docker buildx version`) |
-| MLflow UI muestra "No runs" después de un `task train` exitoso | `MLFLOW_EXPERIMENT_PREFIX` seteado y la UI filtra por el prefix antiguo | Limpiar la barra de búsqueda en la UI o quitar `MLFLOW_EXPERIMENT_PREFIX` del `.env` |
-| Check #6 de #4.10 falla con `ModuleNotFoundError` o `_RemainderArgs` | sklearn/xgb/lgb version mismatch entre el `.joblib` y la imagen actual (cambió `requirements.txt`) | `task build` (rebuild de la imagen) y volver a correr `task train` |
-
-### 4.A Re-ejecución por sección (referencia)
-
-Tabla rápida para re-correr cualquier sub-sección de #4 sin re-leer la
-prosa. Cada fila tiene el chequeo mínimo de "esto quedó bien" y el
-pitfall que se ve más seguido. Las sub-secciones del capítulo apuntan
-acá con una línea de cross-ref.
-
-| # | Verificar | Pitfall típico | Commit |
-|---|---|---|---|
-| **4.3** `.dockerignore` | `docker build --progress=plain --no-cache -t ml-training:dryrun . 2>&1 \| head -5` → `transferring context: ...kB` | Transfer >10 MB = `.dockerignore` no se aplicó (path o sintaxis); archivo debe estar en raíz junto al `Dockerfile` | `chore(docker): add .dockerignore` |
-| **4.4** `Dockerfile` | `docker build -t ml-training:local . && docker images ml-training:local` → SIZE ~1.2 GB | Stage 1 falla compilando wheels: falta `build-essential` o `# syntax=docker/dockerfile:1.7` (sin eso cache mount se ignora) | `feat(docker): Dockerfile multi-stage del trainer` |
-| **4.5.3** `docker-compose.yml` | `docker compose config` parsea sin errores y lista 6 servicios | CRLF en WSL rompe el YAML (`mapping values are not allowed here`); `dos2unix docker-compose.yml docker/*.conf docker/mlflow/Dockerfile` | `feat(docker): compose con mlflow + postgres + reports + trainer` |
-| **4.6.2** `tasks/local.yml` | `task --list` muestra 6 públicas + `local:ensure-buckets` + `local:bucket-name` | Indentación con TABS rompe Task (`failed to read taskfile`); `expand -t 2` para reemplazar tabs | `feat(taskfile): tasks locales + namespace local:` |
-| **4.7** `.env.example` y `.env` | `cp .env.example .env && grep -c "^[A-Z]" .env` ≥ 5 (vars activas, no comentadas) | Placeholder `XXXXXX` en `S3_*_BUCKET` rompe `task build` con `Set S3_MLFLOW_BUCKET in .env`; completar tras #4.8 | `chore(env): .env.example template` |
-| **4.8** Buckets S3 sandbox | `aws s3 ls \| grep ml-training` lista 2 buckets con el `ACCOUNT_SUFFIX` de #3.5 | `aws sts get-caller-identity` sin credenciales → `SUFFIX` vacío → nombre inválido; re-correr #3.3 antes | N/A (op AWS, no genera archivos) |
-| **4.9** Primera ejecución | Los 5 checks de #4.10 (`/health` 200, runs en Postgres, joblib en S3, nginx 200, `run_summary_AGGREGATE.json`) | `task build` colgado en `waiting for mlflow healthcheck` >2 min → `docker logs ml_training-mlflow-1`: `NoSuchBucket` o `Unable to locate credentials` | `chore(smoke): primer entrenamiento local OK` |
-
-**Tiempos esperados**: #4.3 instantáneo · #4.4 ~5 min (1ª vez) / ~20s con
-cache · #4.8 ~30s · #4.9 5-10 min (1ª vez) / 1-2 min con cache.
-
-### 4.13 Próximo paso: Tramo II
-
-Con el smoke local en verde, el **código del trainer está validado**:
-toma datos reales, entrena ambos algoritmos, elige campeón por la
-métrica compuesta, persiste artifacts en S3 y registra el run en
-MLflow. El Tramo II no reescribe nada de eso — promueve el **mismo
-binario** a AWS Batch, sustituyendo sólo la infraestructura que lo
-rodea. La promoción se hace en cuatro pasos:
-
-1. **Bootstrap del backend Terraform** (Parte 2) — operación irreversible
-   que se ejecuta UNA sola vez por cuenta AWS.
-2. **Aplicar módulos Terraform** (Partes 3–4) — levanta VPC, S3, ECR,
-   MLflow sobre ECS Fargate, y la cola de AWS Batch.
-3. **Build + push de la imagen del trainer a ECR** — el mismo
-   `Dockerfile` de #4.4 se tagea y empuja con `task ecr:build IMG=trainer`.
-4. **Smoke test en Batch** — equivalente productivo de `task train
-   TUNING=smoke`, invocado con `task batch:smoke`.
-
-> **Antes de empujar a ECR, audita CVEs HIGH/CRITICAL de la imagen
-> local con `trivy image ml-training:local --severity HIGH,CRITICAL
-> --ignore-unfixed`** (en local es warn-only — solo te muestra la
-> superficie). El mismo binario se promueve a AWS sin modificación,
-> así que las vulnerabilidades de hoy en tu laptop son las de mañana
-> en Batch. Conocerlas acá te evita el push fallido en Tramo II Parte
-> 4, donde el scan-on-push del ECR puede bloquear el deploy.
-
-Lo que **no cambia** entre tu laptop y AWS — la garantía central del
-diseño "una sola imagen":
-
-- El `Dockerfile` es bit-perfect idéntico. La imagen que corrió tu
-  smoke local es la misma que corre en Batch.
-- El código (`main.py`, `src/`) se configura enteramente por variables
-  de entorno; sólo cambia el origen de esas variables (en local salen
-  del `.env`, en Batch de la job definition).
-- El modelo final es reproducible: dada la misma data y los mismos
-  params, el joblib y el MAPE son los mismos en local y en producción.
-
-Lo que **sí cambia**, y es el alcance entero del Tramo II:
-
-| Componente | Local | AWS |
-|---|---|---|
-| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` (DNS de Docker) | `http://<ALB-DNS>` (ALB + Service Discovery) |
-| Postgres | Container con volumen Docker | RDS managed con backups automáticos |
-| Credenciales AWS | `~/.aws:/aws:ro` bind-mount | IAM Task Role (metadata endpoint, sin secretos en disco) |
-| Origen del dataset | Bind-mount `./data → /app/data` | `aws s3 cp s3://$S3_DATA_BUCKET/$S3_DATA_KEY ./data/...` al boot del container |
-| Model Registry | No se popula (Tramo Local no registra) | `mlflow.register_model()` se invoca al final del run |
-| Trigger del entrenamiento | `task train` manual | Lambda dispatcher o `workflow_dispatch` de GitHub Actions |
-
-> **Validar el contrato del hydrate antes de subir a Batch.** El
-> origen del dataset es la única ruta donde "mismo binario" se
-> rompe sutilmente: en local lee un bind-mount, en Batch baja desde
-> S3. Si nunca probaste el path S3 en local, lo descubrís recién en
-> el primer `task batch:smoke`. Para validarlo sin AWS Batch son
-> 3 pasos (asumiendo que ya corriste `task local:ensure-buckets` en
-> #4.8 — el bucket `data` existe pero está vacío):
->
-> ```bash
-> # 1) Subir el Excel ACUMULADO al bucket sandbox de data.
-> #    `task local:ensure-buckets` solo crea el bucket; este `cp` lo puebla.
-> SUFFIX=$(bash scripts/aws-suffix.sh)
-> aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx \
->     "s3://ml-training-data-${SUFFIX}/BD_HISTORICO_ACUMULADO.xlsx"
->
-> # 2) Activar el hydrate en .env (descomentar las dos lineas de #4.7.1).
-> #    OJO: S3_DATA_KEY apunta al ACUMULADO, no al split DB-HISTORICA.xlsx.
-> cat >> .env <<EOF
-> S3_DATA_BUCKET=ml-training-data-${SUFFIX}
-> S3_DATA_KEY=BD_HISTORICO_ACUMULADO.xlsx
-> EOF
->
-> # 3) Re-correr el training — main.py::_hydrate_data_from_s3 detecta
-> #    las vars y baja el Excel al boot, idéntico al flujo de Batch.
-> task train VARIETIES=POP TUNING=smoke
-> ```
->
-> Si el run termina OK, el contrato `s3_hydrate` está validado:
-> en Tramo II #4.2 sólo cambian los nombres de bucket (sandbox →
-> productivos por SUFFIX), no la lógica del trainer. Para volver al
-> modo bind-mount comentá las dos líneas de `.env`. Ver #4.5.3
-> (docker-compose) y #4.7.1 (.env).
-
-> **Nota — el modo híbrido.** Entrenar **desde tu laptop** loggeando contra el
-> **MLflow productivo** (reproducir un run que regresionó, o validar features con
-> trazabilidad de prod sin gastar Batch). Configuración en
-> `docker-compose.override.yml.example` — ver también el callout de #4.5.3.
-
----
-
-# ☁️ Tramo II — Producción AWS
 
 > El mismo binario que validaste en Tramo I se promueve aquí a AWS Batch +
 > MLflow productivo. La infraestructura se levanta con Terraform por capas
@@ -2002,7 +93,7 @@ Lo que **sí cambia**, y es el alcance entero del Tramo II:
 
 ---
 
-# Parte 1 — Overview del lifecycle y stand-up
+## Parte 1 — Overview del lifecycle y stand-up
 
 La V1 mezcla los modos a lo largo del runbook. En la V2 son explicitos.
 Cada uno responde a una pregunta concreta:
@@ -2042,11 +133,11 @@ Diagrama de transiciones:
 > rebuild es seguro y reversible; destroy NO lo es (perdes state, models
 > en Registry, RDS snapshots si no los exportaste).
 
-## 1.1 STAND-UP — primera vez, de cero a produccion
+### 1.1 STAND-UP — primera vez, de cero a produccion
 
 Cuando lo uso: la primera vez que despliego, o tras un **DESTROY**.
 
-### Camino completo
+#### Camino completo
 
 ```
 Capítulo 3 (prereqs validados)
@@ -2089,7 +180,7 @@ OPERATING (~$74/mes)
 prereqs (0.3) estan OK y la imagen Docker del trainer ya esta probada
 local (0.3.5).
 
-### Lo que NO se hace en stand-up
+#### Lo que NO se hace en stand-up
 
 - Hardening (TLS, WAF, Multi-AZ, KMS-CMK, VPC endpoints, DR cross-region):
   hardening, día 90+ (fuera del alcance de esta guía).
@@ -2097,7 +188,7 @@ local (0.3.5).
 - Promotion gate: la primera vez podes saltarte la Parte 7; los primeros
   models entran a `Staging` y los promotes a mano via `mlflow ui`.
 
-## 1.2 Otros modos (TEAR-DOWN / REBUILD / DESTROY)
+### 1.2 Otros modos (TEAR-DOWN / REBUILD / DESTROY)
 
 Estos modos son operaciones del runbook (ya tenes el sistema construido),
 no del stand-up inicial. En tu primera lectura no los necesitas — saltalos
@@ -2119,9 +210,9 @@ esta en #9.3.
 
 ---
 
-# Parte 2 — Bootstrap irreversible
+## Parte 2 — Bootstrap irreversible
 
-## 2.1 Por que el bootstrap es a mano
+### 2.1 Por que el bootstrap es a mano
 
 Terraform necesita un backend remoto (S3 con locking) para que el
 state este compartido y safe contra concurrent applies. Pero el backend
@@ -2151,7 +242,7 @@ Lo mismo aplica al **OIDC provider** de GitHub: si lo creas con
 Terraform y haces destroy, el proximo GH Actions falla. Por eso se
 bootstrap-ea aparte en 2.5.
 
-## 2.2 Script de bootstrap (bash)
+### 2.2 Script de bootstrap (bash)
 
 Crear el archivo `infra/bootstrap.sh` con el contenido completo de
 abajo. Si ya existe (este repo lo tiene), comparar con `diff` antes de
@@ -2229,7 +320,7 @@ echo "    bucket=$TFSTATE_BUCKET  region=$REGION  (lock: nativo S3 via use_lockf
 
 > **Gotcha #2.2**: `bash -n infra/bootstrap.sh` valida sintaxis sin tocar AWS (atrapa heredocs rotos `<<EOF` sin cierre o `$` sin escapar). Commit: `chore(infra): bootstrap script para S3 tfstate (lock nativo)`.
 
-## 2.3 Ejecutar UNA vez
+### 2.3 Ejecutar UNA vez
 
 > [!IMPORTANT]
 > Este bootstrap **se corre exactamente una vez por cuenta + región**. Crea
@@ -2273,7 +364,7 @@ fallan (estan filtrados con `2>/dev/null`).
 
 > **Gotcha #2.3**: si ya corriste bootstrap antes y el bucket tfstate existe con nombre distinto (account-id o region distinta), el script es idempotente PERO no detecta drift de nombre — vas a terminar con **dos buckets tfstate**. Revisar con `aws s3 ls | grep tfstate` antes de re-correr.
 
-## 2.4 Verificacion post-bootstrap (3 checks)
+### 2.4 Verificacion post-bootstrap (3 checks)
 
 Despues de que el script termine, valida que TODO quedo bien:
 
@@ -2312,7 +403,7 @@ es otra).
 > aborta abruptamente puede quedar huerfano — se libera con
 > `task infra:force-unlock LOCK_ID=<id>`.
 
-## 2.5 OIDC provider para GitHub Actions (pre-Terraform)
+### 2.5 OIDC provider para GitHub Actions (pre-Terraform)
 
 Mismo motivo que 2.1: el OIDC provider tiene que existir antes de que
 Terraform pueda crear los IAM roles que confian en el. Lo creamos a mano.
@@ -2327,7 +418,7 @@ Terraform pueda crear los IAM roles que confian en el. Lo creamos a mano.
 >
 > **Por que es shared a nivel cuenta**: AWS solo permite UN OIDC provider por URL en toda la cuenta. Si ya lo creaste para otro repo (ej: `mi-otra-app`), reusalo — no recrees ni borres. Lo que **distingue** que repo puede asumir que rol es el `sub:` claim del trust policy (definido en Parte 3.11.2), no el provider en si.
 
-### Script `infra/bootstrap-oidc.sh`
+#### Script `infra/bootstrap-oidc.sh`
 
 Crear el archivo `infra/bootstrap-oidc.sh` con el contenido siguiente
 (si ya existe, comparar con `diff` antes de sobreescribir):
@@ -2351,14 +442,14 @@ else
 fi
 ```
 
-### Ejecutar UNA vez
+#### Ejecutar UNA vez
 
 ```bash
 chmod +x infra/bootstrap-oidc.sh
 bash infra/bootstrap-oidc.sh
 ```
 
-### Verificacion
+#### Verificacion
 
 ```bash
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
@@ -2376,7 +467,7 @@ aws iam get-open-id-connect-provider \
 
 > **Gotcha #2.5**: el thumbprint hardcoded cambia raramente, pero si AWS lo rota antes del bootstrap el `create-open-id-connect-provider` falla con `InvalidInput`. Comparar contra el thumbprint publicado por AWS en su doc oficial OIDC + GHA.
 
-## 2.6 Snapshot del estado bootstrapped (commit + tag)
+### 2.6 Snapshot del estado bootstrapped (commit + tag)
 
 El bootstrap es irreversible y no esta versionado en Terraform. Marcalo
 con un commit + tag para tener un punto de retorno claro:
@@ -2396,7 +487,7 @@ bootstrap no se vuelven a tocar salvo que destruyas la cuenta entera
 
 ---
 
-# Parte 3 — Modulos Terraform
+## Parte 3 — Modulos Terraform
 
 > **Filosofia de la Parte 3**: cada modulo es una caja con interface
 > publica (variables.tf + outputs.tf). El `envs/prod/main.tf` solo
@@ -2408,7 +499,7 @@ bootstrap no se vuelven a tocar salvo que destruyas la cuenta entera
 > - Hacer reviews de PR donde el diff de un cambio chico es chico
 >   (no 200 lineas mezcladas).
 
-## 3.1 Layout — el arbol de archivos
+### 3.1 Layout — el arbol de archivos
 
 Al final de la Parte 3 tu repo tiene este arbol (los `.sh` del bootstrap
 ya estan desde la Parte 2):
@@ -2503,9 +594,9 @@ find infra/ docker/reports -type d
 > gotchas específicos por módulo (cuando los hay) están al pie de la
 > subsección correspondiente.
 
-## 3.2 `envs/prod/` — la composicion
+### 3.2 `envs/prod/` — la composicion
 
-### 3.2.1 `infra/envs/prod/versions.tf`
+#### 3.2.1 `infra/envs/prod/versions.tf`
 
 Locks de versiones — toda la guia esta probada con estas versiones. Si
 las cambias, vas a tener que ajustar sintaxis (p.ej. `for_each` map en
@@ -2544,7 +635,7 @@ provider "aws" {
 }
 ```
 
-### 3.2.2 `infra/envs/prod/backend.tf`
+#### 3.2.2 `infra/envs/prod/backend.tf`
 
 ```hcl
 terraform {
@@ -2578,7 +669,7 @@ terraform init \
 > en el mismo bucket — un PUT con header `If-None-Match: *` (preconditions
 > nativas de S3) que falla si otro apply ya tiene el lock. Sin DynamoDB.
 
-### 3.2.3 `infra/envs/prod/variables.tf`
+#### 3.2.3 `infra/envs/prod/variables.tf`
 
 ```hcl
 variable "project" {
@@ -2782,7 +873,7 @@ variable "ui_memory" {
 }
 ```
 
-### 3.2.4 `infra/envs/prod/terraform.tfvars` (NO COMMITEAR)
+#### 3.2.4 `infra/envs/prod/terraform.tfvars` (NO COMMITEAR)
 
 ```hcl
 alert_email = "abantodca@gmail.com"
@@ -2825,7 +916,7 @@ infra/modules/scheduler/*.zip
 EOF
 ```
 
-### 3.2.5 `infra/envs/prod/main.tf` (esqueleto — crece incrementalmente)
+#### 3.2.5 `infra/envs/prod/main.tf` (esqueleto — crece incrementalmente)
 
 > **Como leer esta seccion**: a diferencia de los `variables.tf` /
 > `outputs.tf` que se pegan completos, este `main.tf` se **construye
@@ -2895,7 +986,7 @@ data "aws_iam_openid_connect_provider" "github" {
 > (recrearlo cuesta rotar `vars.AWS_GHA_DEPLOY_ROLE_ARN` y arreglar
 > branch protection — friccion innecesaria).
 
-### 3.2.6 `infra/envs/prod/outputs.tf`
+#### 3.2.6 `infra/envs/prod/outputs.tf`
 
 ```hcl
 output "alb_dns" {
@@ -2990,7 +1081,7 @@ output "consumer_role_arn" {
 
 > **Gotcha #3.2**: `terraform.tfvars` debe existir con valores reales y NO commitearse (`.gitignore` debe contener `**/terraform.tfvars`). Sin el archivo `validate` aún pasa, pero `plan` falla con "No value for required variable".
 
-## 3.3 `modules/network/` — VPC + subnets + NAT + SGs
+### 3.3 `modules/network/` — VPC + subnets + NAT + SGs
 
 Single-AZ a proposito (Sec 0.2 lockeada). El SG matrix es:
 
@@ -3002,14 +1093,14 @@ Single-AZ a proposito (Sec 0.2 lockeada). El SG matrix es:
   conectar a RDS para registrar runs via MLflow Python client)
 - `sg_batch`: egress 443 a internet (S3, ECR, MLflow ALB)
 
-### 3.3.1 `modules/network/variables.tf`
+#### 3.3.1 `modules/network/variables.tf`
 
 ```hcl
 variable "project" { type = string }
 variable "vpc_cidr" { type = string }
 ```
 
-### 3.3.2 `modules/network/main.tf`
+#### 3.3.2 `modules/network/main.tf`
 
 Pegar los bloques siguientes **uno a continuacion del otro** en el
 mismo archivo `modules/network/main.tf`. La separacion en sub-bloques
@@ -3017,7 +1108,7 @@ con `### 3.3.2.X` es solo para que puedas leer el "por que" de cada
 pieza sin perderte; el archivo final es la concatenacion de los 5
 bloques.
 
-#### 3.3.2.a — Discovery de AZs + VPC
+##### 3.3.2.a — Discovery de AZs + VPC
 
 Necesitamos saber que AZs tiene esta region disponibles (sin
 hardcodear `us-east-1a/b`, asi la guia funciona en cualquier region).
@@ -3048,7 +1139,7 @@ resource "aws_vpc" "main" {
 }
 ```
 
-#### 3.3.2.b — Subnets (public + private, x2 AZs)
+##### 3.3.2.b — Subnets (public + private, x2 AZs)
 
 2 public (ALB y NAT) + 2 private (Fargate, Batch, RDS). El offset `+10`
 en cidrsubnet evita que los rangos public y private se toquen — facilita
@@ -3085,7 +1176,7 @@ resource "aws_subnet" "private" {
 }
 ```
 
-#### 3.3.2.c — Internet Gateway + NAT (single, en public[0])
+##### 3.3.2.c — Internet Gateway + NAT (single, en public[0])
 
 IGW para que las public subnets salgan a Internet. NAT (single, no HA)
 para que las private salgan SIN ser alcanzables. NAT es **single porque
@@ -3126,7 +1217,7 @@ resource "aws_nat_gateway" "main" {
 }
 ```
 
-#### 3.3.2.d — Route tables
+##### 3.3.2.d — Route tables
 
 Public RT: 0.0.0.0/0 → IGW. Private RT: 0.0.0.0/0 → NAT. La
 asociacion x2 vincula las subnets a su RT correspondiente.
@@ -3177,7 +1268,7 @@ resource "aws_route_table_association" "private" {
 }
 ```
 
-#### 3.3.2.e — Security Groups (6: alb, mlflow, batch, rds, api, ui)
+##### 3.3.2.e — Security Groups (6: alb, mlflow, batch, rds, api, ui)
 
 6 SGs en cascada (alb es la unica que acepta 0.0.0.0/0; las otras
 solo aceptan trafico desde la anterior, formando una cadena de
@@ -3360,7 +1451,7 @@ resource "aws_security_group" "ui" {
 > error de parse, falta pegar un `}` o uniste dos resources sin
 > separador.
 
-### 3.3.3 `modules/network/outputs.tf`
+#### 3.3.3 `modules/network/outputs.tf`
 
 ```hcl
 output "vpc_id" { value = aws_vpc.main.id }
@@ -3390,7 +1481,7 @@ output "sg_ui_id" { value = aws_security_group.ui.id }
 >   `sg-api` (ingress 8000 desde sg-alb + sg-ui), `sg-ui` (ingress
 >   8501 desde sg-alb).
 
-### 3.3.4 Apendear `module "network"` en `infra/envs/prod/main.tf`
+#### 3.3.4 Apendear `module "network"` en `infra/envs/prod/main.tf`
 
 Ahora que el modulo `network` esta definido (#3.3.2) y expone sus
 outputs (#3.3.3), lo **cableamos desde el env `prod`**. Pegar AL
@@ -3416,15 +1507,15 @@ module "network" {
 
 ---
 
-## 3.4 `modules/storage/` — S3 buckets + ECR repos
+### 3.4 `modules/storage/` — S3 buckets + ECR repos
 
-### 3.4.1 `modules/storage/variables.tf`
+#### 3.4.1 `modules/storage/variables.tf`
 
 ```hcl
 variable "project" { type = string }
 ```
 
-### 3.4.2 `modules/storage/main.tf`
+#### 3.4.2 `modules/storage/main.tf`
 
 Pegar los bloques siguientes **uno a continuacion del otro** en el
 mismo archivo `modules/storage/main.tf`. La separacion en sub-bloques
@@ -3432,7 +1523,7 @@ con `### 3.4.2.X` es solo para que puedas leer el "por que" de cada
 pieza sin perderte; el archivo final es la concatenacion de los 5
 bloques.
 
-#### 3.4.2.a — Header: account suffix discovery
+##### 3.4.2.a — Header: account suffix discovery
 
 Calcula el sufijo de 7 chars que comparten todos los buckets (data,
 artifacts) y el bucket de tfstate creado a mano por `bootstrap.sh`.
@@ -3462,7 +1553,7 @@ locals {
 }
 ```
 
-#### 3.4.2.b — S3 bucket `data` (input Excels) + hardening
+##### 3.4.2.b — S3 bucket `data` (input Excels) + hardening
 
 El bucket donde subis el Excel acumulado (`BD_HISTORICO_ACUMULADO.xlsx`)
 antes de cada training. Los 3 sub-recursos (versioning, encryption,
@@ -3507,7 +1598,7 @@ resource "aws_s3_bucket_public_access_block" "data" {
 }
 ```
 
-#### 3.4.2.c — S3 bucket `artifacts` (modelos + reportes + MLflow store) + lifecycle
+##### 3.4.2.c — S3 bucket `artifacts` (modelos + reportes + MLflow store) + lifecycle
 
 Almacen central de outputs: modelos `.joblib`, JSONs de metricas,
 dashboards HTML, y el "artifact store" de MLflow (cuando
@@ -3572,7 +1663,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 }
 ```
 
-#### 3.4.2.d — ECR `trainer` + lifecycle policy
+##### 3.4.2.d — ECR `trainer` + lifecycle policy
 
 El "Docker Hub privado" donde vive la imagen del trainer
 (`ml-training:v0.1.0`, `:sha-abc123`, `:latest`). El job de Batch hace
@@ -3632,7 +1723,7 @@ resource "aws_ecr_lifecycle_policy" "trainer" {
 }
 ```
 
-#### 3.4.2.e — ECR `mlflow` (IMMUTABLE) + `reports` + `api` + `ui` (MUTABLE)
+##### 3.4.2.e — ECR `mlflow` (IMMUTABLE) + `reports` + `api` + `ui` (MUTABLE)
 
 Cuatro repos mas. `mlflow` va con politica **opuesta** de tag immutability
 (deliberado: el binario oficial nunca debe sobrescribirse); `reports`, `api`
@@ -3731,7 +1822,7 @@ resource "aws_ecr_lifecycle_policy" "ui" {
 > error de parse, falta pegar un `}` o uniste dos resources sin
 > separador.
 
-### 3.4.3 `modules/storage/outputs.tf`
+#### 3.4.3 `modules/storage/outputs.tf`
 
 ```hcl
 output "data_bucket" { value = aws_s3_bucket.data.bucket }
@@ -3759,7 +1850,7 @@ output "ecr_ui_url" { value = aws_ecr_repository.ui.repository_url }
 >   last 10 tags + borrar untagged >7 dias); solo `ml-training-mlflow`
 >   es IMMUTABLE.
 
-### 3.4.4 Apendear `module "storage"` en `infra/envs/prod/main.tf`
+#### 3.4.4 Apendear `module "storage"` en `infra/envs/prod/main.tf`
 
 Mismo patron: pegar AL FINAL de `infra/envs/prod/main.tf`
 (despues del bloque `module "network"` de #3.3.4):
@@ -3784,7 +1875,7 @@ module "storage" {
 
 ---
 
-## 3.4.5 `modules/_shared/` — Trust policies compartidos
+### 3.4.5 `modules/_shared/` — Trust policies compartidos
 
 Documentos de assume-role JSON que varios modulos repetian. Cada modulo los
 carga con `file()` o `templatefile()` en vez de redeclarar el mismo `data
@@ -3831,7 +1922,7 @@ locals {
 Si en el futuro necesitas un trust nuevo (ej. RDS, EventBridge), agregalo aqui
 en vez de inlinearlo en el modulo.
 
-### 3.4.5.1 Contenido de los archivos
+#### 3.4.5.1 Contenido de los archivos
 
 `modules/_shared/assume-ecs-tasks.json`:
 
@@ -3931,7 +2022,7 @@ en vez de inlinearlo en el modulo.
 
 ---
 
-## 3.5 `modules/mlflow/` — RDS + ECS Fargate + ALB
+### 3.5 `modules/mlflow/` — RDS + ECS Fargate + ALB
 
 Este modulo es el mas pesado: arma el backend de tracking (RDS Postgres),
 el server MLflow en Fargate y el ALB que expone todo. Aca lockean dos
@@ -3947,7 +2038,7 @@ contratos criticos del codigo del trainer:
   (igual que en docker-compose local, para que el trainer no tenga que
   cambiar la connection string entre local y prod).
 
-### 3.5.0 Decisiones de arquitectura (rationale para experto)
+#### 3.5.0 Decisiones de arquitectura (rationale para experto)
 
 Tres elecciones marcan el caracter de este modulo y vale la pena
 justificarlas antes de leer el HCL:
@@ -3991,7 +2082,7 @@ configurada, pasar a `internal = true` + Route53 record privado es
 una operacion de 30 min (hardening, futuro). La promesa de
 "ALB interno-only" se cumple **entonces**, no antes.
 
-### 3.5.1 `modules/mlflow/variables.tf`
+#### 3.5.1 `modules/mlflow/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -4012,7 +2103,7 @@ variable "artifacts_bucket_arn" { type = string }
 variable "log_retention_days" { type = number }
 ```
 
-### 3.5.2 `modules/mlflow/` (split en 5 archivos)
+#### 3.5.2 `modules/mlflow/` (split en 5 archivos)
 
 Este modulo es el mas grande de la guia (~270 lineas). En el **repo
 real** esta **split en 5 archivos** (consistente con #3.1):
@@ -4029,7 +2120,7 @@ correspondiente** (cada bloque trae como primera linea un comentario
 preferis un archivo unico, podes concatenar todos en `main.tf` y
 borrar los otros — Terraform los procesa igual.
 
-#### 3.5.2.a — `rds.tf` — RDS Postgres (subnet group + instance)
+##### 3.5.2.a — `rds.tf` — RDS Postgres (subnet group + instance)
 
 > ⚠️ **La credencial master NO va en este modulo.** Antes de pegar `rds.tf`,
 > crear `infra/envs/prod/rds_secret.tf` (raiz, fuera de `modules/`):
@@ -4177,7 +2268,7 @@ resource "aws_db_instance" "mlflow" {
 }
 ```
 
-#### 3.5.2.b — `alb.tf` — ALB (load balancer + target group + listener)
+##### 3.5.2.b — `alb.tf` — ALB (load balancer + target group + listener)
 
 > 📂 **Pegar este bloque en**: `infra/modules/mlflow/alb.tf`
 
@@ -4245,7 +2336,7 @@ resource "aws_lb_listener" "http" {
 }
 ```
 
-#### 3.5.2.c — `ecs.tf` (parte 1/2) — ECS cluster + Service Discovery
+##### 3.5.2.c — `ecs.tf` (parte 1/2) — ECS cluster + Service Discovery
 
 > 📂 **Pegar este bloque en**: `infra/modules/mlflow/ecs.tf`
 > (es la **primera mitad** del archivo; la segunda mitad —log group +
@@ -4304,7 +2395,7 @@ resource "aws_service_discovery_service" "mlflow" {
 }
 ```
 
-#### 3.5.2.d — `iam.tf` — IAM (execution role + task role)
+##### 3.5.2.d — `iam.tf` — IAM (execution role + task role)
 
 > 📂 **Pegar este bloque en**: `infra/modules/mlflow/iam.tf`
 
@@ -4382,7 +2473,7 @@ resource "aws_iam_role_policy" "mlflow_task_s3" {
 > `infra/modules/_shared/`; cada módulo hace `file("${path.module}/../_shared/<archivo>.json")`.
 > Antes se redeclaraban copy-paste en mlflow/reports/batch — ahora una sola fuente, sin drift.
 
-#### 3.5.2.e — `ecs.tf` (parte 2/2) — Log group + Task Definition + Service
+##### 3.5.2.e — `ecs.tf` (parte 2/2) — Log group + Task Definition + Service
 
 > 📂 **Pegar este bloque en**: `infra/modules/mlflow/ecs.tf`
 > **a continuacion** de #3.5.2.c (mismo archivo, debajo de los
@@ -4523,7 +2614,7 @@ resource "aws_ecs_service" "mlflow" {
 > -backend=false && terraform -chdir=infra/modules/mlflow validate`
 > debe terminar con `Success! The configuration is valid.`
 
-### 3.5.3 `modules/mlflow/outputs.tf`
+#### 3.5.3 `modules/mlflow/outputs.tf`
 
 ```hcl
 output "tracking_uri" { value = "http://${aws_lb.main.dns_name}" }
@@ -4568,7 +2659,7 @@ output "rds_address" {
 > - Secrets Manager → `ml-training-rds-password` (con KMS aws/secretsmanager).
 > - CloudWatch → Log groups → `/ecs/ml-training/mlflow` (logs Fargate).
 
-### 3.5.4 Apendear `module "mlflow"` en `infra/envs/prod/main.tf`
+#### 3.5.4 Apendear `module "mlflow"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "storage"` de #3.4.4):
@@ -4606,7 +2697,7 @@ module "mlflow" {
 
 ---
 
-## 3.6 `modules/reports/` — Fargate nginx sirviendo S3
+### 3.6 `modules/reports/` — Fargate nginx sirviendo S3
 
 Sirve `s3://artifacts/{reports,artifacts}/` como sitio estatico bajo
 `http://<ALB>/reports/*` y `http://<ALB>/artifacts/*`. Usa el mismo ALB
@@ -4616,7 +2707,7 @@ Mecanismo: container = nginx + sidecar de `aws s3 sync` que copia el
 bucket a `/usr/share/nginx/html/` cada 60s. Costo: $0.50/mes Fargate +
 trafico S3 GET despreciable.
 
-### 3.6.1 `modules/reports/variables.tf`
+#### 3.6.1 `modules/reports/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -4636,7 +2727,7 @@ variable "log_retention_days" { type = number }
 > `sg_alb_id` directo haría que aceptara :80 desde `0.0.0.0/0` (la regla de
 > `sg_alb`) — peligroso y no coincide con lo que el ALB realmente envía.
 
-### 3.6.2 `modules/reports/main.tf`
+#### 3.6.2 `modules/reports/main.tf`
 
 > **Equivalente en AWS Console — vista general del modulo reports**:
 >
@@ -4778,7 +2869,7 @@ resource "aws_ecs_service" "reports" {
 }
 ```
 
-### 3.6.3 `modules/reports/outputs.tf`
+#### 3.6.3 `modules/reports/outputs.tf`
 
 ```hcl
 output "service_name" { value = aws_ecs_service.reports.name }
@@ -4796,7 +2887,7 @@ output "service_name" { value = aws_ecs_service.reports.name }
 >   custom de ECR `ml-training-reports`.
 > - CloudWatch → Log groups → `/ecs/ml-training/reports`.
 
-### 3.6.4 `docker/reports/Dockerfile`
+#### 3.6.4 `docker/reports/Dockerfile`
 
 Imagen custom: nginx + `aws s3 sync` cada 60s en background.
 
@@ -4838,7 +2929,7 @@ EXPOSE 80
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
 ```
 
-### 3.6.5 `docker/reports/nginx.conf`
+#### 3.6.5 `docker/reports/nginx.conf`
 
 ```nginx
 server {
@@ -4864,7 +2955,7 @@ server {
 }
 ```
 
-### 3.6.6 `docker/reports/entrypoint.sh`
+#### 3.6.6 `docker/reports/entrypoint.sh`
 
 ```bash
 #!/bin/bash
@@ -4892,7 +2983,7 @@ aws s3 sync "s3://${S3_BUCKET}/artifacts/" /usr/share/nginx/html/artifacts/ --no
 exec nginx -g 'daemon off;'
 ```
 
-### 3.6.7 Apendear `module "reports"` en `infra/envs/prod/main.tf`
+#### 3.6.7 Apendear `module "reports"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "mlflow"` de #3.5.4):
@@ -4926,14 +3017,14 @@ module "reports" {
 
 ---
 
-## 3.7 `modules/batch/` — Compute envs + queues + job-def + IAM
+### 3.7 `modules/batch/` — Compute envs + queues + job-def + IAM
 
 Pieza critica donde se respeta el contrato del trainer: el container
 recibe via CMD `--varieties X --tuning Y` (matchea
 `src/orchestration/cli.py:parse_args`) y las env vars S3 que
 `main.py:_hydrate_data_from_s3` lee.
 
-### 3.7.1 `modules/batch/variables.tf`
+#### 3.7.1 `modules/batch/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -4963,7 +3054,7 @@ variable "job_attempt_seconds" {
 variable "log_retention_days" { type = number }
 ```
 
-### 3.7.2 `modules/batch/iam.tf`
+#### 3.7.2 `modules/batch/iam.tf`
 
 > 📂 **Pegar este bloque en**: `infra/modules/batch/iam.tf`
 > (el `main.tf` del mismo modulo lo cubrimos en #3.7.3 a continuacion).
@@ -5073,13 +3164,13 @@ resource "aws_iam_role_policy_attachment" "batch_service" {
 }
 ```
 
-### 3.7.3 `modules/batch/main.tf`
+#### 3.7.3 `modules/batch/main.tf`
 
 > 📂 **Pegar los 4 sub-bloques (a/b/c/d) en**: `infra/modules/batch/main.tf`
 > (concatenados, en orden — cada sub-bloque trae el comentario
 > `# infra/modules/batch/main.tf (parte N/4)` como recordatorio).
 
-#### 3.7.3.a — Log group (parte 1/4 de `main.tf`)
+##### 3.7.3.a — Log group (parte 1/4 de `main.tf`)
 
 Logs de TODOS los Batch jobs en un solo group. Retencion configurable
 desde `envs/prod/terraform.tfvars` (default 14 dias).
@@ -5094,7 +3185,7 @@ resource "aws_cloudwatch_log_group" "batch" {
 }
 ```
 
-#### 3.7.3.b — Compute Environments (Spot + OnDemand) (parte 2/4 de `main.tf`)
+##### 3.7.3.b — Compute Environments (Spot + OnDemand) (parte 2/4 de `main.tf`)
 
 2 CEs: Spot (default, ~70% mas barato, puede interrumpir) y OnDemand
 (reservado para `prod_xl` que tarda 5-6h y no tolera Spot kills).
@@ -5172,7 +3263,7 @@ resource "aws_batch_compute_environment" "ondemand" {
 }
 ```
 
-#### 3.7.3.c — Job queues (1 por CE) (parte 3/4 de `main.tf`)
+##### 3.7.3.c — Job queues (1 por CE) (parte 3/4 de `main.tf`)
 
 Una queue por CE. El Lambda dispatcher (#3.9.5) elige queue por
 `tuning`: `prod_xl → ondemand`, resto → spot. Priority=1 en ambas
@@ -5214,7 +3305,7 @@ resource "aws_batch_job_queue" "ondemand" {
 }
 ```
 
-#### 3.7.3.d — Job definition (contrato con el trainer) (parte 4/4 de `main.tf`)
+##### 3.7.3.d — Job definition (contrato con el trainer) (parte 4/4 de `main.tf`)
 
 El campo `command = ["--varieties","POP","--tuning","smoke"]` es default
 — el dispatcher (#3.9.5) lo sobreescribe por job. `retry_strategy`
@@ -5297,7 +3388,7 @@ resource "aws_batch_job_definition" "trainer" {
 > infra/modules/batch/` (sobre el **directorio** — formatea `iam.tf` +
 > `main.tf` + `outputs.tf` + `variables.tf`).
 
-### 3.7.4 `modules/batch/outputs.tf`
+#### 3.7.4 `modules/batch/outputs.tf`
 
 ```hcl
 output "job_queue_spot" { value = aws_batch_job_queue.spot.name }
@@ -5326,7 +3417,7 @@ output "log_group_name" { value = aws_cloudwatch_log_group.batch.name }
 > - CloudWatch → Log groups → `/aws/batch/ml-training` con
 >   `retention=14 days`.
 
-### 3.7.5 Apendear `module "batch"` en `infra/envs/prod/main.tf`
+#### 3.7.5 Apendear `module "batch"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "reports"` de #3.6.7):
@@ -5365,12 +3456,12 @@ module "batch" {
 
 ---
 
-## 3.8 `modules/monitoring/` — SNS + alarmas
+### 3.8 `modules/monitoring/` — SNS + alarmas
 
 Genera **una alarma MAPE por variedad** (no hardcoded a POP como en V1).
 La alarma escucha la custom metric que el trainer va a emitir en Parte 5.
 
-### 3.8.1 `modules/monitoring/variables.tf`
+#### 3.8.1 `modules/monitoring/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -5388,7 +3479,7 @@ variable "mape_alarm_threshold" { type = number }
 > en la dimensión `LoadBalancer`, no el ARN completo. `aws_lb` expone `arn_suffix`
 > nativo; extraerlo con `split()` del ARN sería frágil ante cambios de formato.
 
-### 3.8.2 `modules/monitoring/main.tf`
+#### 3.8.2 `modules/monitoring/main.tf`
 
 > **Equivalente en AWS Console — el patron SNS + CloudWatch Alarms**:
 >
@@ -5479,7 +3570,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
 }
 ```
 
-### 3.8.3 `modules/monitoring/outputs.tf`
+#### 3.8.3 `modules/monitoring/outputs.tf`
 
 ```hcl
 output "sns_topic_arn" { value = aws_sns_topic.alerts.arn }
@@ -5502,7 +3593,7 @@ output "sns_topic_arn" { value = aws_sns_topic.alerts.arn }
 > - Cada alarma con `AlarmActions=[<topic-arn>]`. La de Batch tambien
 >   tiene `OKActions` para mandar mail al recuperar.
 
-### 3.8.4 Apendear `module "monitoring"` en `infra/envs/prod/main.tf`
+#### 3.8.4 Apendear `module "monitoring"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "batch"` de #3.7.5):
@@ -5532,7 +3623,7 @@ module "monitoring" {
 
 ---
 
-## 3.9 `modules/lambdas/` — dispatcher + notifier
+### 3.9 `modules/lambdas/` — dispatcher + notifier
 
 Dos Lambdas:
 
@@ -5557,7 +3648,7 @@ Dos Lambdas:
 > arquitectura primero (variables -> resources -> outputs); el orden
 > de creacion de archivos es al reves.
 
-### 3.9.1 `modules/lambdas/variables.tf`
+#### 3.9.1 `modules/lambdas/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -5578,7 +3669,7 @@ variable "log_retention_days" { type = number }
 variable "lambdas_src_dir" { type = string }
 ```
 
-### 3.9.2 `modules/lambdas/dispatcher.tf`
+#### 3.9.2 `modules/lambdas/dispatcher.tf`
 
 > 📂 **Pegar este bloque en**: `infra/modules/lambdas/dispatcher.tf`
 > (el modulo `lambdas/` esta split en 3 archivos: `dispatcher.tf`
@@ -5680,7 +3771,7 @@ resource "aws_lambda_function" "dispatcher" {
 }
 ```
 
-### 3.9.3 `modules/lambdas/notifier.tf`
+#### 3.9.3 `modules/lambdas/notifier.tf`
 
 > 📂 **Pegar este bloque en**: `infra/modules/lambdas/notifier.tf`
 > (archivo distinto al `dispatcher.tf` de #3.9.2; ambos coexisten en
@@ -5792,13 +3883,13 @@ resource "aws_lambda_permission" "notifier_eventbridge" {
 }
 ```
 
-### 3.9.4 `modules/lambdas/outputs.tf`
+#### 3.9.4 `modules/lambdas/outputs.tf`
 
 ```hcl
 output "dispatcher_function_name" { value = aws_lambda_function.dispatcher.function_name }
 ```
 
-### 3.9.5 `infra/lambdas/dispatcher.py`
+#### 3.9.5 `infra/lambdas/dispatcher.py`
 
 ```python
 """Lambda dispatcher: submit jobs a AWS Batch.
@@ -5926,7 +4017,7 @@ def handler(event, _context):
     }
 ```
 
-### 3.9.6 `infra/lambdas/notifier.py`
+#### 3.9.6 `infra/lambdas/notifier.py`
 
 ```python
 """Lambda notifier: traduce un evento de Batch FAILED a un email SNS legible."""
@@ -6001,7 +4092,7 @@ def handler(event, _context):
     return {"statusCode": 200, "body": "notified"}
 ```
 
-### 3.9.7 Apendear `module "lambdas"` en `infra/envs/prod/main.tf`
+#### 3.9.7 Apendear `module "lambdas"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "monitoring"` de #3.8.4):
@@ -6037,7 +4128,7 @@ module "lambdas" {
 
 ---
 
-## 3.10 `modules/scheduler/` — auto on/off RDS + Fargate
+### 3.10 `modules/scheduler/` — auto on/off RDS + Fargate
 
 Una Lambda + 2 crons EventBridge. La Lambda hace `start`/`stop` segun
 el payload. Antes de stop, chequea Batch jobs RUNNING — si hay, posterga
@@ -6049,7 +4140,7 @@ el payload. Antes de stop, chequea Batch jobs RUNNING — si hay, posterga
 > y **despues** #3.10.1-#3.10.3 (los `.tf`). Asi `task infra:validate` /
 > el primer apply en Parte 4 no truena por archivo inexistente.
 
-### 3.10.1 `modules/scheduler/variables.tf`
+#### 3.10.1 `modules/scheduler/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -6079,11 +4170,11 @@ variable "log_retention_days" { type = number }
 variable "lambdas_src_dir" { type = string }
 ```
 
-### 3.10.2 `modules/scheduler/main.tf`
+#### 3.10.2 `modules/scheduler/main.tf`
 
 3 sub-bloques al mismo `modules/scheduler/main.tf`:
 
-#### 3.10.2.a — Lambda function + IAM
+##### 3.10.2.a — Lambda function + IAM
 
 Empaqueta `infra/lambdas/scheduler.py` (que ya creaste antes — ver
 callout arriba). IAM con scope a ECS update-service, RDS start/stop,
@@ -6193,7 +4284,7 @@ resource "aws_lambda_function" "scheduler" {
 }
 ```
 
-#### 3.10.2.b — EventBridge rules (start, stop, keepstop)
+##### 3.10.2.b — EventBridge rules (start, stop, keepstop)
 
 3 crons: `start` (8 AM PET), `stop` (12 PM PET), `keepstop` (cada 6h
 defensa contra el auto-arranque de RDS post-7-dias-stopped). El offset
@@ -6258,7 +4349,7 @@ resource "aws_cloudwatch_event_target" "rds_keepstop" {
 }
 ```
 
-#### 3.10.2.c — Permissions (EventBridge → Lambda)
+##### 3.10.2.c — Permissions (EventBridge → Lambda)
 
 EventBridge no puede invocar Lambdas por defecto; cada rule necesita
 su propia `lambda_permission` con `source_arn` matching. 3 rules =
@@ -6305,14 +4396,14 @@ resource "aws_lambda_permission" "keepstop" {
 > **Checkpoint despues de 3.10.2.a-c**: `terraform fmt
 > infra/modules/scheduler/main.tf`.
 
-### 3.10.3 `modules/scheduler/outputs.tf`
+#### 3.10.3 `modules/scheduler/outputs.tf`
 
 ```hcl
 # scheduler no expone outputs: opera por side-effects (Lambda scheduler +
 # EventBridge start/stop rules). El parent (envs/prod) no consume nada de aqui.
 ```
 
-### 3.10.4 `infra/lambdas/scheduler.py`
+#### 3.10.4 `infra/lambdas/scheduler.py`
 
 > **NOTA**: este es el **archivo real de produccion** `infra/lambdas/scheduler.py`
 > (paridad 1:1 con el repo). Incluye los patches integrados:
@@ -6520,7 +4611,7 @@ def handler(event, _context):
     return {"statusCode": 200, "body": action}
 ```
 
-### 3.10.5 Apendear `module "scheduler"` en `infra/envs/prod/main.tf`
+#### 3.10.5 Apendear `module "scheduler"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "lambdas"` de #3.9.7):
@@ -6557,7 +4648,7 @@ module "scheduler" {
 
 ---
 
-## 3.11 `modules/cicd/` — OIDC trust + GHA roles
+### 3.11 `modules/cicd/` — OIDC trust + GHA roles
 
 Dos roles: `gha-deploy` (terraform apply, push ECR) y `gha-train`
 (invoke Lambda dispatcher). Trust policy especifica `repo:org/repo:*`
@@ -6581,7 +4672,7 @@ para evitar que cualquier repo pueda asumir.
 > el OIDC provider (#2.5) **como** los roles (este módulo): el `sub`
 > hardcoded del trust no se ajusta solo.
 
-### 3.11.1 `modules/cicd/variables.tf`
+#### 3.11.1 `modules/cicd/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -6590,7 +4681,7 @@ variable "github_repo" { type = string }
 variable "oidc_provider_arn" { type = string }
 ```
 
-### 3.11.2 `modules/cicd/main.tf`
+#### 3.11.2 `modules/cicd/main.tf`
 
 > **Equivalente en AWS Console — los 2 IAM Roles con trust OIDC**:
 >
@@ -6744,7 +4835,7 @@ resource "aws_iam_role_policy" "train" {
 }
 ```
 
-### 3.11.3 `modules/cicd/outputs.tf`
+#### 3.11.3 `modules/cicd/outputs.tf`
 
 ```hcl
 output "gha_deploy_role_arn" { value = aws_iam_role.deploy.arn }
@@ -6768,7 +4859,7 @@ output "gha_train_role_arn" { value = aws_iam_role.train.arn }
 
 ---
 
-### 3.11.4 Apendear `module "cicd"` en `infra/envs/prod/main.tf`
+#### 3.11.4 Apendear `module "cicd"` en `infra/envs/prod/main.tf`
 
 Ultimo bloque. Pegar AL FINAL de `infra/envs/prod/main.tf` (despues
 de `module "scheduler"` de #3.10.5):
@@ -6806,7 +4897,7 @@ module "cicd" {
 
 ---
 
-## 3.11.5 `modules/consumer-iam/` — Rol OIDC para repo consumer EXTERNO (Patch 13.5, OPCIONAL)
+### 3.11.5 `modules/consumer-iam/` — Rol OIDC para repo consumer EXTERNO (Patch 13.5, OPCIONAL)
 
 > **OPCIONAL / LEGACY**: este modulo nacio cuando la API+UI vivian en un repo
 > APARTE (`ml_serving`) que descargaba modelos read-only. **Ahora la API+UI son
@@ -6826,7 +4917,7 @@ Las vars `consumer_org` y `consumer_repo` ya estan declaradas en
 `data "aws_iam_openid_connect_provider" "github"` que usa `cicd/` (#3.11),
 asi que no hay que crear nada nuevo a nivel envs.
 
-### 3.11.5.1 `modules/consumer-iam/variables.tf`
+#### 3.11.5.1 `modules/consumer-iam/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -6836,7 +4927,7 @@ variable "consumer_org" { type = string }
 variable "consumer_repo" { type = string }
 ```
 
-### 3.11.5.2 `modules/consumer-iam/main.tf`
+#### 3.11.5.2 `modules/consumer-iam/main.tf`
 
 ```hcl
 # Patch 13.5: rol que el repo consumer (FastAPI/Streamlit) asume via OIDC
@@ -6866,13 +4957,13 @@ resource "aws_iam_role_policy" "consumer" {
 }
 ```
 
-### 3.11.5.3 `modules/consumer-iam/outputs.tf`
+#### 3.11.5.3 `modules/consumer-iam/outputs.tf`
 
 ```hcl
 output "consumer_role_arn" { value = aws_iam_role.consumer.arn }
 ```
 
-### 3.11.5.4 Apendear `module "consumer_iam"` en `infra/envs/prod/main.tf`
+#### 3.11.5.4 Apendear `module "consumer_iam"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf` (despues del `module "cicd"`
 de #3.11.4):
@@ -6910,7 +5001,7 @@ module "consumer_iam" {
 
 ---
 
-## 3.12 App stack — `modules/api` (FastAPI) + `modules/ui` (Streamlit) — Capa 4.5
+### 3.12 App stack — `modules/api` (FastAPI) + `modules/ui` (Streamlit) — Capa 4.5
 
 Esta capa levanta los **dos servicios de producto** que viven en el monorepo
 `ml_training`: la **API** (FastAPI, sirve los modelos `rnd-forest-*` y persiste
@@ -6939,7 +5030,7 @@ Fargate + target group + listener rule por path.
 >   igual que `src/` del trainer, no se re-pega aca. Esta seccion paga **solo la
 >   infra (Terraform) + los Dockerfiles** que faltaban para el deploy AWS.
 
-### 3.12.1 `modules/api/variables.tf`
+#### 3.12.1 `modules/api/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -7008,7 +5099,7 @@ variable "desired_count" {
 variable "log_retention_days" { type = number }
 ```
 
-### 3.12.2 `modules/api/main.tf`
+#### 3.12.2 `modules/api/main.tf`
 
 La API es el patron espejo de `reports` + dos extras: **service discovery**
 (para que la UI la resuelva por DNS interno) y **secret del RDS** (inyecta el
@@ -7243,7 +5334,7 @@ resource "aws_ecs_service" "api" {
 }
 ```
 
-### 3.12.3 `modules/api/outputs.tf`
+#### 3.12.3 `modules/api/outputs.tf`
 
 ```hcl
 output "service_name" {
@@ -7257,7 +5348,7 @@ output "internal_url" {
 }
 ```
 
-### 3.12.4 `api/Dockerfile` (contexto de build = RAÍZ del repo)
+#### 3.12.4 `api/Dockerfile` (contexto de build = RAÍZ del repo)
 
 La imagen de la API necesita el paquete `src/` raiz para des-picklear los
 modelos de MLflow (los transformers `LagFeatureTransformer`, `FeatureGenerator`,
@@ -7348,7 +5439,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-### 3.12.5 `modules/ui/variables.tf`
+#### 3.12.5 `modules/ui/variables.tf`
 
 ```hcl
 variable "project" { type = string }
@@ -7392,7 +5483,7 @@ variable "desired_count" {
 variable "log_retention_days" { type = number }
 ```
 
-### 3.12.6 `modules/ui/main.tf`
+#### 3.12.6 `modules/ui/main.tf`
 
 La UI es el patron mas simple del stack: Fargate + target group + una listener
 rule en `/app/*`. **No tiene task role** (no toca AWS; solo HTTP a la API por
@@ -7537,7 +5628,7 @@ resource "aws_ecs_service" "ui" {
 }
 ```
 
-### 3.12.7 `modules/ui/outputs.tf`
+#### 3.12.7 `modules/ui/outputs.tf`
 
 ```hcl
 output "service_name" {
@@ -7551,7 +5642,7 @@ output "app_path" {
 }
 ```
 
-### 3.12.8 `ui/Dockerfile` (contexto de build = `ui/`)
+#### 3.12.8 `ui/Dockerfile` (contexto de build = `ui/`)
 
 A diferencia de la API, la UI **no** necesita `src/` ni nada de la raiz: su
 contexto de build es la carpeta `ui/` (`-f ui/Dockerfile ui`). Si ya hiciste el
@@ -7630,7 +5721,7 @@ CMD ["streamlit", "run", "app/app.py", \
      "--browser.gatherUsageStats=false"]
 ```
 
-### 3.12.9 Apendear `module "api"` + `module "ui"` en `infra/envs/prod/main.tf`
+#### 3.12.9 Apendear `module "api"` + `module "ui"` en `infra/envs/prod/main.tf`
 
 Pegar AL FINAL de `infra/envs/prod/main.tf`. Logicamente es **Capa 4.5** (va
 entre reports y batch); como el orden textual no afecta a Terraform, podes
@@ -7711,7 +5802,7 @@ module "ui" {
 
 ---
 
-# Parte 4 — Apply incremental + smoke test
+## Parte 4 — Apply incremental + smoke test
 
 > **Filosofia de la Parte 4**: aplicar Terraform en 3 olas en vez de un
 > `terraform apply` monolitico. Esto te da puntos de rollback claros y
@@ -7730,7 +5821,7 @@ module "ui" {
 > MLflow con la imagen que todavia no esta pusheada → bucle de retries
 > hasta que el deployment timeout te mata.
 
-## 4.1 Setup Task (orquestador local)
+### 4.1 Setup Task (orquestador local)
 
 [Task](https://taskfile.dev) es un task runner single-binary (Go, ~10 MB)
 que orquesta Terraform + Docker + Lambda + Batch desde una sola lista
@@ -7740,7 +5831,7 @@ Cada task es **idempotente y composable**: si falla en el paso 5/10, lo
 corres de nuevo y empieza donde quedo (Terraform mismo es idempotente;
 los hash de `sources:` evitan re-buildear imagenes ya construidas).
 
-### 4.1.1 Verificar / instalar Task
+#### 4.1.1 Verificar / instalar Task
 
 ```bash
 task --version
@@ -7758,7 +5849,7 @@ export PATH="$HOME/bin:$PATH"   # agregar a ~/.bashrc para persistir
 brew install go-task
 ```
 
-### 4.1.2 Estructura final
+#### 4.1.2 Estructura final
 
 Despues de seguir sección 4.1.3 a sección 4.1.8, tu proyecto va a tener:
 
@@ -7789,7 +5880,7 @@ tasks/
   resolution y nuke viven como funciones sourceables. El YAML queda
   declarativo; la logica imperativa, testeable con `bash -n`.
 
-### 4.1.3 `tasks/infra.yml` — Terraform wrapper + bootstrap
+#### 4.1.3 `tasks/infra.yml` — Terraform wrapper + bootstrap
 
 ```yaml
 # =============================================================================
@@ -7953,7 +6044,7 @@ tasks:
 
 `_init` es `internal: true` (no aparece en `task --list`) y se dispara via `deps:` cuando hace falta. `SUFFIX` se resuelve dinamicamente con `aws sts get-caller-identity` — si cambias de cuenta AWS, el backend bucket name cambia con vos.
 
-### 4.1.4 `tasks/ecr.yml` — build + push 5 imagenes
+#### 4.1.4 `tasks/ecr.yml` — build + push 5 imagenes
 
 Cinco imagenes: `trainer` + `mlflow` + `reports` (training stack) + `api` + `ui`
 (App stack, Capa 4.5). El switch `IMG` resuelve nombre, Dockerfile, contexto y
@@ -8096,7 +6187,7 @@ tasks:
 
 Cada imagen se pushea con **dos tags**: el movil (`latest`/`v3.12.0`/`stable`) que CI/CD persigue, y `sha-<git-sha>` que da rollback determinista (`task ecr:build IMG=trainer TAG=sha-<commit-anterior>`).
 
-### 4.1.5 `tasks/batch.yml` — submit via Lambda dispatcher
+#### 4.1.5 `tasks/batch.yml` — submit via Lambda dispatcher
 
 ```yaml
 # =============================================================================
@@ -8249,7 +6340,7 @@ tasks:
 
 Una sola via de submit (el Lambda dispatcher) — valida que la variety exista en `data/training/DB-HISTORICA.xlsx` antes de encolar y maneja hydrate desde S3. El path raw con `aws batch submit-job` queda disponible si alguna vez lo necesitas.
 
-### 4.1.6 `tasks/ops.yml` — lifecycle cluster + MLflow registry (Dia 2)
+#### 4.1.6 `tasks/ops.yml` — lifecycle cluster + MLflow registry (Dia 2)
 
 ```yaml
 # =============================================================================
@@ -8500,7 +6591,7 @@ tasks:
 - `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$1/mes (storage + snapshots del RDS), sin tener que destruir toda la red.
 - `ops:promote` delega en `scripts/promote_model.py` (Python con `MlflowClient`) — 3 gates: MAPE absoluto, A/B contra Production actual, transition con `archive_existing_versions=True`.
 
-### 4.1.7 Helpers `tasks/lib/*.sh`
+#### 4.1.7 Helpers `tasks/lib/*.sh`
 
 Bash compartido extraido del YAML para que sea testeable con `bash -n` y reusable:
 
@@ -8721,7 +6812,7 @@ delete_oidc() {
 }
 ```
 
-### 4.1.8 Root `Taskfile.yml` — `includes` + atajos high-level
+#### 4.1.8 Root `Taskfile.yml` — `includes` + atajos high-level
 
 Editar la raiz para:
 
@@ -8902,7 +6993,7 @@ tasks:
       - 'echo "NUKE COMPLETO. Para volver: task infra:bootstrap + task infra:bootstrap-oidc + task deploy"'
 ```
 
-#### 4.1.8.1 Expandir el `default` (menu unico local + AWS)
+##### 4.1.8.1 Expandir el `default` (menu unico local + AWS)
 
 El `default` de Tramo I sección 4.6 lista solo el pipeline local. En Tramo II se expande con cuatro secciones AWS para que `task` (sin args) sea **el unico comando** que el usuario nuevo necesita conocer:
 
@@ -8977,13 +7068,13 @@ El `default` de Tramo I sección 4.6 lista solo el pipeline local. En Tramo II s
             http://localhost:8080/artifacts/  joblib + best_params
 
         Mas detalle:  task --list           (todas las tasks: incluye infra:*, ecr:*, batch:*, ops:*, local:*)
-                      GUIA_MLOPS_AWS_V2.md  (guia paso a paso: local + AWS)
+                      docs/02-produccion-aws.md  (guia paso a paso AWS)
         EOF
 ```
 
 > **Por qué cuatro secciones AWS y no una** — separa por ciclo de vida (bootstrap / primer stand-up / operación día-2 / destroy) para mostrar el **orden temporal**, no un listado plano. "Primer stand-up" embebe la secuencia 0→7 del mapa del camino (#4.1.10), así quien corre `task` ve qué ejecutar y en qué orden. "Teardown / Recovery / Destroy" agrupa los 4 comandos de ciclo de vida (los labels `DESTRUCTIVO` van por línea — rebuild **no** lo es).
 
-### 4.1.9 Verificacion
+#### 4.1.9 Verificacion
 
 ```bash
 # El default imprime el menu curado (local + AWS). Si los `includes:` cargan
@@ -8998,7 +7089,7 @@ task --dry nuke   | head -10   # ver que empty_bucket recibe el nombre completo
 
 > **Gotcha #4.1.9**: si `task` falla con `open ./tasks/X.yml: no such file`, falta crear el archivo del `includes:` correspondiente — comentar el include hasta crear el yml. Commit: `feat(tasks): refactor AWS namespacing — 4 archivos + lib/`.
 
-### 4.1.10 Mapa del camino: del plan a `/reports/POP/` visible
+#### 4.1.10 Mapa del camino: del plan a `/reports/POP/` visible
 
 Tenés código, infra y taskfile listos. Acá arranca la ejecución real.
 
@@ -9051,7 +7142,7 @@ flowchart TD
 
 > **Gotcha #4.1.10**: empezar #4.3 sin `source scripts/prod.env` en terminal nueva → las verificaciones `aws s3api ...` fallan con `$ACCOUNT_SUFFIX` y `$PROJECT` vacíos.
 
-## 4.2 Verificación sintáctica previa al apply
+### 4.2 Verificación sintáctica previa al apply
 
 Antes del primer `task infra:apply` (Ola A), una sola verificación: que el HCL parsea y formatea. Esto cuesta ~10 s y atrapa typos antes de un apply de varios minutos. La validación se hace **acá, no en Parte 3**, porque entre que terminás de pegar los módulos y arrancás el deploy pueden pasar días — re-validar justo antes del apply es lo único que importa.
 
@@ -9067,7 +7158,7 @@ task infra:validate
 
 ---
 
-## 4.3 Ola A — apply storage solo
+### 4.3 Ola A — apply storage solo
 
 Crea los 2 buckets S3 (con versioning + AES256 + public-access-block) + 5 repos ECR (trainer, mlflow, reports, api, ui). Tiempo: ~1 min.
 
@@ -9083,7 +7174,7 @@ task infra:apply TARGET=module.storage
 
 > **Alternativa para sandbox local sin Terraform**: si solo necesitas los 2 buckets S3 (sin ECR, sin versioning, sin Terraform state — caso tipico de Tramo I), usa `task local:ensure-buckets` (definida en sección 4.6 del Tramo I). Crea los buckets con el mismo `ACCOUNT_SUFFIX` pero **sin versioning**, asi local y prod comparten nombres sin colisionar. Para el stand-up de prod (esta seccion), seguir con `task infra:apply` — el hardening (versioning + encryption) viene en el modulo storage.
 
-### Verificacion Ola A
+#### Verificacion Ola A
 
 ```bash
 # Fuente de verdad post-apply: los outputs Terraform.
@@ -9100,7 +7191,7 @@ for kind in data artifacts; do
 done
 ```
 
-### Subir el Excel inicial al bucket de data
+#### Subir el Excel inicial al bucket de data
 
 Antes del primer training real, el bucket `data` necesita el Excel:
 
@@ -9129,7 +7220,7 @@ aws s3 ls "s3://${DATA_BUCKET}/" --human-readable
 > 1. **Drift de tfstate** (el más común): los buckets `*-data-*` / `*-artifacts-*` existen en AWS pero no en tfstate — pasa tras un `task nuke` parcial (los buckets con versiones sobreviven porque `force_destroy=false`), tras re-bootstrapear el backend, o tras borrar el state a mano. **Diagnóstico + fix**: `task ops:state-drift` lista qué buckets faltan e imprime el `terraform import` exacto. Después re-correr `task infra:apply TARGET=module.storage` (los `versioning/SSE/PAB/lifecycle` se crean encima sin tocar los objetos). `task deploy` ya corre este check como pre-step. Tiempo: ~30 s.
 > 2. **Colisión real de nombre**: el `ACCOUNT_SUFFIX` choca con otra cuenta o con un bucket recién borrado que aún retiene el nombre. Revisar #3.5 (cálculo del suffix) y re-correr `source scripts/prod.env`. Tiempo: ~2 min.
 
-## 4.4 Ola B — build + push 5 imagenes a ECR
+### 4.4 Ola B — build + push 5 imagenes a ECR
 
 Las 5 imagenes son:
 
@@ -9141,7 +7232,7 @@ Las 5 imagenes son:
 | `ml-training-api` | `./api/Dockerfile` (#3.12.4) | **raiz** (necesita `src/`) | `latest` + `sha-<git-sha>` | API FastAPI en Fargate |
 | `ml-training-ui` | `./ui/Dockerfile` (#3.12.8) | **`ui/`** | `latest` + `sha-<git-sha>` | UI Streamlit en Fargate |
 
-### 4.4.1 Como funciona
+#### 4.4.1 Como funciona
 
 La task `ecr:build-all` (definida en sección 4.1.4) encadena 5 invocaciones de
 `ecr:build` con `IMG=trainer/mlflow/reports/api/ui`. Cada una hace
@@ -9150,7 +7241,7 @@ pushea 2 tags: el solicitado (`latest`/`v3.12.0`/`stable`) y
 `sha-<git-sha-corto>` para rollback determinista. El **contexto** de build lo
 resuelve la task: `api` usa la raiz (para incluir `src/`), `ui` usa `ui/`.
 
-### 4.4.2 Overrides via variables CLI
+#### 4.4.2 Overrides via variables CLI
 
 ```bash
 # Override del tag (e.g. bump version de MLflow)
@@ -9160,7 +7251,7 @@ task ecr:build IMG=mlflow TAG=v3.13.0
 task ecr:build IMG=trainer
 ```
 
-### 4.4.3 Ejecutar
+#### 4.4.3 Ejecutar
 
 ```bash
 # Prereq: `source scripts/prod.env` (sección 3.5). La task `ecr:build-all` computa
@@ -9168,7 +7259,7 @@ task ecr:build IMG=trainer
 task ecr:build-all
 ```
 
-### Verificacion Ola B
+#### Verificacion Ola B
 
 ```bash
 # Push de imagenes NO esta en terraform outputs (Terraform no trackea estado ECR).
@@ -9193,7 +7284,7 @@ done
 
 > **Gotcha #4.4**: `docker buildx` falla en WSL con `no space left on device` → `docker system prune -a` libera capas viejas. Si `aws ecr get-login-password` da `403`, re-autenticar el perfil AWS. Tiempo: ~10 min primera vez, ~3 min con cache.
 
-## 4.5 Ola C — apply full (en 4 sub-olas con checkpoint)
+### 4.5 Ola C — apply full (en 4 sub-olas con checkpoint)
 
 Ahora todo el resto (`network`, `mlflow`, `reports`, `batch`,
 `monitoring`, `lambdas`, `scheduler`, `cicd`). Tiempo total: ~15-20
@@ -9206,7 +7297,7 @@ despues. Partiendo por capa de dependencia, cada checkpoint da
 feedback en 2-5 min y el error es localizable. Tambien permite saltar
 a la siguiente sub-ola sin re-planear las anteriores.
 
-### 4.5.1 Sub-ola C1 — `network` (red base, ~1-2 min)
+#### 4.5.1 Sub-ola C1 — `network` (red base, ~1-2 min)
 
 ```bash
 task infra:plan TARGET=module.network
@@ -9218,7 +7309,7 @@ task infra:apply TARGET=module.network
 > Security Groups → 6 (`ml-training-sg-alb`, `-sg-mlflow`, `-sg-batch`,
 > `-sg-rds`, `-sg-api`, `-sg-ui`).
 
-### 4.5.2 Sub-ola C2 — `mlflow` + `reports` + `api` + `ui` (RDS + ALB + 4 Fargate, ~12 min)
+#### 4.5.2 Sub-ola C2 — `mlflow` + `reports` + `api` + `ui` (RDS + ALB + 4 Fargate, ~12 min)
 
 ```bash
 task infra:plan TARGET=module.mlflow
@@ -9253,7 +7344,7 @@ curl -s  "http://${ALB}/api/health" | head -c 200; echo  # API -> JSON {"status"
 > Target Groups → `ml-training-tg-api` + `ml-training-tg-ui` (healthy);
 > Cloud Map → `api.ml-training.local`.
 
-### 4.5.3 Sub-ola C3 — `batch` + `lambdas` (compute + orquestacion, ~3 min)
+#### 4.5.3 Sub-ola C3 — `batch` + `lambdas` (compute + orquestacion, ~3 min)
 
 > **Nota de dependencias**: `module.lambdas` referencia `module.monitoring.sns_topic_arn` para el notifier. Al usar `terraform apply -target=module.lambdas`, Terraform arrastra `module.monitoring` automaticamente — asi que aunque el orden documentado es C3 (batch + lambdas) antes que C4 (monitoring), en la practica `monitoring` se crea durante C3 como dependencia transitiva. C4 entonces es no-op para `monitoring`.
 
@@ -9267,7 +7358,7 @@ task infra:apply TARGET=module.lambdas
 > Job definitions → `ml-training-trainer`; Lambda → Functions (2:
 > dispatcher + notifier).
 
-### 4.5.4 Sub-ola C4 — `monitoring` + `scheduler` + `cicd` (~2 min)
+#### 4.5.4 Sub-ola C4 — `monitoring` + `scheduler` + `cicd` (~2 min)
 
 ```bash
 task infra:apply TARGET=module.monitoring
@@ -9282,7 +7373,7 @@ task infra:apply TARGET=module.cicd
 > batch-failed); Lambda → `ml-training-scheduler`; IAM → Roles
 > (`gha-deploy`, `gha-train`).
 
-### 4.5.5 Apply full alternativo (cuando ya pasaste por C1-C4 una vez)
+#### 4.5.5 Apply full alternativo (cuando ya pasaste por C1-C4 una vez)
 
 Para re-applies idempotentes (despues de algun cambio menor), una vez
 validado que todo arriba existe, podes usar:
@@ -9296,7 +7387,7 @@ task infra:apply
 > en el primer stand-up — si algun modulo falla, debug es mucho mas
 > caro.
 
-### Recovery comun durante Ola C
+#### Recovery comun durante Ola C
 
 | Sintoma | Causa probable | Fix |
 |---|---|---|
@@ -9306,7 +7397,7 @@ task infra:apply
 | `permission denied: iam:CreateRole` | Tu profile AWS no tiene IAM permissions | `aws sts get-caller-identity` y revisa que sea admin/role-with-IAM |
 | State lock acquire timeout | Otro `terraform apply` corriendo / state lock huerfano | `terraform force-unlock <LOCK_ID>` (mostrado en el error) |
 
-### Verificacion Ola C
+#### Verificacion Ola C
 
 ```bash
 # Outputs cubren ALB DNS, ECR URLs, bucket names, queues.
@@ -9330,7 +7421,7 @@ en el primer recurso roto.
 > - **C3 (CI/CD)**: con `enable_cicd=false` (default) este chequeo NO aplica — el `data "aws_iam_openid_connect_provider"` tiene count=0 y el plan no lo evalua. Solo con `enable_cicd=true`: si el OIDC provider de #2.5 no existe, el `data` falla → bootstrapear OIDC antes de re-aplicar `module.cicd`.
 > - **Tiempo**: C1 ~2m + C2 ~10m (RDS domina) + C3 ~3m + C4 ~2m = ~17m total.
 
-## 4.6 Smoke test — entrenar 1 variedad end-to-end
+### 4.6 Smoke test — entrenar 1 variedad end-to-end
 
 > [!TIP]
 > Este es el **gate de aceptación del Tramo II**: si pasa, la infra AWS
@@ -9352,7 +7443,7 @@ Esto verifica:
 9. Custom metric MAPE publicada (despues de Parte 5; en este smoke
    no se valida todavia).
 
-### 4.6.1 Como funciona la task `batch:smoke`
+#### 4.6.1 Como funciona la task `batch:smoke`
 
 `batch:smoke` es un atajo a `batch:train VARIETIES=POP TUNING=smoke`. El path:
 
@@ -9363,7 +7454,7 @@ Esto verifica:
 
 Una sola via de submit (el dispatcher) — el dev local con `task batch:train` y el CI con `task batch:train` ejecutan IDENTICO el camino.
 
-### 4.6.2 Ejecutar
+#### 4.6.2 Ejecutar
 
 ```bash
 task batch:smoke
@@ -9377,7 +7468,7 @@ Breakdown:
 - Trainer ejecucion `--tuning smoke`: 2-4 min (smoke = 5 iter Optuna)
 - S3 sync + container shutdown: ~30 s
 
-### 4.6.3 Verificacion post-smoke
+#### 4.6.3 Verificacion post-smoke
 
 ```bash
 source scripts/ensure-env.sh   # aborta si $PROJECT o $ACCOUNT_SUFFIX vacias
@@ -9415,7 +7506,7 @@ si `S3_ARTIFACTS_BUCKET` esta seteado (ya esta, via job-def).
 
 > **Gotcha #4.6b (imagen ausente)**: si el job pasa `RUNNABLE → STARTING → FAILED` con `reason=Task failed to start` y `container.reason=CannotPullImageManifestError: manifest unknown`, el tag que pinea la job-def NO existe en ECR (típico: bump de `trainer_image_tag` sin el `task ecr:build` correspondiente — ver Gotcha Parte 5). Desde esta versión el preflight `assert_jobdef_image` lo detecta antes de encolar. Verificá los tags reales con `aws ecr describe-images --repository-name ml-training --query 'imageDetails[].imageTags'` y construí el que falte: `task ecr:build IMG=trainer TAG=<tag>`.
 
-## 4.7 Confirmar suscripcion SNS
+### 4.7 Confirmar suscripcion SNS
 
 SNS manda un email de confirmacion cuando creas la suscripcion (Parte
 3.8). Tenes que clickear el link para activarla.
@@ -9443,11 +7534,11 @@ aws sns publish \
 
 > **Gotcha #4.7**: el email de confirmación SNS puede caer en spam (remitente `no-reply@sns.amazonaws.com`). Si tampoco está ahí, re-disparar con `terraform apply -replace=module.monitoring.aws_sns_topic_subscription.email`. Validar luego con `aws sns list-subscriptions-by-topic --topic-arn "${TOPIC_ARN}"` (debe mostrar `SubscriptionArn` con ARN real, no `PendingConfirmation`).
 
-## 4.8 Catalogo de tasks operativas
+### 4.8 Catalogo de tasks operativas
 
 Las implementaciones viven en `tasks/*.yml` (definidas en sección 4.1.3-4.1.8). Esta seccion es referencia de uso.
 
-### 4.8.1 Re-entrenar (`task batch:train`)
+#### 4.8.1 Re-entrenar (`task batch:train`)
 
 Submit via Lambda dispatcher (valida variety + S3 key) y **fire-and-forget por defecto**: el job corre en AWS Batch, así que cerrar la terminal o apagar la máquina no lo detiene. Las varias variedades van en **un solo job** (el dispatcher las une en un `--varieties POP,JUPITER`). El hydrate de S3 corre dentro del trainer (`main.py::_hydrate_data_from_s3`), no en el dispatcher.
 
@@ -9468,7 +7559,7 @@ task batch:status                # todos los jobs activos en ambas queues
 task batch:cancel                # termina el último job (o JOB_ID=<id>)
 ```
 
-### 4.8.1.1 EDA exploratorio on-demand (`task batch:eda`)
+#### 4.8.1.1 EDA exploratorio on-demand (`task batch:eda`)
 
 El EDA es una necesidad **aparte y opcional** del entrenamiento: lo corres cuando querés inspeccionar la calidad/drift de los datos de una variedad, tantas veces como haga falta. No forma parte del pipeline de `batch:train` — es standalone y repetible.
 
@@ -9484,7 +7575,7 @@ task batch:eda VARIETIES=POP WAIT=true    # bloquea hasta que termina
 
 > **Nota**: el `mode` lo agrega el dispatcher (`infra/lambdas/dispatcher.py`); si cambiás esa Lambda, redeployá con `task infra:apply TARGET=module.lambdas` para que el código nuevo quede activo.
 
-### 4.8.2 Lifecycle del cluster
+#### 4.8.2 Lifecycle del cluster
 
 ```bash
 # Encender / apagar (atajos high-level → ops:up / ops:down)
@@ -9503,14 +7594,14 @@ task rebuild                       # re-apply (idempotente) + ops:up
 
 `ops:up` es la misma task que usan los workflows CI auto-train. Hace pre-check `/health`, invoca `scheduler.start` si MLflow esta DOWN, y espera RDS available (12 min max) + ALB 200 (5 min max). El estado previo queda en `/tmp/wake-status` (`true|false`) para que el workflow decida si tiene que apagar al final.
 
-### 4.8.3 Destroy total
+#### 4.8.3 Destroy total
 
 ```bash
 task destroy   # vacia buckets + purga ECR + terraform destroy (backend tfstate queda)
 task nuke      # ↑ + borra tfstate + OIDC  (IRREVERSIBLE: requiere re-bootstrap)
 ```
 
-### 4.8.4 Resumen
+#### 4.8.4 Resumen
 
 | Operacion      | Comando                        |
 |----------------|--------------------------------|
@@ -9533,13 +7624,13 @@ task nuke      # ↑ + borra tfstate + OIDC  (IRREVERSIBLE: requiere re-bootstra
 
 ---
 
-# Parte 5 — Patch del trainer (emitir MAPE a CloudWatch)
+## Parte 5 — Patch del trainer (emitir MAPE a CloudWatch)
 
 > **STATUS: APLICADO** (auditoria 2026-05-18). El patch esta integrado en `src/orchestration/variety_runner.py` (import + llamada `emit_mape_metric(variety=variety, mape_value=champion.oof_mape)` despues del bloque mape_ok/gap_ok). `trainer_image_tag` bumpeado a `v0.2.0` en `infra/envs/prod/terraform.tfvars`. La proxima vez que rebuiledes con `task ecr:build IMG=trainer` la imagen llevara el patch.
 
 Sin este patch, las alarmas de `module.monitoring` (Parte 3 sección 3.8) que escuchan el namespace `ml-training/Training` con dimension `variety` nunca disparan — el namespace esta vacio y un MAPE alto pasa silencioso.
 
-## Mapa del camino — Parte 5
+### Mapa del camino — Parte 5
 
 Parte 5 agrega 1 capa de código (emitir MAPE a CloudWatch) sobre un sistema que ya funciona. Saltarla no rompe nada — solo perdés la señal de alarma.
 
@@ -9583,13 +7674,13 @@ flowchart TD
 >
 > Si bumpeás el tag a mano fuera de `build-all`, los DOS pasos siguen siendo tuyos: `task ecr:build IMG=trainer TAG=<nuevo>` **y** editar `terraform.tfvars` + `task infra:apply TARGET=module.batch`. Validá con `aws ecr describe-images --repository-name ml-training --query 'imageDetails[].imageTags'`. Commit: `feat(monitoring): emit MAPE custom metric a CloudWatch con dim=variety`.
 
-## 5.1 Donde se inserta
+### 5.1 Donde se inserta
 
 El patch crea `src/utils/cloudwatch_metrics.py::emit_mape_metric()` y lo invoca al final de `train_variety()` en `src/orchestration/variety_runner.py`, justo despues del quality gate (donde el log dice "CAMPEON pasa quality gate" o "RECHAZADO por calidad operativa") y antes de generar el Excel/Dashboard.
 
 **Por que aca y no en `runners.py`**: el `champion` existe como objeto `ModelResult` (dataclass del paso 05) solo dentro de `train_variety`. En `runners.py` solo se ve el dict agregado. **Por que `champion.oof_mape` y no `champion.full_mape`**: la alarma mide degradacion en datos no vistos (OOF) — `full_mape` es in-sample (optimista) y mete ruido cuando el modelo memoriza el train.
 
-## 5.2 Crear `src/utils/cloudwatch_metrics.py`
+### 5.2 Crear `src/utils/cloudwatch_metrics.py`
 
 ```python
 """Emite custom metrics a CloudWatch.
@@ -9646,7 +7737,7 @@ def emit_mape_metric(variety: str, mape_value: float) -> None:
 
 Verificar: `python3 -m py_compile src/utils/cloudwatch_metrics.py` no debe imprimir nada.
 
-## 5.3 Invocar desde el runner
+### 5.3 Invocar desde el runner
 
 En `src/orchestration/variety_runner.py`:
 
@@ -9661,7 +7752,7 @@ emit_mape_metric(variety=variety, mape_value=champion.oof_mape)
 
 **Importante**: la llamada se hace **siempre**, incluso si el quality gate rechaza el modelo (`mape_ok=False`). Eso es deliberado — un MAPE alto rechazado es justamente el caso que la alarma `ml-training-mape-<variety>` quiere capturar. Si solo se emitiera cuando el gate aprueba, las alarmas nunca dispararian en los runs malos.
 
-## 5.4 Verificar local que no rompe
+### 5.4 Verificar local que no rompe
 
 ```bash
 # AWS_BATCH_JOB_ID solo existe en Batch -> en docker compose local, emit hace skip silencioso
@@ -9673,7 +7764,7 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e MPLCONFIGDIR=/tmp trainer 
 
 El log NO debe tener "CloudWatch MAPE=..." (es Batch-only). El training termina exitoso y NO se contamina el namespace prod de CloudWatch.
 
-## 5.5 Re-build + push + verificar end-to-end
+### 5.5 Re-build + push + verificar end-to-end
 
 ```bash
 git add src/utils/cloudwatch_metrics.py src/orchestration/variety_runner.py
@@ -9716,13 +7807,13 @@ Si trae un valor, la alarma `ml-training-mape-pop` ya tiene datos y va a dispara
 
 ---
 
-# Parte 6 — CI/CD con GitHub Actions
+## Parte 6 — CI/CD con GitHub Actions
 
 > **STATUS: NO APLICADO TODAVIA** (auditoria 2026-05-22). El directorio `.github/workflows/` **NO existe** en el repo. La infra IAM (`module.cicd` con roles `ml-training-gha-deploy` y `ml-training-gha-train`) SI esta lista — los workflows YAML que vienen abajo hay que crearlos a mano siguiendo 6.2/6.3/6.4. Hasta entonces, los disparadores (`on: push`, `workflow_dispatch`, etc.) no existen y el pipeline se opera 100% a mano via `task`.
 >
-> **Nota — enlaces aspiracionales**: los workflows `.github/workflows/{deploy,training,destroy}.yml` y los documentos `docs/adr/` (e.g. `ADR-008-ci-sin-tests-todavia.md`) que se referencian en esta Parte **aun no existen** en el repo. Son material por crear; los links son placeholders hasta que implementes Parte 6 y materialices los ADR.
+> **Nota — qué existe y qué no**: los ADR **ya existen** en [`docs/adr/`](adr/) (ADR-001..009) y los links de esta Parte resuelven. Lo que sigue sin existir son los workflows `.github/workflows/{deploy,training,destroy}.yml`: los YAML de abajo son material **por crear**, no archivos que puedas leer del repo.
 
-## Mapa del camino — Parte 6
+### Mapa del camino — Parte 6
 
 Parte 6 transfiere la operación del laptop al pipeline. Antes disparabas `task X` a mano; ahora GHA corre los mismos `task X` con OIDC.
 
@@ -9760,7 +7851,7 @@ flowchart TD
 
 > **Gotcha Parte 6**: error `Could not assume role` en el primer run → el `sub` del trust policy no matchea `repo:<org>/<repo>:*`. Revisar #3.11.2: `var.github_org` y `var.github_repo` deben matchear EXACTO el repo en GitHub. Commit: `feat(ci): consolidar 3 workflows GHA (deploy + training + destroy) con OIDC`.
 
-## 6.0 Modelo de trust
+### 6.0 Modelo de trust
 
 En Parte 2 sección 2.5 creaste el OIDC provider; en Parte 3 sección 3.11 el modulo `cicd` creo 2 roles que confian en ese provider para tu `org/repo`:
 
@@ -9774,7 +7865,7 @@ terraform -chdir=infra/envs/prod output gha_deploy_role_arn
 terraform -chdir=infra/envs/prod output gha_train_role_arn
 ```
 
-## 6.1 Filosofia: Task = single source of truth
+### 6.1 Filosofia: Task = single source of truth
 
 Toda la logica vive en `Taskfile.yml` + `tasks/*.yml`. Los workflows son thin wrappers: autentican via OIDC, setean `TF_VAR_*` y llaman `task X`.
 
@@ -9783,7 +7874,7 @@ Si `task X` corre OK en tu laptop → corre OK en CI.
 Si rompe en CI → rompe en local con `task X`.
 ```
 
-### 6.1.1 Matriz de decision: donde vive cada operacion
+#### 6.1.1 Matriz de decision: donde vive cada operacion
 
 | Operacion | Herramienta | Por que |
 |---|---|---|
@@ -9798,7 +7889,7 @@ Si rompe en CI → rompe en local con `task X`.
 | Quality gate MAPE + A/B vs Production | **Task** (`task ops:promote`) llamado por GHA | Logica reutilizable local |
 | Apagar todo con confirmacion textual | **GHA workflow** (`destroy.yml`) + **Task** | Confirmacion + approval son features GHA; logica en Task |
 
-### 6.1.2 Anti-patrones (cuando NO meter en Taskfile)
+#### 6.1.2 Anti-patrones (cuando NO meter en Taskfile)
 
 | Anti-patron | Donde va en su lugar |
 |---|---|
@@ -9808,7 +7899,7 @@ Si rompe en CI → rompe en local con `task X`.
 
 Regla: si un task no (a) encadena >=2 cosas, (b) usa vars computadas, o (c) agrega idempotencia/polling — no justifica el namespace.
 
-## 6.2 Variables y secrets de GitHub
+### 6.2 Variables y secrets de GitHub
 
 Settings → Secrets and variables → Actions. **Variables** (no secret):
 
@@ -9842,14 +7933,14 @@ gh variable set CONSUMER_REPO           -b "ml_serving"
 
 `ALERT_EMAIL`, `CONSUMER_ORG`, `CONSUMER_REPO` deben estar **antes** del primer `infra-apply`, sino Terraform falla con `variable required value not provided`.
 
-## 6.3 `deploy.yml` — lint + build + plan + apply
+### 6.3 `deploy.yml` — lint + build + plan + apply
 
 Trigger: push a `main`, PR a `main`, `workflow_dispatch`. Cinco jobs:
 
 | Job | Disparo | Que hace |
 |---|---|---|
 | `changes` | siempre | `dorny/paths-filter@v3` setea outputs `infra` (toco `infra/**`) y `trainer` (toco `src/**`, `main.py`, `Dockerfile`, `requirements.txt`). |
-| `lint` | siempre | `task lint && task infra:validate`. Sin `test` — ver [ADR-008](docs/adr/ADR-008-ci-sin-tests-todavia.md). |
+| `lint` | siempre | `task lint && task infra:validate`. Sin `test` — ver [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). |
 | `build-and-push` | push main **AND** `trainer == 'true'` | Asume `gha-deploy`, `task ecr:build IMG=trainer`. |
 | `terraform-plan` | PR **AND** `infra == 'true'` | Asume `gha-deploy`, `task infra:plan` comentado en el PR via `github-script`. |
 | `infra-apply` | push main **AND** `infra == 'true'` **AND** lint OK | `environment: production` (approval). `task deploy` con `TF_VAR_trainer_image_tag=sha-<sha>`. |
@@ -9859,7 +7950,7 @@ Trigger: push a `main`, PR a `main`, `workflow_dispatch`. Cinco jobs:
 > - **`cancel-in-progress` condicional**: en PRs queremos cancelar runs viejos (ahorra CI minutes); en push a main NO (un apply a medias deja state inconsistente).
 > - **Build directo, no via `task ecr:build-all`**: solo el trainer se rebuildea por commit; mlflow + reports se actualizan via bump manual de TAG (cambios infrecuentes).
 
-### 6.3.1 Archivo completo `.github/workflows/deploy.yml`
+#### 6.3.1 Archivo completo `.github/workflows/deploy.yml`
 
 ```yaml
 name: Deploy
@@ -10073,7 +8164,7 @@ jobs:
 
 > **Gotcha #6.3 (deploy)**: `infra-apply` con `AccessDenied for sts:AssumeRoleWithWebIdentity` → trust policy del rol `gha-deploy` no permite `repo:<org>/<repo>:*`. Test rápido: push trivial a `main` que no toque infra ni trainer (solo `lint` corre, resto skipped). Commit: `feat(ci): deploy workflow consolidado`.
 
-## 6.4 `training.yml` — train + auto-train + promote
+### 6.4 `training.yml` — train + auto-train + promote
 
 Trigger: `workflow_dispatch` (UI manual) **o** `workflow_run` cuando `Deploy` completa con success. Cinco jobs:
 
@@ -10090,7 +8181,7 @@ Trigger: `workflow_dispatch` (UI manual) **o** `workflow_run` cuando `Deploy` co
 > - **Cool-down condicional**: si un humano ya prendio MLflow para mirar dashboards y dispara un train manual, no queremos apagarlo al terminar.
 > - **`train` NO hace `aws batch submit-job` directo**: seguridad. El rol `gha-train` solo tiene `lambda:InvokeFunction` sobre `dispatcher`. La validacion de payload (varieties whitelist, tuning whitelist) vive en Lambda.
 
-### 6.4.1 Archivo completo `.github/workflows/training.yml`
+#### 6.4.1 Archivo completo `.github/workflows/training.yml`
 
 ```yaml
 name: Training
@@ -10255,7 +8346,7 @@ Uso desde la UI: Actions → Training → Run workflow. Para entrenar: `action=t
 
 > **Gotcha #6.4 (training)**: sin `permissions: actions: read`, `gh run list` falla con 403 silencioso y cae al fallback `${HEAD_SHA}^` que solo cubre single-commit pushes. Test: `gh workflow run training.yml -f action=train -f varieties=POP -f tuning=smoke` → `detect` debe resolver `mode=train`.
 
-## 6.5 `destroy.yml` — 3 modos (TEAR-DOWN / DESTROY / NUKE)
+### 6.5 `destroy.yml` — 3 modos (TEAR-DOWN / DESTROY / NUKE)
 
 Trigger: **solo `workflow_dispatch`**.
 
@@ -10265,7 +8356,7 @@ Trigger: **solo `workflow_dispatch`**.
 | **DESTROY** | TODOS los modulos administrados (incluye storage). Vacia buckets versionados + purga ECR antes del `terraform destroy`. | tfstate bucket + OIDC provider | Re-crear via `task deploy`. Costo: $0/mes. |
 | **NUKE** | DESTROY + tfstate bucket + OIDC provider. Cuenta limpia. | Nada | Re-bootstrap desde cero (Parte 2). |
 
-### 6.5.1 Doble salvaguarda
+#### 6.5.1 Doble salvaguarda
 
 ```
 ┌─ Salvaguarda 1: input textual ────────────────────────────┐
@@ -10285,7 +8376,7 @@ Trigger: **solo `workflow_dispatch`**.
 └───────────────────────────────────────────────────────────┘
 ```
 
-### 6.5.2 Archivo completo `.github/workflows/destroy.yml`
+#### 6.5.2 Archivo completo `.github/workflows/destroy.yml`
 
 ```yaml
 name: Destroy
@@ -10450,7 +8541,7 @@ jobs:
 > ```
 > NUNCA pruebes DESTROY o NUKE la primera vez salvo que ya hayas terminado el proyecto.
 
-## 6.6 Branch protection
+### 6.6 Branch protection
 
 ```bash
 gh api "repos/${GITHUB_OWNER}/ml_training/branches/main/protection" -X PUT --input - <<EOF
@@ -10472,7 +8563,7 @@ El context `Deploy / lint` corresponde al par (`name: Deploy`, job id `lint`) de
 
 ---
 
-# Parte 7 — Promotion gate (extendido)
+## Parte 7 — Promotion gate (extendido)
 
 > [!IMPORTANT]
 > Esta es la **única vía oficial** de promover un modelo a `Production`.
@@ -10485,7 +8576,7 @@ El context `Deploy / lint` corresponde al par (`name: Deploy`, job id `lint`) de
 La Parte 6 sección 6.4 (`training.yml action=promote`) ya implementa el gate basico (MAPE umbral + A/B + approval).
 Esta Parte 7 documenta el ciclo completo del modelo y cuando se promueve.
 
-## Mapa del camino — Parte 7
+### Mapa del camino — Parte 7
 
 Parte 7 define cuándo un modelo deja de ser experimental y entra a Production. No agregás infra ni código — usás el workflow que ya creaste en Parte 6, sección 6.4 con `action=promote`.
 
@@ -10535,7 +8626,7 @@ flowchart TD
 
 > **Gotcha Parte 7**: olvidar "transition a Staging" antes de `action=promote`. El gate filtra por `stage=Staging` — si el modelo está en `None`, el workflow dice "no candidate found".
 
-## 7.1 Ciclo de vida de un modelo
+### 7.1 Ciclo de vida de un modelo
 
 ```
 [push a main]
@@ -10575,7 +8666,7 @@ transition_model_version_stage(Production)
 [modelo en Production, archive_existing_versions = true automatico]
 ```
 
-## 7.2 Gates por nivel
+### 7.2 Gates por nivel
 
 | Stage | Gate | Quien |
 |---|---|---|
@@ -10583,7 +8674,7 @@ transition_model_version_stage(Production)
 | `Staging` -> `Production` | Quality gate (MAPE < umbral) + A/B vs Production actual + approval | Workflow `training.yml` (action=promote) + revisor humano |
 | `Production` -> `Archived` | Auto al promover una nueva version (archive_existing_versions = true) | MLflow |
 
-## 7.3 Por que el approval humano (GitHub Environment)
+### 7.3 Por que el approval humano (GitHub Environment)
 
 Aun con gates automaticos:
 - MAPE puede ser engañoso si la distribucion de los predichos cambio
@@ -10593,7 +8684,7 @@ Aun con gates automaticos:
   judgement.
 - El approval crea audit log en GitHub (quien aprobo + cuando).
 
-## 7.4 Rollback de un Production
+### 7.4 Rollback de un Production
 
 Si la version promovida tiene problemas:
 
@@ -10623,14 +8714,14 @@ buena → "Transition to" → Production.
 
 ---
 
-# Parte 8 — Runbook operativo extendido
+## Parte 8 — Runbook operativo extendido
 
 > **Por qué esta parte**: si el sistema está en producción y vos no estás,
 > alguien tiene que operarlo sin leerse las 5 oleadas. Este es ese manual:
 > comandos copy-paste con el "por qué" al lado, para entender qué se hace y no
 > ejecutar a ciegas.
 
-## Mapa del camino — Parte 8
+### Mapa del camino — Parte 8
 
 Parte 8 es referencia operativa: no se lee de corrido, vas a la subsección que matchea tu situación.
 
@@ -10693,9 +8784,9 @@ flowchart TD
 
 > **Gotcha Parte 8**: confundir `task teardown` con `task destroy`. Antes de correr cualquiera, leer el WARNING de #8.5 / #8.7 — hay confirmación textual pero leer-y-tipear sin entender lleva a pérdida de datos. Confirmar también suscripciones SNS (sino no llega aviso de `FAILED`).
 
-## 8.1 Manual diario / mas frecuente
+### 8.1 Manual diario / mas frecuente
 
-### 8.1.1 Re-entrenar una variedad
+#### 8.1.1 Re-entrenar una variedad
 
 **Por que se hace**: data nueva subida al bucket (`aws s3 cp` del Excel
 acumulado), o pediste un re-train porque cambiaste hiperparametros.
@@ -10721,7 +8812,7 @@ queue Spot (o On-Demand si tuning=prod_xl) → Batch wakea un EC2 c6i.2xlarge
 → pull image → entrenamiento corre → champion log a MLflow → sync a S3
 → container muere → EC2 termina. Todo dura 30-60 min en prod.
 
-### 8.1.2 Re-entrenar TODAS las variedades en un dia (recovery)
+#### 8.1.2 Re-entrenar TODAS las variedades en un dia (recovery)
 
 **Por que se hace**: rollback de data, hubo un bug en `cli.py` que
 hizo que los runs del ultimo mes no se loggearan, o necesitas refresh
@@ -10743,7 +8834,7 @@ done
 default, Batch encolaria igual pero te llevarias el cap. Si queres
 paralelo de verdad, subir `spot_max_vcpus=48` ANTES (via terraform.tfvars).
 
-### 8.1.3 Spot vs On-Demand por preset (cuando elegir cual)
+#### 8.1.3 Spot vs On-Demand por preset (cuando elegir cual)
 
 | Preset | Tiempo estimado | Probabilidad de Spot interrupt | Recomendacion |
 |---|---|---|---|
@@ -10760,7 +8851,7 @@ computo) supera al 70% de ahorro. La logica esta en `dispatcher.py`:
 queue = JOB_QUEUE_ONDEMAND if tuning == "prod_xl" else JOB_QUEUE_SPOT
 ```
 
-### 8.1.4 Rollback de imagen del trainer
+#### 8.1.4 Rollback de imagen del trainer
 
 **Por que se hace**: pushaste una version que tiene un bug y queres
 volver a la anterior sin re-build.
@@ -10796,9 +8887,9 @@ Terraform de abajo).
 terraform -chdir=infra/envs/prod apply -target=module.batch -var=trainer_image_tag=sha-abcdef123456 -auto-approve
 ```
 
-## 8.2 Manual semanal / mensual
+### 8.2 Manual semanal / mensual
 
-### 8.2.1 Bajar todo para ahorrar (tear-down)
+#### 8.2.1 Bajar todo para ahorrar (tear-down)
 
 **Por que se hace**: fin de mes, vacaciones, pausa del proyecto.
 Conocido como "scale to near-zero".
@@ -10817,7 +8908,7 @@ task teardown
 4. **network**: NAT GW es el ultimo en irse — `$32/mes` ahorro
    inmediato.
 
-### 8.2.2 Volver a levantar (rebuild)
+#### 8.2.2 Volver a levantar (rebuild)
 
 ```bash
 task rebuild
@@ -10827,7 +8918,7 @@ task rebuild
 distinto en su DNS. Si tenias bookmarks, actualizalos. Si quisieras
 un DNS estable, TLS + Route 53 lo resuelve (hardening, futuro).
 
-### 8.2.3 Subir data nueva
+#### 8.2.3 Subir data nueva
 
 **Por que se hace**: cada mes (o cada cierto periodo) llega un Excel
 nuevo con los datos acumulados.
@@ -10854,9 +8945,9 @@ cada uno secuencial. Los jobs corren en paralelo segun
 `spot_max_vcpus`. El monitoreo es via SNS (notifier publica si alguno
 FAILED) o `aws batch list-jobs`.
 
-## 8.3 Manual de incidentes
+### 8.3 Manual de incidentes
 
-### 8.3.1 Job se quedo en RUNNABLE eternamente
+#### 8.3.1 Job se quedo en RUNNABLE eternamente
 
 **Sintoma**: `aws batch describe-jobs --jobs <id>` muestra `status =
 RUNNABLE` por mas de 10 min sin pasar a `STARTING`.
@@ -10890,7 +8981,7 @@ aws ec2 describe-spot-instance-requests
 - Si no hay capacity Spot: cancelar el job y resubmit con
   `tuning=prod_xl` (lo manda a la queue On-Demand). O esperar.
 
-### 8.3.2 MLflow 403 "Invalid Host header"
+#### 8.3.2 MLflow 403 "Invalid Host header"
 
 **Por que pasa**: MLflow 3.x rechaza requests cuyo `Host:` header no
 esta en `--allowed-hosts`. El V2 ya pone `--allowed-hosts '*'` (3.5.2)
@@ -10899,7 +8990,7 @@ pero si lo cambiaste a una lista, y el ALB DNS no esta — boom.
 **Fix**: editar `modules/mlflow/ecs.tf:container_definitions.command`
 para incluir el nuevo DNS, `terraform apply -target=module.mlflow`.
 
-### 8.3.3 RDS "too many connections"
+#### 8.3.3 RDS "too many connections"
 
 **Por que pasa**: `db.t4g.small` (default actual) tiene maximo ~200
 conexiones. Ademas del trainer de Batch (cada variedad en paralelo abre
@@ -10913,7 +9004,7 @@ y/o subir `rds_instance_class` a `db.t4g.medium` (4 GB, ~400 conexiones) en
 `terraform.tfvars`. (Con `db.t4g.micro`, 1 GB, el techo era ~85 — por eso el
 default del stack completo es `small`.)
 
-### 8.3.4 Spot interrupt mid-training
+#### 8.3.4 Spot interrupt mid-training
 
 **Sintoma**: job en FAILED con `statusReason = "Host EC2 ..."`.
 **Por que pasa**: AWS necesito tu c6i.2xlarge para otro customer.
@@ -10926,7 +9017,7 @@ sistematicamente (3+ jobs FAILED por Spot en un dia), considerar:
 - Ver `Best practices > Capacity` en consola Batch — quizas la AZ tiene
   presion. Cambiar `instance_type` a alternativa (`c6a.2xlarge`, `m6i.2xlarge`).
 
-### 8.3.5 `task infra:apply` falla con state lock
+#### 8.3.5 `task infra:apply` falla con state lock
 
 **Sintoma**: `Error acquiring the state lock` con un `LockID`.
 
@@ -10948,7 +9039,7 @@ aws s3 cp "s3://${PROJECT}-tfstate-${ACCOUNT_SUFFIX}/envs/prod/terraform.tfstate
 task infra:force-unlock LOCK_ID=<LOCK_ID>
 ```
 
-### 8.3.6 S3 sync del trainer falla con 403
+#### 8.3.6 S3 sync del trainer falla con 403
 
 **Por que pasa**: el job-role no tiene `s3:PutObject` sobre
 `artifacts_bucket`, o el bucket esta en otra region.
@@ -10965,7 +9056,7 @@ aws iam get-role-policy --role-name ml-training-job-role --policy-name <name>
 sobre el bucket. Si falla, verificar que el bucket creado matchea
 `var.artifacts_bucket`.
 
-### 8.3.7 Job arranca pero MLflow esta apagado (fuera de ventana)
+#### 8.3.7 Job arranca pero MLflow esta apagado (fuera de ventana)
 
 **Por que pasa**: lanzaste un train fuera de L-V 08-12 PET. El cron
 de stop apago MLflow (Fargate desired_count=0). El trainer intenta
@@ -10984,7 +9075,7 @@ task batch:train VARIETIES=POP
 > train y apaga 10 min despues si MLflow estaba abajo. La ampliacion
 > de permisos del role `gha-train` para invocar el scheduler queda pendiente en este repo.
 
-### 8.3.8 Cold-start de RDS lento el primer request
+#### 8.3.8 Cold-start de RDS lento el primer request
 
 **Por que pasa**: RDS post-`start_db_instance` tarda ~5 min en estar
 disponible. El primer query desde MLflow puede demorar 10-20s extra
@@ -10995,7 +9086,7 @@ matar conexiones legitimas. **Que hacer**: el healthcheck del task
 def tiene `startPeriod = 60`; aumentalo si tu RDS warmup es
 consistentemente mas lento.
 
-## 8.4 Shutdown limpio DENTRO del job de training
+### 8.4 Shutdown limpio DENTRO del job de training
 
 **Por que importa**: si Batch te interrumpe (Spot) o vos cancelas el
 job, el contenedor recibe `SIGTERM`. El trainer tiene 30s para
@@ -11032,7 +9123,7 @@ signal.signal(signal.SIGTERM, _graceful_exit)
 **Por que NO matar el archivo con `pkill` o `kill -9`**: SIGKILL no
 es interceptable. Cualquier estado a medio escribir queda corrupto.
 
-## 8.5 TEAR-DOWN — apagar todo preservando state + datos
+### 8.5 TEAR-DOWN — apagar todo preservando state + datos
 
 > [!WARNING]
 > TEAR-DOWN es **reversible** (con `task rebuild` levantás todo de
@@ -11071,7 +9162,7 @@ gasto, evento de costo inesperado, pausar el proyecto.
 
 **Costo despues del tear-down**: ~$1/mes (S3 + ECR + los snapshots retenidos; ver matriz #9.3). El tear-down preserva `module.network` (VPC/subnets/SGs) pero **libera el NAT** vía `enable_nat=false` (`terraform apply -target=module.network -var enable_nat=false`), eliminando el ~$33/mes idle. `task rebuild`/`deploy` lo recrean. Al destruirse el RDS tambien desaparece el storage gp3 (~$2.30/mes) y en su lugar se paga solo el snapshot, facturado sobre datos **usados** (no sobre los 20 GB asignados): centavos para esta base.
 
-### Comando `task teardown`
+#### Comando `task teardown`
 
 ```bash
 task teardown
@@ -11091,7 +9182,7 @@ task teardown
 #  storage es PERMANENTE: NO se destruye. network se preserva pero con el NAT liberado.
 ```
 
-### Ciclo snapshot -> restore
+#### Ciclo snapshot -> restore
 
 El teardown destruye el RDS, y ahi viven **MLflow tracking + Model Registry** y la
 tabla **`forecasts`** de la API (misma instancia, bases distintas). El unico
@@ -11160,7 +9251,7 @@ task snapshots            # listar los snapshots manuales restaurables
 task ops:snapshot-now     # snapshot manual sin destruir nada (RDS debe estar available)
 ```
 
-### Periodo de gracia de RDS — por que el teardown lo evita
+#### Periodo de gracia de RDS — por que el teardown lo evita
 
 > Esta limitacion aplica a `task sleep` (que **para** el RDS), no al teardown
 > (que lo **destruye**). Se documenta aca porque es la razon principal para
@@ -11179,7 +9270,7 @@ nadie la use. Opciones:
   `module.lambdas`), asi que no protege una hibernacion larga hecha con `sleep`
   + liberacion de red. `tasks/ops.yml::down` lo advierte explicitamente.
 
-## 8.6 REBUILD — volver despues de tear-down
+### 8.6 REBUILD — volver despues de tear-down
 
 Cuando lo uso: vuelvo de vacaciones, retomo el proyecto, necesito la UI
 de MLflow para mirar runs viejos.
@@ -11187,7 +9278,7 @@ de MLflow para mirar runs viejos.
 **Precondicion**: la cuenta tiene los recursos preservados del tear-down
 (buckets S3, ECR, IAM, OIDC).
 
-### Comando `task rebuild`
+#### Comando `task rebuild`
 
 ```bash
 task rebuild                       # restaura desde el snapshot mas reciente (default)
@@ -11226,7 +9317,7 @@ Si tenías bookmark, actualizalo. (Si agregaste un dominio (TLS, hardening)
 custom via Route53, el dominio sigue igual; sólo el record A apunta al
 nuevo ALB.)
 
-## 8.7 DESTROY — eliminar TODO de la cuenta AWS
+### 8.7 DESTROY — eliminar TODO de la cuenta AWS
 
 > [!CAUTION]
 > **Operación irreversible**. `task destroy` borra buckets S3 (incluido
@@ -11304,7 +9395,7 @@ cd ../../..
 > en el mismo apply. El `${PROJECT}-archive-${ACCOUNT_SUFFIX}` queda
 > intacto porque Terraform no lo conoce.
 
-### Comando `task destroy`
+#### Comando `task destroy`
 
 ```bash
 task destroy
@@ -11321,7 +9412,7 @@ task destroy
 **Tiempo**: 30-45 min, dominado por el vaciado de buckets versionados
 (cada modelo es ~10 MB con N versions).
 
-## 8.8 Verificar que NO quedo nada (post-destroy)
+### 8.8 Verificar que NO quedo nada (post-destroy)
 
 > [!IMPORTANT]
 > `terraform destroy` **no deja la cuenta perfectamente limpia**. Hay residuos
@@ -11359,13 +9450,13 @@ Detalles verificados el **2026-07-20** ejecutando el ciclo completo:
 
 ---
 
-# Parte 9 — Costos detallados
+## Parte 9 — Costos detallados
 
 > **Por qué esta parte**: AWS no muestra un total previsto antes de gastar; sin
 > entender el desglose te llevás sorpresa en la factura. Acá está el número
 > realista por modo de operación y los `dials` para bajarlo.
 
-## Mapa del camino — Parte 9
+### Mapa del camino — Parte 9
 
 Parte 9 es referencia: tablas de costos para razonar "cuánto cuesta cada modo" y "cuánto bajo apagando X". Llegás a la tabla que responde tu pregunta.
 
@@ -11415,7 +9506,7 @@ flowchart TD
 
 > **Gotcha Parte 9**: confundir "operando normal" con "24/7". El default lockeado es scheduler L-V 08-12 = 80h/mes de Fargate; pasar a 24/7 (scheduler OFF) duplica el número. Validar con `aws events describe-rule --name ml-training-start` y comparar con Cost Explorer (±20% de #9.1).
 
-## 9.1 Escenario lockeado: scheduler L-V 08-12 PET — ~$75/mes
+### 9.1 Escenario lockeado: scheduler L-V 08-12 PET — ~$75/mes
 
 Asume: 80 horas/mes del stack encendido (4h × 5 dias × ~4 semanas; el scheduler
 prende/apaga MLflow + Reports + **API + UI** juntos), 10 trainings/mes promedio
@@ -11470,7 +9561,7 @@ prende/apaga MLflow + Reports + **API + UI** juntos), 10 trainings/mes promedio
 (sin API ni UI). El App stack de la Capa 4.5 suma ~$6 (2 Fargate + RDS small).
 $75 es realista con el monorepo completo (training + serving) del V2.
 
-## 9.2 Comparativa con escenarios alternativos
+### 9.2 Comparativa con escenarios alternativos
 
 | Escenario | Cambio vs default | Costo total/mes | Cuando elegirlo |
 |---|---|---|---|
@@ -11481,7 +9572,7 @@ $75 es realista con el monorepo completo (training + serving) del V2.
 | **Multi-AZ RDS** | RDS Multi-AZ (hardening, futuro) | +$13 sobre default | Compliance / SLA estricto |
 | **TLS + Custom Domain** | Route 53 zone + ACM cert (hardening, futuro) | +$1 sobre default | Exposicion publica |
 
-## 9.3 Matriz de costos por modo de lifecycle
+### 9.3 Matriz de costos por modo de lifecycle
 
 Tabla resumen que cruza los 4 modos (STAND-UP / TEAR-DOWN / DESTROY) con
 los recursos: util para razonar "cuanto bajo apagando X" antes de
@@ -11522,13 +9613,13 @@ Si queres bajar mas el modo operando, ver sección 9.4 (S3 lifecycle +
 Intelligent Tiering, ECR scan policies). Los VPC endpoints eliminan el
 NAT GW (~$32 menos, hardening futuro).
 
-## 9.4 Optimizaciones adicionales ((futuro))
+### 9.4 Optimizaciones adicionales ((futuro))
 
 **Por que se llaman "futuras" en vez de aplicarlas dia 1**: cada una
 tiene un costo de ingenieria o un trade-off. Aplicarlas dia 1 te frena
 sin que aporten valor hasta que la operacion tenga datos.
 
-### 9.4.1 VPC endpoints en vez de NAT (hardening, futuro)
+#### 9.4.1 VPC endpoints en vez de NAT (hardening, futuro)
 
 Cambia $32/mes NAT GW por $7/mes en 4 endpoints (S3, ECR, CloudWatch,
 STS). Net: $25/mes menos. **Por que no se aplica dia 1**: agrega
@@ -11536,19 +9627,19 @@ STS). Net: $25/mes menos. **Por que no se aplica dia 1**: agrega
 servicio que el trainer use indirectamente. Aplicarlo despues, cuando
 tenes lista de servicios consumidos en CloudTrail.
 
-### 9.4.2 S3 Intelligent-Tiering
+#### 9.4.2 S3 Intelligent-Tiering
 
 Auto-tier `artifacts/` despues de 90d a Standard-IA (-50% storage).
 **Por que no dia 1**: tu volumen S3 es ~5 GB. Ahorro real: <$0.5/mes.
 No vale la pena hasta que pases los 100 GB.
 
-### 9.4.3 ECR scan policies
+#### 9.4.3 ECR scan policies
 
 Borrar imagenes con vulnerabilidades CVSS > 7. **Por que no dia 1**:
 genera ruido (la imagen base puede tener CVEs que upstream parchea
 en semanas). Aplicar despues de la primera vuelta.
 
-### 9.4.4 Fargate Spot para MLflow
+#### 9.4.4 Fargate Spot para MLflow
 
 **Reports y UI YA corren en FARGATE_SPOT** (~70% más baratos; son stateless,
 una interrupción solo reinicia la task). El cluster expone capacity providers
@@ -11560,13 +9651,13 @@ rompe tu workflow. Mover MLflow a Spot solo en envs/dev.
 
 ---
 
-# Parte 11 — Troubleshooting (catalogo)
+## Parte 11 — Troubleshooting (catalogo)
 
 > **Por qué esta parte**: errores que YA pasaron (en V1 o durante el desarrollo
 > del V2), cada uno con síntoma, causa y fix concreto. Si tu error no está acá,
 > `aws logs tail /aws/batch/ml-training --follow` es siempre el primer paso.
 
-## Mapa del camino — Parte 11
+### Mapa del camino — Parte 11
 
 Parte 11 es 1 tabla larga (17 entradas). Este mapa agrupa por fase del flujo: buscás por contexto, vas directo a la fila.
 
@@ -11656,9 +9747,9 @@ flowchart TD
 
 ---
 
-# Parte 12 — Apendices
+## Parte 12 — Apendices
 
-## Mapa del camino — Parte 12
+### Mapa del camino — Parte 12
 
 Parte 12 es 4 apéndices independientes. Este mapa te dice cuál abrir según lo que necesitás.
 
@@ -11688,9 +9779,9 @@ flowchart TD
 - Apéndice B (Conceptos) es para audiencia no-técnica o juniors. Si sos experto MLOps, B está por completitud — pasalo a quien pregunta el "por qué".
 - Apéndice C es el mejor checklist post-stand-up: después de Partes 2-4, verificar que cada archivo del árbol existe.
 
-## Apendice A — Glosario (referencia rapida)
+### Apendice A — Glosario (referencia rapida)
 
-### A.1 AWS / DevOps
+#### A.1 AWS / DevOps
 
 | Termino | Que es en 1 frase |
 |---|---|
@@ -11710,7 +9801,7 @@ flowchart TD
 | **State (Terraform)** | JSON con mapping HCL ↔ recursos reales. Vive en S3; lock nativo S3 (use_lockfile, sin DynamoDB). |
 | **STS** | Security Token Service. Emite credenciales temporales (asume role). |
 
-### A.2 Estadistica / EDA (usado en `task eda`)
+#### A.2 Estadistica / EDA (usado en `task eda`)
 
 | Termino | Test / metrica que mide | Como leerlo |
 |---|---|---|
@@ -11729,7 +9820,7 @@ flowchart TD
 > PSI alto si justifica abortar: el modelo aprendido sobre training no
 > va a generalizar al test.
 
-## Apendice B — Conceptos fundamentales (lectura opcional)
+### Apendice B — Conceptos fundamentales (lectura opcional)
 
 > **Skip si sos experto MLOps.** Este apendice arranca desde nivel
 > 101 ("por que MLOps y no un script en CRON") y existe por
@@ -11738,7 +9829,7 @@ flowchart TD
 > es redundante. Volver aca solo si necesitas defender la eleccion
 > de tooling ante alguien no tecnico.
 
-### B.1 Por que MLOps y no "el script de Python que corre en CRON"
+#### B.1 Por que MLOps y no "el script de Python que corre en CRON"
 
 3 problemas que MLOps resuelve:
 1. **Reproducibilidad**: tu modelo no se reproduce desde una notebook
@@ -11749,7 +9840,7 @@ flowchart TD
 3. **Observabilidad**: MAPE silencioso es bug silencioso. Alarmas
    automaticas convierten degradacion en pager.
 
-### B.2 Por que Terraform y no CDK / Pulumi
+#### B.2 Por que Terraform y no CDK / Pulumi
 
 - **Terraform**: declarativo, HCL, ecosistema gigante, multi-cloud.
   Estandar de industria.
@@ -11765,7 +9856,7 @@ Terraform gana en V2 porque:
 Si en el futuro queres Pulumi (mejor IDE, types), la migracion del
 state es soportada (`pulumi import`).
 
-### B.3 Por que Task si Terraform ya orquesta
+#### B.3 Por que Task si Terraform ya orquesta
 
 Terraform es declarativo: te dice _que_ infra existe, no _en que orden_
 hacer cosas que dependen entre si. Ejemplos donde Task gana:
@@ -11792,7 +9883,7 @@ namespacing con `includes:`, cache de builds via `sources:` con hash
 con scope, y manejo de errores estructurado por task. Bash sirve para
 1-2 scripts; Task para 30+ tasks organizadas por dominio.
 
-### B.4 Por que GitHub Actions con OIDC
+#### B.4 Por que GitHub Actions con OIDC
 
 OIDC remplaza el caso comun de access keys de larga duracion:
 
@@ -11802,7 +9893,7 @@ OIDC remplaza el caso comun de access keys de larga duracion:
   (repo:org/repo:ref). Si tu repo se hackea, el atacante NO obtiene
   AWS keys.
 
-## Apendice C — Mapa de archivos creados por la guia
+### Apendice C — Mapa de archivos creados por la guia
 
 Al terminar las 5 oleadas, tu repo tiene **agregados** (todo lo que
 ya estaba se preserva):
@@ -11859,11 +9950,12 @@ ml_training/
 │   ├── orchestration/variety_runner.py          # Parte 5.3 (emit_mape_metric tras quality gate)
 │   └── utils/cloudwatch_metrics.py              # Parte 5.2 (archivo nuevo)
 ├── main.py                                      # OBLIGATORIO (entrypoint del trainer); signal handler en sección 8.4
-├── GUIA_MLOPS_AWS_V2.md                         # esta guia
+├── docs/{01-local,02-produccion-aws,03-arquitectura}.md  # las guias
+├── docs/adr/                                    # ADR-001..009
 └── (resto del proyecto: README.md, pyproject.toml, requirements*.txt, .dockerignore,
     .env.example, .gitignore, .editorconfig, notebooks/, scripts/, .claude/, etc.
-    NOTA: docs/adr/ NO existe aun — los ADR referenciados en la guia (e.g. ADR-008)
-    son aspiracionales / por crear.)
+    NOTA: docs/adr/ ya existe (ADR-001..009). Lo que sigue faltando es
+    .github/workflows/ — ver la Parte 6.)
 ```
 
 Total agregado: ~80 archivos nuevos, ~3 modificados.
