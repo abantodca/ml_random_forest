@@ -244,6 +244,10 @@ tasks:
         # module.mlflow incluye el RDS con deletion_protection=true -> levantarla
         # antes del destroy. El snapshot final usa nombre timestamped (sin colision).
         lift_rds_protection "{{.PROJECT}}-mlflow"
+        # `down` (arriba) invoco al scheduler con action=stop y dejo el RDS
+        # detenido; AWS no permite el snapshot final en ese estado. Re-arrancarlo
+        # es lo que hace que el ciclo teardown -> snapshot -> rebuild funcione.
+        ensure_rds_available "{{.PROJECT}}-mlflow"
         SNAP="{{.PROJECT}}-mlflow-final-$(date +%Y%m%d%H%M%S)"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"

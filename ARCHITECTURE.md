@@ -277,10 +277,14 @@ graph LR
     sec["random_password + secret<br/><i>en la raíz, NO en module.mlflow</i>"] -.credencial válida.-> rds
 ```
 
-Dos piezas hacen que esto no se rompa:
+Tres piezas hacen que esto no se rompa:
 - La **credencial master vive en la raíz** (`infra/envs/prod/rds_secret.tf`), no
   en `module.mlflow`. Si viviera dentro, el teardown la destruiría y el rebuild
   generaría una password nueva incompatible con la del snapshot restaurado.
+- El RDS debe estar **`available`** al destruirlo: `teardown` llama antes a
+  `ops:down`, que lo **para**, y AWS rechaza snapshotear una instancia detenida
+  (`InvalidDBInstanceState`) abortando el destroy a la mitad y sin snapshot.
+  `ensure_rds_available` (`tasks/lib/nuke.sh`) lo re-arranca y espera.
 - `snapshot_identifier` lleva **`ignore_changes`** obligatorio: es `ForceNew`, y
   sin él cualquier apply posterior que no repita el `-var` recrearía el RDS.
 

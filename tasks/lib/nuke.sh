@@ -33,6 +33,56 @@ lift_rds_protection() {
     --no-deletion-protection --apply-immediately >/dev/null
 }
 
+# ensure_rds_available <db-instance-id>
+#   Deja el RDS en estado `available`, arrancandolo si hace falta.
+#
+#   OBLIGATORIO antes de cualquier `terraform destroy` que tome snapshot final
+#   (skip_final_snapshot=false, el default). AWS RECHAZA snapshotear una
+#   instancia detenida:
+#       InvalidDBInstanceState: Cannot create a snapshot because the database
+#       instance <id> is not currently in the available state.
+#
+#   El choque es real y no teorico: tanto `ops:teardown` como `infra:destroy`
+#   invocan antes a `ops:down`, que llama al scheduler con action=stop y PARA el
+#   RDS. Sin este helper el destroy aborta a la mitad, dejando la infra
+#   parcialmente destruida y SIN el snapshot final -> el ciclo
+#   teardown -> snapshot -> rebuild se rompe justo donde importa.
+#
+#   Idempotente: si no existe, o ya esta available, no hace nada.
+ensure_rds_available() {
+  local id="$1" st
+  if ! aws rds describe-db-instances --db-instance-identifier "$id" >/dev/null 2>&1; then
+    echo "  RDS $id no existe, skip"; return 0
+  fi
+  st=$(aws rds describe-db-instances --db-instance-identifier "$id" \
+    --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null)
+  case "$st" in
+    available) echo "  RDS $id ya esta available."; return 0 ;;
+    stopped)
+      echo "  RDS $id esta stopped -> arrancando (necesario para el snapshot final)..."
+      aws rds start-db-instance --db-instance-identifier "$id" >/dev/null
+      ;;
+    starting|stopping|modifying|backing-up|configuring-enhanced-monitoring)
+      echo "  RDS $id en estado transitorio ($st) -> esperando..."
+      # `stopping` no se puede interrumpir: hay que dejar que llegue a stopped
+      # y recien ahi arrancarlo.
+      if [ "$st" = "stopping" ]; then
+        until [ "$(aws rds describe-db-instances --db-instance-identifier "$id" \
+              --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null)" = "stopped" ]; do
+          sleep 20
+        done
+        echo "  RDS $id ya stopped -> arrancando..."
+        aws rds start-db-instance --db-instance-identifier "$id" >/dev/null
+      fi
+      ;;
+    *) echo "  RDS $id en estado '$st' -> intentando esperar a available..." ;;
+  esac
+  echo "  Esperando a que $id quede available (puede tardar ~5-10 min)..."
+  # `wait db-instance-available` hace hasta 60 intentos cada 30s (30 min).
+  aws rds wait db-instance-available --db-instance-identifier "$id"
+  echo "  OK RDS $id available."
+}
+
 # purge_ecr <repo>
 #   Borra TODAS las imagenes de un repo ECR (no borra el repo).
 purge_ecr() {

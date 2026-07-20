@@ -8796,6 +8796,15 @@ tasks:
       # Pre-check: si los buckets *-data-* / *-artifacts-* existen en AWS pero
       # no en tfstate (tipico tras nuke parcial o re-bootstrap), `apply
       # module.storage` falla con BucketAlreadyExists. Fail-fast con instrucciones.
+      #
+      # LIMITACION CONOCIDA: `ops:state-drift` solo cubre buckets S3. Un nuke que
+      # falla a la mitad puede dejar OTROS recursos con nombre fijo huerfanos
+      # -verificado el 2026-07-20 con `ml-training-tg-api`, `ml-training-tg-mlflow`
+      # y el DB subnet group `ml-training-rds-subnets`-, y el apply falla con
+      # "already exists". Si pasa: comprobar que esten desligados (target groups
+      # con 0 LoadBalancerArns; subnet group apuntando a una VPC inexistente) y
+      # borrarlos a mano con `aws elbv2 delete-target-group` /
+      # `aws rds delete-db-subnet-group` antes de reintentar.
       - task: ops:state-drift
       - 'echo ">>> Oleada A: apply module.storage (S3 + ECR)..."'
       - task: infra:apply
@@ -11072,6 +11081,8 @@ task teardown
 #     scheduler -> lambdas -> monitoring -> batch -> reports -> api -> ui -> mlflow -> cicd -> consumer_iam
 #  3. Antes del loop levanta la proteccion del RDS via AWS CLI
 #     (lift_rds_protection en tasks/lib/nuke.sh) y pasa rds_final_snapshot_identifier timestamped.
+#  3b. ensure_rds_available: el paso 1 (ops:down) PARO el RDS, y AWS rechaza
+#     snapshotear una instancia detenida -> la re-arranca y espera `available`.
 #  4. `terraform apply -target=module.network -var enable_nat=false` -> LIBERA el NAT (~$33/mes).
 #  5. prune_snapshots (tasks/lib/snapshot.sh) borra los snapshots manuales mas
 #     viejos y conserva los SNAPSHOT_KEEP ultimos (default 4).
@@ -11111,14 +11122,27 @@ task rebuild  ◄─────────────┘  latest_snapshot() l
 > el apply corre sin `-var` y crea la instancia limpia. Por eso las mismas tareas
 > sirven para el primer stand-up y para los ciclos posteriores.
 
-Dos detalles de implementacion que **no son opcionales**:
+> [!WARNING]
+> **El RDS tiene que estar `available` para que el snapshot final salga.** El
+> teardown primero llama a `ops:down`, que invoca al scheduler con `action=stop`
+> y **para** la instancia. Si se destruye en ese estado, AWS responde
+> `InvalidDBInstanceState: Cannot create a snapshot because the database
+> instance ... is not currently in the available state` y el destroy **aborta a
+> la mitad**: infra parcialmente destruida y **sin snapshot final**.
+> Por eso `ops:teardown` e `infra:destroy` llaman a `ensure_rds_available`
+> (`tasks/lib/nuke.sh`) antes del destroy: re-arranca la instancia y espera.
+> Cuesta ~5-10 min extra, y es lo que hace que el ciclo sea confiable.
+
+Tres detalles de implementacion que **no son opcionales**:
 
 1. **La credencial master vive en la raiz**, `infra/envs/prod/rds_secret.tf`, no
    dentro de `module.mlflow`. Si viviera dentro, el teardown la destruiria junto
    con el modulo y el rebuild generaria una password NUEVA — que no coincide con
    la del snapshot restaurado (AWS conserva la credencial del snapshot). MLflow y
    la API no autenticarian y el backup seria inservible.
-2. **`snapshot_identifier` lleva `lifecycle { ignore_changes }`** en
+2. **El RDS debe estar `available`** antes del destroy que toma el snapshot
+   (`ensure_rds_available`, ver el aviso de arriba).
+3. **`snapshot_identifier` lleva `lifecycle { ignore_changes }`** en
    `modules/mlflow/rds.tf`. El argumento es *ForceNew*: sin eso, cualquier apply
    posterior que no repita el mismo `-var` (por ejemplo el apply completo que
    hace `ops:up` cuando el ALB no existe) veria `""` contra el valor del state y

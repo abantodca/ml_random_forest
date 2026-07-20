@@ -119,6 +119,9 @@ tasks:
         set -euo pipefail
         source tasks/lib/nuke.sh
         lift_rds_protection "{{.PROJECT}}-mlflow"
+        # El flujo de destroy para el RDS antes (scheduler action=stop) y AWS
+        # RECHAZA snapshotear una instancia detenida -> hay que re-arrancarla.
+        ensure_rds_available "{{.PROJECT}}-mlflow"
         terraform -chdir={{.TF_DIR}} destroy -auto-approve \
           -var "rds_final_snapshot_identifier={{.PROJECT}}-mlflow-final-$(date +%Y%m%d%H%M%S)"
 
