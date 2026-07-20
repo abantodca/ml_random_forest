@@ -91,7 +91,7 @@ resource "aws_ecs_task_definition" "mlflow" {
       ]
       secrets = [{
         name      = "RDS_PASSWORD"
-        valueFrom = aws_secretsmanager_secret.rds.arn
+        valueFrom = var.rds_password_secret_arn
       }]
       environment = [
         { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.region }

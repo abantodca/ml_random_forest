@@ -32,3 +32,21 @@ variable "rds_final_snapshot_identifier" {
   type        = string
   default     = ""
 }
+variable "rds_snapshot_identifier" {
+  description = "Snapshot desde el que CREAR el RDS (restore). Vacio = instancia nueva y vacia. Lo inyecta `task ops:rebuild` con el snapshot final mas reciente."
+  type        = string
+  default     = ""
+}
+
+# ── Credencial master (producida en la raiz, ver envs/prod/rds_secret.tf) ────
+# Se pasan como variables y NO se crean aca para que sobrevivan al teardown:
+# sin eso, el rebuild generaria una password nueva incompatible con el snapshot.
+variable "rds_password" {
+  description = "Password master del RDS. La genera la raiz (random_password.rds) para que sobreviva al destroy de este modulo."
+  type        = string
+  sensitive   = true
+}
+variable "rds_password_secret_arn" {
+  description = "ARN del secret de Secrets Manager con el password. Lo consumen las task definitions de MLflow y de la API."
+  type        = string
+}

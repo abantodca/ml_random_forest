@@ -13,8 +13,10 @@
 #   task ops:status                                   estado RDS + ECS + Batch
 #   task ops:up                                       encender idempotente (recrea ALB/NAT si faltan, espera healthy)
 #   task ops:down [COOLDOWN=600] [RELEASE_NET=false]  apagar + liberar ALB/NAT (hibernacion)
-#   task ops:teardown                                 destroy volatiles
-#   task ops:rebuild                                  re-apply + up
+#   task ops:teardown                                 destroy volatiles (+ snapshot final + poda)
+#   task ops:rebuild [SNAPSHOT=<id>|none]             re-apply + RESTORE del RDS + up
+#   task ops:snapshots                                listar snapshots manuales
+#   task ops:snapshot-now                             snapshot manual sin destruir nada
 #   task ops:promote MODEL_NAME=rnd-forest-POP VERSION=3 [MAX_MAPE=20]
 #   task ops:registry-list MODEL_NAME=rnd-forest-POP
 # =============================================================================
@@ -27,6 +29,8 @@ vars:
   # QUEUE_SPOT / QUEUE_OD se inyectan desde el Taskfile raiz (fuente unica de la
   # convencion de nombres, compartida con batch:). Ver includes en Taskfile.yml.
   MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
+  # Cuantos snapshots manuales del RDS conserva el teardown al podar.
+  SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "4"}}'
   # Orden reverso de apply: importante para destroy con dependencias.
   VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd"
 
@@ -254,14 +258,81 @@ tasks:
       # `task rebuild`/deploy lo recrean (enable_nat default true).
       - 'echo ">>> Liberando NAT gateway (enable_nat=false)..."'
       - terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
+      # Retencion: el teardown deja un snapshot nuevo cada vez. Sin poda, cada
+      # ciclo suma storage facturable. Conserva los SNAPSHOT_KEEP mas recientes.
+      - 'echo ">>> Podando snapshots viejos (retencion {{.SNAPSHOT_KEEP}})..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        prune_snapshots "{{.PROJECT}}-mlflow" "{{.SNAPSHOT_KEEP}}"
       - 'echo "OK teardown completo (NAT liberado). Para volver: task ops:rebuild"'
+      - 'echo "     Los datos (MLflow registry + forecasts) viven en el snapshot final; rebuild los restaura."'
 
   rebuild:
-    desc: "Re-apply de modulos volatiles + up"
+    desc: "Re-apply de modulos volatiles + up. RESTAURA el RDS desde el ultimo snapshot (SNAPSHOT=<id> para fijar uno, SNAPSHOT=none para empezar vacio)"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
     cmds:
+      # El RDS se destruyo en el teardown con un snapshot final. Un apply a secas
+      # crearia una instancia VACIA y el snapshot quedaria huerfano (era el bug
+      # historico: teardown -> rebuild perdia registry + forecasts en silencio).
+      # Resolvemos el snapshot y se lo pasamos a terraform como -var.
+      - |
+        set -euo pipefail
+        if aws rds describe-db-instances --db-instance-identifier {{.PROJECT}}-mlflow >/dev/null 2>&1; then
+          echo ">>> RDS {{.PROJECT}}-mlflow ya existe -> no se restaura nada (apply normal)."
+          echo "SNAP=" > /tmp/rebuild-snap.env
+          exit 0
+        fi
+        source tasks/lib/snapshot.sh
+        if [ "{{.SNAPSHOT}}" = "none" ]; then
+          echo ">>> SNAPSHOT=none -> RDS nuevo y VACIO (no se restaura)."
+          SNAP=""
+        elif [ -n "{{.SNAPSHOT}}" ]; then
+          SNAP="{{.SNAPSHOT}}"
+          echo ">>> Snapshot fijado por el usuario: $SNAP"
+        else
+          echo ">>> Resolviendo el snapshot manual mas reciente..."
+          SNAP=$(latest_snapshot "{{.PROJECT}}-mlflow")
+        fi
+        echo "SNAP=$SNAP" > /tmp/rebuild-snap.env
       - 'echo ">>> Apply completo (modulos volatiles se re-crean, resto no-op)..."'
-      - task: ":infra:apply"
+      # No se usa `task :infra:apply` porque hay que inyectar el -var del
+      # snapshot; el resto del comando es identico (ver tasks/infra.yml::apply).
+      - |
+        set -euo pipefail
+        source /tmp/rebuild-snap.env
+        if [ -n "$SNAP" ]; then
+          echo ">>> Restaurando RDS desde $SNAP (~5-10 min extra)..."
+          terraform -chdir={{.TF_DIR}} apply -auto-approve \
+            -var "rds_snapshot_identifier=$SNAP"
+        else
+          terraform -chdir={{.TF_DIR}} apply -auto-approve
+        fi
       - task: up
+
+  snapshots:
+    desc: "Listar los snapshots manuales del RDS (los que puede consumir `rebuild`)"
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/snapshot.sh
+        list_snapshots "{{.PROJECT}}-mlflow"
+
+  snapshot-now:
+    desc: "Tomar un snapshot manual del RDS AHORA (sin destruir nada). Requiere el RDS available"
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        SNAP="{{.PROJECT}}-mlflow-manual-$(date +%Y%m%d%H%M%S)"
+        echo ">>> Creando snapshot $SNAP..."
+        aws rds create-db-snapshot \
+          --db-instance-identifier {{.PROJECT}}-mlflow \
+          --db-snapshot-identifier "$SNAP" >/dev/null
+        echo ">>> Esperando a que quede available (~5 min)..."
+        aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP"
+        echo "OK $SNAP disponible. 'task ops:rebuild' lo tomaria como el mas reciente."
 
   # ═══ MLflow Model Registry ═════════════════════════════════════════════════
 

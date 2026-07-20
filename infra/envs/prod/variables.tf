@@ -106,6 +106,11 @@ variable "rds_final_snapshot_identifier" {
   type        = string
   default     = ""
 }
+variable "rds_snapshot_identifier" {
+  description = "Snapshot desde el que RESTAURAR el RDS al crearlo. Vacio (default) = instancia nueva y vacia. Lo inyecta `task ops:rebuild` con el snapshot final mas reciente; ver tasks/lib/snapshot.sh y GUIA #8.6."
+  type        = string
+  default     = ""
+}
 
 variable "mlflow_image_tag" {
   description = "Tag de la imagen MLflow en ECR (build manual una vez)."

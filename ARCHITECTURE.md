@@ -254,14 +254,37 @@ del bootstrap OIDC (`task infra:bootstrap-oidc`); se activa después con
 **Modelo de costo (dos palancas, sin cambiar la topología):**
 - **`task wake/sleep`** — para pausas cortas: el scheduler escala Fargate a 0 y
   para el RDS, pero **mantiene NAT + ALB** (wake instantáneo). Piso ~$50/mes.
-- **`task teardown`** — para idle largo: destruye los módulos volátiles **y
-  libera el NAT** (`enable_nat=false`, ~$33/mes idle) preservando VPC/storage.
-  Piso ~$3/mes; `task rebuild`/`deploy` lo recrean.
+  Con `RELEASE_NET=true` (default) también libera ALB+NAT → piso ~$4/mes.
+- **`task teardown`** — para idle largo: destruye los módulos volátiles (**el
+  RDS incluido**, con snapshot final) y libera el NAT preservando VPC/storage.
+  Piso ~$1/mes. `task rebuild` lo recrea **restaurando el RDS del snapshot**.
 - **Fargate Spot** en `reports` + `ui` (stateless, ~70% más baratos); MLflow y
   API quedan on-demand a propósito (MLflow es crítico durante runs largos).
 - **RDS** `db.t4g.small` (no `micro`): hostea MLflow + `forecasts`, con
   `deletion_protection` + snapshot final por default (las tareas de teardown lo
   levantan vía AWS CLI para permitir el destroy).
+
+**Ciclo de persistencia teardown → rebuild.** `sleep` *para* el RDS; `teardown`
+lo **destruye**. Como MLflow tracking/registry y la tabla `forecasts` viven en esa
+instancia (invariante #7), el estado sobrevive únicamente vía snapshot:
+
+```mermaid
+graph LR
+    td["task teardown"] -->|"snapshot final<br/>timestamped"| snap[("RDS snapshot<br/>manual")]
+    td -->|"prune_snapshots<br/>retiene 4"| snap
+    snap -->|"latest_snapshot()<br/>-var rds_snapshot_identifier"| rb["task rebuild"]
+    rb --> rds[("RDS restaurado<br/>registry + forecasts")]
+    sec["random_password + secret<br/><i>en la raíz, NO en module.mlflow</i>"] -.credencial válida.-> rds
+```
+
+Dos piezas hacen que esto no se rompa:
+- La **credencial master vive en la raíz** (`infra/envs/prod/rds_secret.tf`), no
+  en `module.mlflow`. Si viviera dentro, el teardown la destruiría y el rebuild
+  generaría una password nueva incompatible con la del snapshot restaurado.
+- `snapshot_identifier` lleva **`ignore_changes`** obligatorio: es `ForceNew`, y
+  sin él cualquier apply posterior que no repita el `-var` recrearía el RDS.
+
+Los artifacts de MLflow (modelos, reports) ya viven en S3 y no dependen de esto.
 
 ---
 

@@ -17,7 +17,7 @@ resource "aws_iam_role_policy" "mlflow_exec_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_secretsmanager_secret.rds.arn
+      Resource = var.rds_password_secret_arn
     }]
   })
 }

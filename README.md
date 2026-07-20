@@ -123,7 +123,7 @@ el RDS de MLflow.
 | Palanca | Qué hace | Ahorro |
 |---|---|---|
 | **`task sleep`** (pausa) | Scheduler escala Fargate a 0 + para RDS **y libera ALB + NAT** (destroy targeted del ALB + `enable_nat=false`; arrastra services/lambdas dependientes, todos stateless). `task wake` recrea todo con un apply completo (~3-5 min; **el DNS del ALB cambia**). Piso **~$4/mes**. Con `RELEASE_NET=false` mantiene la red para wake instantáneo (piso ~$50/mes). Hibernación **>7 días**: RDS auto-arranca (keepstop hibernado) → usar `teardown`. | NAT + ALB + cómputo |
-| **`task teardown`** (idle largo) | Destruye volátiles **y libera el NAT** (`enable_nat=false`, ~$33/mes idle) preservando VPC + storage. `task rebuild` lo recrea. Piso **~$3/mes**. | NAT + ALB + cómputo |
+| **`task teardown`** (idle largo) | Destruye volátiles (**RDS incluido, con snapshot final**) **y libera el NAT** (`enable_nat=false`, ~$33/mes idle) preservando VPC + storage. `task rebuild` lo recrea **restaurando el RDS desde el snapshot**. Piso **~$1/mes**. | NAT + ALB + cómputo + RDS |
 | **Fargate Spot** | `reports` + `ui` corren en `FARGATE_SPOT` (~70% más baratos, stateless). MLflow + API quedan on-demand a propósito (MLflow es crítico durante runs largos de training). | ~70% en reports+ui |
 | **RDS `db.t4g.small`** | No se baja a `micro`: hostea MLflow + `forecasts` y, con 32 variedades + training en paralelo, micro queda justo en RAM/conexiones (ahorro de solo ~$1.4/mes). `deletion_protection` + snapshot final por default; las tareas de teardown levantan la protección vía AWS CLI para permitir el destroy. | — (decisión consciente) |
 

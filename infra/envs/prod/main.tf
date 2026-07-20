@@ -49,6 +49,12 @@ module "mlflow" {
   rds_deletion_protection       = var.rds_deletion_protection
   rds_skip_final_snapshot       = var.rds_skip_final_snapshot
   rds_final_snapshot_identifier = var.rds_final_snapshot_identifier
+  rds_snapshot_identifier       = var.rds_snapshot_identifier
+
+  # Credencial master desde la raiz: sobrevive al teardown de este modulo para
+  # que los snapshots sigan siendo restaurables. Ver rds_secret.tf.
+  rds_password            = random_password.rds.result
+  rds_password_secret_arn = aws_secretsmanager_secret.rds.arn
 }
 
 # -------------------------------------------------------------------------
@@ -190,7 +196,7 @@ module "api" {
   model_registry_prefix   = var.model_registry_prefix
   mlflow_preload_models   = var.api_preload_models
   rds_address             = module.mlflow.rds_address
-  rds_password_secret_arn = module.mlflow.rds_password_secret_arn
+  rds_password_secret_arn = aws_secretsmanager_secret.rds.arn
   artifacts_bucket        = module.storage.artifacts_bucket
   artifacts_bucket_arn    = module.storage.artifacts_bucket_arn
   cors_origins            = "http://${module.mlflow.alb_dns}"

@@ -22,7 +22,6 @@ output "rds_address" {
   description = "Host del RDS (la API monta su DATABASE_URL hacia la base forecasts)."
   value       = aws_db_instance.mlflow.address
 }
-output "rds_password_secret_arn" {
-  description = "ARN del secret con el password del RDS (lo inyecta la API)."
-  value       = aws_secretsmanager_secret.rds.arn
-}
+# NOTA: el output `rds_password_secret_arn` se removio al mover el secret a la
+# raiz (envs/prod/rds_secret.tf). module.api ahora lo toma directamente de
+# aws_secretsmanager_secret.rds.arn, sin pasar por este modulo.

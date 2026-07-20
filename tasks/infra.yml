@@ -73,6 +73,40 @@ tasks:
     cmds:
       - terraform -chdir={{.TF_DIR}} apply {{if .TARGET}}-target={{.TARGET}}{{end}} -auto-approve
 
+  migrate-rds-secret:
+    desc: "MIGRACION (una sola vez): mueve random_password + secret del RDS de module.mlflow a la raiz, sin recrearlos"
+    deps: [_init]
+    cmds:
+      # Contexto: la credencial master se movio a infra/envs/prod/rds_secret.tf
+      # para que sobreviva a `ops:teardown` (que destruye module.mlflow con el
+      # RDS dentro) y los snapshots sigan siendo restaurables.
+      #
+      # `state mv` reetiqueta la direccion en el state SIN tocar AWS. Si en vez
+      # de esto se corriera un apply directo, terraform veria los recursos
+      # viejos como "a destruir" y los nuevos como "a crear" -> password NUEVA
+      # y RDS vivo inaccesible. Por eso esta tarea va ANTES del primer apply.
+      #
+      # Idempotente: si ya se migro, no hay nada en la direccion vieja y sale OK.
+      - |
+        set -euo pipefail
+        moved=0
+        for res in random_password.rds aws_secretsmanager_secret.rds aws_secretsmanager_secret_version.rds; do
+          if terraform -chdir={{.TF_DIR}} state list "module.mlflow.$res" >/dev/null 2>&1 \
+             && [ -n "$(terraform -chdir={{.TF_DIR}} state list "module.mlflow.$res" 2>/dev/null)" ]; then
+            echo ">>> state mv module.mlflow.$res -> $res"
+            terraform -chdir={{.TF_DIR}} state mv "module.mlflow.$res" "$res"
+            moved=$((moved + 1))
+          else
+            echo "  module.mlflow.$res no esta en el state -> skip"
+          fi
+        done
+        if [ "$moved" -eq 0 ]; then
+          echo "OK nada que migrar (ya estaba hecho, o es un stand-up desde cero)."
+        else
+          echo "OK $moved recurso(s) migrados. Verificar con: task infra:plan"
+          echo "    El plan NO debe mostrar cambios en random_password ni en el RDS."
+        fi
+
   destroy:
     desc: "DESTRUCTIVO: terraform destroy completo. Considerar `task ops:teardown` antes (preserva storage)"
     prompt: "Esto borrara TODA la infra de envs/prod (incluso S3 + ECR). Continuar?"

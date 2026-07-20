@@ -2010,8 +2010,8 @@ Cada uno responde a una pregunta concreta:
 | Modo | Pregunta que responde | Tiempo | Costo despues |
 |---|---|---|---|
 | **STAND-UP** | "Es la primera vez, parto de cero" | 2-3 horas | ~$75/mes (operando) |
-| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15 min | ~$3/mes (solo storage; NAT liberado) |
-| **REBUILD** | "Volvi y quiero levantar otra vez sin perder modelos/data" | 20-30 min | ~$75/mes |
+| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15 min | ~$1/mes (storage + snapshot; RDS y NAT liberados) |
+| **REBUILD** | "Volvi y quiero levantar otra vez sin perder modelos/data" | 25-40 min | ~$75/mes |
 | **DESTROY** | "Termine el proyecto / migro a otra cuenta, borra TODO" | 30-45 min | $0/mes |
 
 Diagrama de transiciones:
@@ -2024,7 +2024,7 @@ Diagrama de transiciones:
                                   tear-down  rebuild
                                           │  │
                                           ▼  │
-                                       HIBERNATED (~$3/mes)
+                                       HIBERNATED (~$1/mes)
                                           │
                                        destroy
                                           │
@@ -2103,10 +2103,11 @@ Estos modos son operaciones del runbook (ya tenes el sistema construido),
 no del stand-up inicial. En tu primera lectura no los necesitas — saltalos
 y volve cuando ya estes operando. Estan documentados en Parte 8:
 
-- **#8.5 — TEAR-DOWN**: apagar todo preservando state + datos (~$3/mes
+- **#8.5 — TEAR-DOWN**: apagar todo preservando state + datos (~$1/mes
   hibernado — NAT liberado vía `enable_nat=false` —, reversible con rebuild).
-- **#8.6 — REBUILD**: volver despues de un tear-down (cambia solo el ALB
-  DNS).
+  El RDS se **destruye** dejando un snapshot final; S3 (artifacts) intacto.
+- **#8.6 — REBUILD**: volver despues de un tear-down. **Restaura el RDS desde
+  el ultimo snapshot** (Model Registry + tabla `forecasts`); cambia el ALB DNS.
 - **#8.7 — DESTROY**: eliminar TODO de la cuenta AWS (requiere 3 backups
   manuales previos — solo aplica si ya operaste el sistema y tenes
   modelos en el Registry, datos en RDS y Terraform state poblado).
@@ -2639,6 +2640,12 @@ variable "rds_skip_final_snapshot" {
 
 variable "rds_final_snapshot_identifier" {
   description = "Identificador del snapshot final del RDS (cuando rds_skip_final_snapshot=false). teardown/destroy pasan uno timestamped."
+  type        = string
+  default     = ""
+}
+
+variable "rds_snapshot_identifier" {
+  description = "Snapshot desde el que RESTAURAR el RDS al crearlo. Vacio (default) = instancia nueva y vacia. Lo inyecta `task ops:rebuild` con el snapshot final mas reciente; ver tasks/lib/snapshot.sh y #8.6."
   type        = string
   default     = ""
 }
@@ -4020,14 +4027,66 @@ correspondiente** (cada bloque trae como primera linea un comentario
 preferis un archivo unico, podes concatenar todos en `main.tf` y
 borrar los otros — Terraform los procesa igual.
 
-#### 3.5.2.a — `rds.tf` — RDS Postgres (password + subnet group + instance)
+#### 3.5.2.a — `rds.tf` — RDS Postgres (subnet group + instance)
+
+> ⚠️ **La credencial master NO va en este modulo.** Antes de pegar `rds.tf`,
+> crear `infra/envs/prod/rds_secret.tf` (raiz, fuera de `modules/`):
+>
+> ```hcl
+> # infra/envs/prod/rds_secret.tf
+> # Vive en la RAIZ para SOBREVIVIR a `task ops:teardown`, que destruye
+> # module.mlflow (el RDS incluido). Si la password se destruyera con el modulo,
+> # el rebuild generaria una nueva y no coincidiria con la del snapshot
+> # restaurado -> el backup seria inservible. Ver #8.5.
+> resource "random_password" "rds" {
+>   length  = 32
+>   special = false # algunos chars rompen connection strings -> evitar
+> }
+>
+> resource "aws_secretsmanager_secret" "rds" {
+>   name = "${var.project}-rds-password"
+> }
+>
+> resource "aws_secretsmanager_secret_version" "rds" {
+>   secret_id     = aws_secretsmanager_secret.rds.id
+>   secret_string = random_password.rds.result
+> }
+> ```
+>
+> Y en el bloque `module "mlflow"` de `envs/prod/main.tf`, pasarlas:
+>
+> ```hcl
+>   rds_snapshot_identifier = var.rds_snapshot_identifier
+>   rds_password            = random_password.rds.result
+>   rds_password_secret_arn = aws_secretsmanager_secret.rds.arn
+> ```
+>
+> `module.api` tambien toma `rds_password_secret_arn = aws_secretsmanager_secret.rds.arn`
+> directamente de la raiz (antes venia por un output de `module.mlflow`, ya removido).
+>
+> **Si venis de una version anterior** donde estos 3 recursos vivian dentro de
+> `module.mlflow`, correr **una sola vez** antes del primer apply:
+>
+> ```bash
+> task infra:migrate-rds-secret   # terraform state mv, NO recrea nada
+> task infra:plan                 # debe salir sin cambios en el RDS ni en la password
+> ```
+>
+> Es `state mv` a proposito: un apply directo veria los recursos viejos como "a
+> destruir" y los nuevos como "a crear" → **password nueva y RDS vivo inaccesible**.
 
 > 📂 **Pegar este bloque en**: `infra/modules/mlflow/rds.tf`
 > (incluye el `data "aws_region" "current" {}` — en el repo real ese
 > data source vive aca, no en `main.tf`).
 
 `random_password` + Secrets Manager evita escribir el password en
-tfstate (queda solo en SM). `subnet_group` en private subnets x2
+tfstate (queda solo en SM). **Ambos viven en la raiz**
+(`infra/envs/prod/rds_secret.tf`), **no en este modulo**: `task teardown`
+destruye `module.mlflow` con el RDS dentro, y si la credencial se fuera con el,
+el `rebuild` generaria una password nueva incompatible con la del snapshot
+restaurado. El modulo las recibe como `var.rds_password` y
+`var.rds_password_secret_arn`. Ver #8.5 "Ciclo snapshot -> restore".
+`subnet_group` en private subnets x2
 porque RDS exige 2 AZs aunque sea single-AZ. `skip_final_snapshot` y
 `deletion_protection` ahora son **variables con defaults protectivos**
 (`deletion_protection=true`, `skip_final_snapshot=false` → toma snapshot
@@ -4051,24 +4110,15 @@ levantan la protección automáticamente vía AWS CLI
 > - **Por qué Postgres acá**: MLflow lo usa como **backend store** (metadata de runs: params, metrics, tags). Los artifacts pesados (`.joblib`, `.html`) van a **S3**, no a Postgres — así la DB no crece a TB.
 > - **Por qué Secrets Manager y no env var**: el password queda **rotable** sin re-deploy y no aparece en plano en `terraform.tfstate` (solo el ARN).
 > - **`skip_final_snapshot` + `deletion_protection`**: ahora son variables con defaults protectivos (`deletion_protection=true`, `skip_final_snapshot=false`) → el RDS arranca protegido y toma snapshot final. No hay que tocarlos a mano: `task teardown`/`task destroy` levantan la protección por CLI (`lift_rds_protection`) y pasan un `rds_final_snapshot_identifier` timestamped antes del destroy.
+> - **`snapshot_identifier`** (restore): vacío = instancia nueva y vacía; con valor, el RDS **se crea a partir de ese snapshot**. Lo inyecta `task ops:rebuild` resolviendo el más reciente. Lleva `ignore_changes` **obligatorio** porque es *ForceNew*: sin él, un apply posterior sin el mismo `-var` recrearía la instancia y perdería lo restaurado. Ver #8.6.
 
 ```hcl
 # infra/modules/mlflow/rds.tf
 data "aws_region" "current" {}
 
-resource "random_password" "rds" {
-  length  = 32
-  special = false # algunos chars rompen connection strings -> evitar
-}
-
-resource "aws_secretsmanager_secret" "rds" {
-  name = "${var.project}-rds-password"
-}
-
-resource "aws_secretsmanager_secret_version" "rds" {
-  secret_id     = aws_secretsmanager_secret.rds.id
-  secret_string = random_password.rds.result
-}
+# La credencial master (random_password + secret) NO vive aca a proposito:
+# teardown destruye este modulo y la password debe sobrevivir para poder
+# restaurar los snapshots. Ver infra/envs/prod/rds_secret.tf.
 
 resource "aws_db_subnet_group" "mlflow" {
   name       = "${var.project}-rds-subnets"
@@ -4076,28 +4126,52 @@ resource "aws_db_subnet_group" "mlflow" {
 }
 
 resource "aws_db_instance" "mlflow" {
-  identifier              = "${var.project}-mlflow"
-  engine                  = "postgres"
-  engine_version          = "15"
-  instance_class          = var.rds_instance_class
-  allocated_storage       = var.rds_allocated_storage_gb
-  storage_type            = "gp3"
-  storage_encrypted       = true
-  db_name                 = "mlflow"
-  username                = "mlflow"
-  password                = random_password.rds.result
-  db_subnet_group_name    = aws_db_subnet_group.mlflow.name
-  vpc_security_group_ids  = [var.sg_rds_id]
-  publicly_accessible     = false
-  skip_final_snapshot       = var.rds_skip_final_snapshot       # default false: toma snapshot final
-  final_snapshot_identifier = var.rds_final_snapshot_identifier != "" ? var.rds_final_snapshot_identifier : null
-  apply_immediately         = true
-  deletion_protection       = var.rds_deletion_protection       # default TRUE (protectivo)
+  identifier             = "${var.project}-mlflow"
+  engine                 = "postgres"
+  engine_version         = "15"
+  instance_class         = var.rds_instance_class
+  allocated_storage      = var.rds_allocated_storage_gb
+  storage_type           = "gp3"
+  storage_encrypted      = true
+  db_name                = "mlflow"
+  username               = "mlflow"
+  password               = var.rds_password
+  db_subnet_group_name   = aws_db_subnet_group.mlflow.name
+  vpc_security_group_ids = [var.sg_rds_id]
+  publicly_accessible    = false
+  apply_immediately      = true
+
+  # Proteccion de datos (default true / snapshot final). Las tareas de
+  # destroy/teardown levantan deletion_protection via AWS CLI antes del destroy.
+  deletion_protection       = var.rds_deletion_protection
+  skip_final_snapshot       = var.rds_skip_final_snapshot
+  final_snapshot_identifier = var.rds_skip_final_snapshot ? null : (var.rds_final_snapshot_identifier != "" ? var.rds_final_snapshot_identifier : "${var.project}-mlflow-final")
+
+  # Restore-from-snapshot: vacio (default) = instancia NUEVA y VACIA. Con valor,
+  # la instancia se crea a partir de ese snapshot. Lo inyecta `task ops:rebuild`
+  # resolviendo el snapshot final mas reciente (tasks/lib/snapshot.sh), cerrando
+  # el ciclo teardown -> snapshot -> rebuild. Ver #8.6.
+  #
+  # Al restaurar, AWS conserva db_name/username/password DEL SNAPSHOT y los
+  # argumentos de arriba se ignoran; por eso la credencial master vive en la
+  # raiz (infra/envs/prod/rds_secret.tf) y sigue siendo la correcta.
+  snapshot_identifier = var.rds_snapshot_identifier != "" ? var.rds_snapshot_identifier : null
+
   backup_retention_period = 7
   backup_window           = "06:00-07:00"
   maintenance_window      = "Mon:07:00-Mon:08:00"
 
   tags = { Name = "${var.project}-mlflow" }
+
+  # OBLIGATORIO, no cosmetico: snapshot_identifier es ForceNew. Sin este
+  # ignore_changes, cualquier apply posterior que no repita el mismo -var
+  # (p.ej. el `terraform apply` completo que hace `ops:up` cuando el ALB no
+  # existe, tasks/ops.yml) veria "" contra el valor en state y DESTRUIRIA Y
+  # RECREARIA el RDS, perdiendo todo lo restaurado. El snapshot solo debe
+  # influir en la creacion inicial de la instancia.
+  lifecycle {
+    ignore_changes = [snapshot_identifier]
+  }
 }
 ```
 
@@ -4272,7 +4346,7 @@ resource "aws_iam_role_policy" "mlflow_exec_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_secretsmanager_secret.rds.arn
+      Resource = var.rds_password_secret_arn # el secret vive en la raiz
     }]
   })
 }
@@ -4382,7 +4456,7 @@ resource "aws_ecs_task_definition" "mlflow" {
       ]
       secrets = [{
         name      = "RDS_PASSWORD"
-        valueFrom = aws_secretsmanager_secret.rds.arn
+        valueFrom = var.rds_password_secret_arn # el secret vive en la raiz
       }]
       environment = [
         { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.region }
@@ -4468,10 +4542,9 @@ output "rds_address" {
   description = "Host del RDS (la API monta su DATABASE_URL hacia la base forecasts)."
   value       = aws_db_instance.mlflow.address
 }
-output "rds_password_secret_arn" {
-  description = "ARN del secret con el password del RDS (lo inyecta la API)."
-  value       = aws_secretsmanager_secret.rds.arn
-}
+# NOTA: el output `rds_password_secret_arn` se removio al mover el secret a la
+# raiz (envs/prod/rds_secret.tf). module.api ahora lo toma directamente de
+# aws_secretsmanager_secret.rds.arn, sin pasar por este modulo.
 ```
 
 > **En consola AWS veras**:
@@ -8422,7 +8495,7 @@ tasks:
 
 - `ops:up` es **idempotente**: pre-check `/health` y solo invoca `scheduler.start` si esta DOWN. Lo usan tanto el operador manual como el flujo CI auto-train (el `wake.sh` escribe el estado previo a `/tmp/wake-status` para que el workflow decida si tiene que apagar al final).
 - `ops:down` con `COOLDOWN=N` (default 0) cubre el "down ahora" manual y el "espera N seg y apaga" del CI post-train con una sola task.
-- `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$3/mes (solo storage), sin tener que destruir toda la red.
+- `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$1/mes (storage + snapshots del RDS), sin tener que destruir toda la red.
 - `ops:promote` delega en `scripts/promote_model.py` (Python con `MlflowClient`) — 3 gates: MAPE absoluto, A/B contra Production actual, transition con `archive_existing_versions=True`.
 
 ### 4.1.7 Helpers `tasks/lib/*.sh`
@@ -10177,7 +10250,7 @@ Trigger: **solo `workflow_dispatch`**.
 
 | Modo | Que destruye | Que preserva | Reversible con |
 |---|---|---|---|
-| **TEAR-DOWN** | Modulos volatiles (mlflow, reports, batch, lambdas, monitoring, scheduler, cicd, consumer_iam) + libera el NAT (`enable_nat=false`) | S3 + ECR + network (VPC/subnets/SGs, sin NAT) + tfstate + OIDC | `task rebuild` (~20 min, modelos intactos). Costo restante: ~$3/mes (S3). |
+| **TEAR-DOWN** | Modulos volatiles (mlflow, reports, batch, lambdas, monitoring, scheduler, cicd, consumer_iam) + libera el NAT (`enable_nat=false`) | S3 + ECR + network (VPC/subnets/SGs, sin NAT) + tfstate + OIDC | `task rebuild` (~25-40 min: restaura el RDS del snapshot final; modelos intactos en S3). Costo restante: ~$1/mes. |
 | **DESTROY** | TODOS los modulos administrados (incluye storage). Vacia buckets versionados + purga ECR antes del `terraform destroy`. | tfstate bucket + OIDC provider | Re-crear via `task deploy`. Costo: $0/mes. |
 | **NUKE** | DESTROY + tfstate bucket + OIDC provider. Cuenta limpia. | Nada | Re-bootstrap desde cero (Parte 2). |
 
@@ -10209,7 +10282,8 @@ name: Destroy
 # Tres modos via input `modo`:
 #   TEAR-DOWN -> destroy volatiles + libera NAT (enable_nat=false). Preserva
 #                S3 + ECR + network (sin NAT) + tfstate + OIDC.
-#                Reversible con `task rebuild`. Costo restante: ~$3/mes (S3).
+#                Reversible con `task rebuild` (restaura el RDS del snapshot).
+#                Costo restante: ~$1/mes (S3 + snapshots).
 #   DESTROY   -> terraform destroy de TODOS los modulos (incluye storage). Vacia
 #                buckets versionados + purga ECR antes. Preserva tfstate + OIDC.
 #   NUKE      -> DESTROY + borra tfstate bucket + OIDC. Cuenta limpia.
@@ -10973,14 +11047,18 @@ gasto, evento de costo inesperado, pausar el proyecto.
 **Que SE APAGA / BORRA temporalmente**:
 
 - ECS Fargate services (MLflow + Reports): `desired_count = 0`
-- RDS instance: **stopped** (snapshot automatico antes; se reactiva al
-  arrancar)
+- RDS instance: **DESTRUIDA** (es parte de `module.mlflow`, uno de los
+  VOLATILE_MODULES). Antes del destroy se toma un **snapshot final manual
+  timestamped** (`<project>-mlflow-final-YYYYMMDDHHMMSS`), y `task rebuild`
+  **restaura desde ese snapshot** para recuperar Model Registry + `forecasts`.
+  Ver "Ciclo snapshot -> restore" mas abajo.
+  (Quien solo *para* el RDS es `task sleep`, no el teardown.)
 - Batch compute environments: `desired_vcpus = 0` (no hay EC2 corriendo)
 - ALB + listener: borrados (se recrean en rebuild — el DNS cambia)
 - NAT Gateway + EIP: **liberados** vía `enable_nat=false` (~$33/mes ahorro), sin destruir el resto de la red
 - Subnets/VPC/SGs: se preservan (el toggle `enable_nat` baja solo el NAT, no `module.network` entero)
 
-**Costo despues del tear-down**: ~$3/mes (solo S3). El tear-down preserva `module.network` (VPC/subnets/SGs) pero **libera el NAT** vía `enable_nat=false` (`terraform apply -target=module.network -var enable_nat=false`), eliminando el ~$33/mes idle. `task rebuild`/`deploy` lo recrean.
+**Costo despues del tear-down**: ~$1/mes (S3 + ECR + los snapshots retenidos; ver matriz #9.3). El tear-down preserva `module.network` (VPC/subnets/SGs) pero **libera el NAT** vía `enable_nat=false` (`terraform apply -target=module.network -var enable_nat=false`), eliminando el ~$33/mes idle. `task rebuild`/`deploy` lo recrean. Al destruirse el RDS tambien desaparece el storage gp3 (~$2.30/mes) y en su lugar se paga solo el snapshot, facturado sobre datos **usados** (no sobre los 20 GB asignados): centavos para esta base.
 
 ### Comando `task teardown`
 
@@ -10992,23 +11070,68 @@ task teardown
 #     ml-training-scheduler (action=stop) para apagar RDS + Fargate.
 #  2. Loop `terraform destroy -target=$mod` sobre los modulos VOLATILES, en orden:
 #     scheduler -> lambdas -> monitoring -> batch -> reports -> api -> ui -> mlflow -> cicd -> consumer_iam
-#  3. Antes (o despues) levanta la proteccion del RDS via AWS CLI
+#  3. Antes del loop levanta la proteccion del RDS via AWS CLI
 #     (lift_rds_protection en tasks/lib/nuke.sh) y pasa rds_final_snapshot_identifier timestamped.
 #  4. `terraform apply -target=module.network -var enable_nat=false` -> LIBERA el NAT (~$33/mes).
+#  5. prune_snapshots (tasks/lib/snapshot.sh) borra los snapshots manuales mas
+#     viejos y conserva los SNAPSHOT_KEEP ultimos (default 4).
 #  storage es PERMANENTE: NO se destruye. network se preserva pero con el NAT liberado.
 ```
 
-### Periodo de gracia de RDS
+### Ciclo snapshot -> restore
 
-RDS auto-arranca despues de **7 dias** de estar stopped (limitacion AWS).
-Si vas a estar fuera mas de 7 dias, dos opciones:
+El teardown destruye el RDS, y ahi viven **MLflow tracking + Model Registry** y la
+tabla **`forecasts`** de la API (misma instancia, bases distintas). El unico
+puente entre un teardown y el rebuild siguiente es el snapshot:
 
-- **Opcion A (recomendada)**: el scheduler Lambda `ml-training-rds-keepstop`
-  (Parte 3.11) detecta que RDS arranco solo y lo vuelve a parar
-  automaticamente. Cron: cada 6h chequea state, si RUNNING y fuera de
-  ventana lo para.
-- **Opcion B**: snapshot manual + delete instance. Para rebuild, restore
-  from snapshot (~10 min). Solo si vas a estar fuera 1+ mes.
+```
+task teardown ──► snapshot final timestamped ──► (poda: retiene 4)
+                            │
+task rebuild  ◄─────────────┘  latest_snapshot() lo resuelve y lo pasa como
+                               -var rds_snapshot_identifier=<id>
+```
+
+Dos detalles de implementacion que **no son opcionales**:
+
+1. **La credencial master vive en la raiz**, `infra/envs/prod/rds_secret.tf`, no
+   dentro de `module.mlflow`. Si viviera dentro, el teardown la destruiria junto
+   con el modulo y el rebuild generaria una password NUEVA — que no coincide con
+   la del snapshot restaurado (AWS conserva la credencial del snapshot). MLflow y
+   la API no autenticarian y el backup seria inservible.
+2. **`snapshot_identifier` lleva `lifecycle { ignore_changes }`** en
+   `modules/mlflow/rds.tf`. El argumento es *ForceNew*: sin eso, cualquier apply
+   posterior que no repita el mismo `-var` (por ejemplo el apply completo que
+   hace `ops:up` cuando el ALB no existe) veria `""` contra el valor del state y
+   **destruiria y recrearia el RDS**, perdiendo lo restaurado.
+
+Los **artifacts** de MLflow (modelos serializados, reportes HTML) ya viven en S3
+y no dependen de este ciclo: sobreviven a teardown y destroy por igual.
+
+Tareas de apoyo:
+
+```bash
+task snapshots            # listar los snapshots manuales restaurables
+task ops:snapshot-now     # snapshot manual sin destruir nada (RDS debe estar available)
+```
+
+### Periodo de gracia de RDS — por que el teardown lo evita
+
+> Esta limitacion aplica a `task sleep` (que **para** el RDS), no al teardown
+> (que lo **destruye**). Se documenta aca porque es la razon principal para
+> preferir teardown en idle largo.
+
+RDS auto-arranca despues de **7 dias** de estar stopped (limitacion AWS). Si la
+instancia arranca sola y nadie la vuelve a parar, se factura completa sin que
+nadie la use. Opciones:
+
+- **Teardown (recomendada para 1+ semana)**: no hay instancia que pueda
+  auto-arrancar. El estado queda en el snapshot final y `task rebuild` lo
+  restaura. Es el flujo automatizado descrito arriba.
+- **Lambda `ml-training-rds-keepstop`** (Parte 3.11): detecta que el RDS
+  arranco solo y lo vuelve a parar (cron cada 6h). Sirve mientras el stack esta
+  meramente dormido, pero **se destruye con el teardown** (es parte de
+  `module.lambdas`), asi que no protege una hibernacion larga hecha con `sleep`
+  + liberacion de red. `tasks/ops.yml::down` lo advierte explicitamente.
 
 ## 8.6 REBUILD — volver despues de tear-down
 
@@ -11021,17 +11144,32 @@ de MLflow para mirar runs viejos.
 ### Comando `task rebuild`
 
 ```bash
-task rebuild
+task rebuild                       # restaura desde el snapshot mas reciente (default)
+task rebuild SNAPSHOT=<id>         # restaura desde uno especifico (ver `task snapshots`)
+task rebuild SNAPSHOT=none         # arranca con un RDS VACIO (descarta el historico)
 # Pasos internos (tasks/ops.yml :: rebuild):
-#  1. terraform apply COMPLETO (sin -target): los modulos volatiles se re-crean,
-#     el resto es no-op.
-#  2. ops:up -> invoca la Lambda scheduler (action=start): arranca RDS (~5 min
+#  1. Resuelve el snapshot a restaurar:
+#     - si el RDS YA existe -> no restaura nada (apply normal, idempotente).
+#     - SNAPSHOT=none -> instancia vacia.
+#     - SNAPSHOT=<id> -> ese.
+#     - por defecto -> latest_snapshot() = el manual mas reciente `available`.
+#       Si no hay ninguno (stand-up desde cero) sigue con instancia vacia.
+#  2. terraform apply COMPLETO (sin -target) con -var rds_snapshot_identifier=<id>:
+#     los modulos volatiles se re-crean, el resto es no-op.
+#  3. ops:up -> invoca la Lambda scheduler (action=start): arranca RDS (~5 min
 #     cold start) + servicios Fargate de forma secuencial y espera ALB 200.
 #  El ALB DNS nuevo cambia respecto al stand-up original.
 ```
 
-**Tiempo**: 20-30 min, dominado por RDS cold start (5 min) + Fargate
-task launch (~3 min) + ALB target registration (~2 min).
+> [!IMPORTANT]
+> El rebuild restaura **Model Registry + tabla `forecasts`** desde el snapshot
+> final que dejo el teardown. Sin ese restore (comportamiento anterior a esta
+> version) el apply creaba un RDS **vacio** y el historico se perdia en silencio.
+> Si el resultado no es el esperado, `task snapshots` lista los candidatos y
+> `task rebuild SNAPSHOT=<id>` permite elegir otro.
+
+**Tiempo**: 25-40 min, dominado por el restore del snapshot (~5-10 min) + RDS
+cold start (5 min) + Fargate task launch (~3 min) + ALB target registration (~2 min).
 
 **Lo unico que cambia respecto al stand-up original**: el DNS del ALB.
 Si tenías bookmark, actualizalo. (Si agregaste un dominio (TLS, hardening)
@@ -11047,6 +11185,14 @@ nuevo ALB.)
 > **dos veces** (dos prompts y/n de Task). Antes de correrlo: hacer los 3
 > backups de la sub-sección siguiente (export Registry → JSON, snapshot
 > manual RDS, export tfstate) — sin ellos no hay forma de recuperar.
+>
+> **Ojo con los snapshots**: `task destroy` hace `purge_secret` del
+> `<project>-rds-password`. Los snapshots del RDS **sobreviven en la cuenta**,
+> pero su credencial master ya no está en Secrets Manager. Si pensás restaurar
+> alguno más adelante, **guardá el password aparte antes de destruir**:
+> `aws secretsmanager get-secret-value --secret-id <project>-rds-password --query SecretString --output text`.
+> (Este problema no aplica a `teardown`/`rebuild`: ahí el secret vive en la raíz
+> y no se toca.)
 
 Cuando lo uso: cierre del proyecto, migracion a otra cuenta, hard reset
 para empezar de cero.
@@ -11089,6 +11235,7 @@ aws s3 cp artifacts/model-registry-export.json \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/"
 
 # (2) Snapshot manual de RDS (queda independiente del instance)
+#     Equivalente automatizado: `task ops:snapshot-now` (crea + espera available).
 aws rds create-db-snapshot \
   --db-instance-identifier ml-training-mlflow \
   --db-snapshot-identifier "ml-training-mlflow-final-$(date +%Y-%m-%d)"
@@ -11259,8 +11406,9 @@ documentados en secciones 8.5 a 8.7).
 |---|---|---|---|
 | S3 (todos los buckets, ~5 GB) | $0.12 | $0.12 | $0 |
 | ECR (5 repos, ~3.5 GB) | $0.35 | $0.35 | $0 |
-| RDS db.t4g.small (L-V 08-12 PET ≈ 80h/mes) | $2.56 | $0 (stopped) | $0 |
-| RDS allocated storage (20 GB gp3) | $2.30 | $2.30 (storage solo) | $0 |
+| RDS db.t4g.small (L-V 08-12 PET ≈ 80h/mes) | $2.56 | $0 (destruido) | $0 |
+| RDS allocated storage (20 GB gp3) | $2.30 | $0 (instancia destruida) | $0 |
+| RDS snapshots manuales (retencion 4, datos usados ~1-2 GB) | $0.10 | $0.20 | $0 |
 | ECS Fargate MLflow (2 vCPU, 4 GB, 80h/mes) | $7.90 | $0 | $0 |
 | ECS Fargate Reports (0.5 vCPU, 1 GB, 80h/mes) | $1.97 | $0 | $0 |
 | ECS Fargate API (1 vCPU, 2 GB, 80h/mes) | $3.95 | $0 | $0 |
@@ -11271,7 +11419,7 @@ documentados en secciones 8.5 a 8.7).
 | Lambdas (negligible) | $0.10 | $0.10 | $0 |
 | EventBridge / SNS / CloudWatch | $0.30 | $0.30 | $0 |
 | Data transfer (NAT egress + ALB) | $5 | $0 | $0 |
-| **Total mensual** | **~$75** | **~$3** | **$0** |
+| **Total mensual** | **~$75** | **~$1** | **$0** |
 
 > La suma directa de esta tabla da ~$72; los ~$75 reales (que matchean
 > sección 9.1) incluyen items consolidados aca: ALB LCU + CloudWatch Custom

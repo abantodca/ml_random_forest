@@ -105,8 +105,9 @@ tasks:
           ║  AWS · DÍA A DÍA (ya desplegado)        detalle: infra:/ecr:/batch:/ops:  ║
           ╠═══════════════════════════════════════════════════════════════════════════╣
           ║  task wake · sleep      encender · apagar (pausa corta, mantiene NAT)     ║
-          ║  task teardown          apagar largo: libera NAT (~$3/mes idle)           ║
-          ║  task rebuild           volver tras teardown (recrea NAT + servicios)     ║
+          ║  task teardown          apagar largo: destruye RDS con snapshot (~$1/mes) ║
+          ║  task rebuild           volver tras teardown (restaura el RDS del snapshot)║
+          ║  task snapshots         listar snapshots del RDS restaurables             ║
           ║  task status · urls     estado del cluster · URLs publicas del ALB        ║
           ║  task smoke             deploy + 1 job Batch POP de humo                  ║
           ║  task batch:train VARIETIES=POP            entrenamiento en Batch (bg)    ║
@@ -345,14 +346,19 @@ tasks:
       - task: infra:urls
 
   teardown:
-    desc: "AWS: apagado LARGO. sleep + destroy de volatiles, LIBERA el NAT (ahorra ~$3/mes). Conserva storage (S3) + state. Volver: `rebuild`"
+    desc: "AWS: apagado LARGO. sleep + destroy de volatiles (RDS incluido, con snapshot final), LIBERA el NAT. Piso ~$1/mes. Volver: `rebuild`"
     cmds:
       - task: ops:teardown
 
   rebuild:
-    desc: "AWS: volver tras un `teardown`. Recrea NAT + volatiles (re-apply) y enciende. (Si solo estaba dormido con sleep, usa `wake`)"
+    desc: "AWS: volver tras un `teardown`. Recrea NAT + volatiles y RESTAURA el RDS desde el ultimo snapshot. Vars: SNAPSHOT=<id>|none. (Si solo estaba dormido con sleep, usa `wake`)"
     cmds:
       - task: ops:rebuild
+
+  snapshots:
+    desc: "AWS: listar los snapshots manuales del RDS (los candidatos que consume `rebuild`)"
+    cmds:
+      - task: ops:snapshots
 
   destroy:
     desc: "AWS DESTRUCTIVO: drena Batch, vacia S3/ECR, terraform destroy total"
