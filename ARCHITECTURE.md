@@ -286,6 +286,13 @@ Dos piezas hacen que esto no se rompa:
 
 Los artifacts de MLflow (modelos, reports) ya viven en S3 y no dependen de esto.
 
+> **En el primer stand-up no hay snapshot todavía** — el `task deploy` de una
+> cuenta virgen crea el RDS vacío, y `task snapshots` sale vacío sin que sea un
+> error. El primer snapshot lo produce el primer `task teardown`; recién desde
+> ahí el `rebuild` tiene algo que restaurar. `latest_snapshot()` devuelve vacío
+> en ese caso y el apply corre sin `-var`, así que las mismas tareas sirven para
+> el estreno y para los ciclos siguientes. Detalle en `GUIA #8.5`.
+
 ---
 
 ## 7. Invariantes que la arquitectura DEBE preservar

@@ -11091,6 +11091,26 @@ task rebuild  ◄─────────────┘  latest_snapshot() l
                                -var rds_snapshot_identifier=<id>
 ```
 
+> [!NOTE]
+> **La primera vez NO hay backups, y es lo esperado.** En una cuenta virgen el
+> `task deploy` inicial crea el RDS **vacio**: todavia no existe ningun snapshot
+> porque nunca hubo un teardown. `task snapshots` sale vacio y eso no es un error.
+>
+> El primer snapshot nace en tu **primer `task teardown`**. Recien a partir de
+> ahi el ciclo tiene algo que restaurar, y `task rebuild` empieza a recuperar
+> Model Registry + `forecasts`. Resumen:
+>
+> | Momento | Snapshots en la cuenta | Que hace el rebuild/deploy |
+> |---|---|---|
+> | 1er `task deploy` (cuenta virgen) | 0 | RDS **vacio** (no hay nada que restaurar) |
+> | 1er `task teardown` | 1 | — |
+> | `task rebuild` siguiente | 1 | **restaura** desde ese snapshot |
+> | teardown/rebuild sucesivos | hasta 4 (poda) | restaura el mas reciente |
+>
+> `latest_snapshot()` maneja el caso vacio devolviendo string vacio (no falla):
+> el apply corre sin `-var` y crea la instancia limpia. Por eso las mismas tareas
+> sirven para el primer stand-up y para los ciclos posteriores.
+
 Dos detalles de implementacion que **no son opcionales**:
 
 1. **La credencial master vive en la raiz**, `infra/envs/prod/rds_secret.tf`, no
@@ -11167,6 +11187,10 @@ task rebuild SNAPSHOT=none         # arranca con un RDS VACIO (descarta el histo
 > version) el apply creaba un RDS **vacio** y el historico se perdia en silencio.
 > Si el resultado no es el esperado, `task snapshots` lista los candidatos y
 > `task rebuild SNAPSHOT=<id>` permite elegir otro.
+>
+> **Ojo si es tu primera vez**: esta seccion presupone que ya hubo un teardown.
+> En una cuenta virgen no hay snapshots y el flujo correcto es `task deploy`
+> (#1.1), no `rebuild` — ver la nota "la primera vez NO hay backups" en #8.5.
 
 **Tiempo**: 25-40 min, dominado por el restore del snapshot (~5-10 min) + RDS
 cold start (5 min) + Fargate task launch (~3 min) + ALB target registration (~2 min).
