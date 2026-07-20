@@ -73,6 +73,85 @@ tasks:
     cmds:
       - terraform -chdir={{.TF_DIR}} apply {{if .TARGET}}-target={{.TARGET}}{{end}} -auto-approve
 
+  verify-clean:
+    desc: "Auditar que NO quede nada del proyecto en AWS tras un destroy/nuke. Var: PURGE=true borra los residuos borrables"
+    silent: true
+    vars:
+      PURGE: '{{.PURGE | default "false"}}'
+    cmds:
+      # Post-destroy checklist. `terraform destroy` deja algunos residuos que NO
+      # estan en el state y por lo tanto nadie borra:
+      #   - task definitions ECS: quedan como INACTIVE para siempre (gratis, pero
+      #     siguen listadas). Se purgan con `delete-task-definitions` (PLURAL; el
+      #     singular no existe y falla silencioso si se ignora el stderr).
+      #   - snapshots RDS finales: SOBREVIVEN al destroy a proposito. Ojo: `nuke`
+      #     purga el secret del master password -> quedan irrestaurables.
+      #   - huerfanos de un destroy a medias: target groups y DB subnet groups
+      #     con nombre fijo, que rompen el siguiente deploy con "already exists".
+      - |
+        set -uo pipefail
+        P='{{.PROJECT}}'
+        fail=0
+        chk() { # chk <label> <count>
+          if [ "$2" = "0" ] || [ -z "$2" ] || [ "$2" = "None" ]; then
+            printf "  OK    %-32s 0\n" "$1"
+          else
+            printf "  QUEDA %-32s %s\n" "$1" "$2"; fail=$((fail+1))
+          fi
+        }
+        echo ">>> Auditoria post-destroy de '$P':"
+        # grep -c ya imprime 0 cuando no hay match, pero sale con exit 1: un
+        # `|| echo 0` aqui concatenaria un SEGUNDO cero ("0\n0") y falsearia el check.
+        chk "buckets S3"        "$(aws s3 ls 2>/dev/null | grep -c "$P"; true)"
+        chk "repos ECR"         "$(aws ecr describe-repositories --query "length(repositories[?starts_with(repositoryName,'$P')])" --output text 2>/dev/null)"
+        chk "RDS instances"     "$(aws rds describe-db-instances --query "length(DBInstances[?starts_with(DBInstanceIdentifier,'$P')])" --output text 2>/dev/null)"
+        chk "RDS subnet groups" "$(aws rds describe-db-subnet-groups --query "length(DBSubnetGroups[?starts_with(DBSubnetGroupName,'$P')])" --output text 2>/dev/null)"
+        chk "ECS clusters"      "$(aws ecs list-clusters --query "length(clusterArns[?contains(@,'$P')])" --output text 2>/dev/null)"
+        chk "ECS taskdefs INACTIVE" "$(aws ecs list-task-definitions --status INACTIVE --query "length(taskDefinitionArns[?contains(@,'$P')])" --output text 2>/dev/null)"
+        chk "ALBs"              "$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?starts_with(LoadBalancerName,'$P')])" --output text 2>/dev/null)"
+        chk "target groups"     "$(aws elbv2 describe-target-groups --query "length(TargetGroups[?starts_with(TargetGroupName,'$P')])" --output text 2>/dev/null)"
+        chk "VPCs"              "$(aws ec2 describe-vpcs --query "length(Vpcs[?Tags[?Value=='$P-vpc']])" --output text 2>/dev/null)"
+        chk "NAT gateways"      "$(aws ec2 describe-nat-gateways --filter Name=state,Values=available,pending --query 'length(NatGateways)' --output text 2>/dev/null)"
+        chk "security groups"   "$(aws ec2 describe-security-groups --query "length(SecurityGroups[?starts_with(GroupName,'$P')])" --output text 2>/dev/null)"
+        chk "lambdas"           "$(aws lambda list-functions --query "length(Functions[?starts_with(FunctionName,'$P')])" --output text 2>/dev/null)"
+        chk "batch job queues"  "$(aws batch describe-job-queues --query "length(jobQueues[?starts_with(jobQueueName,'$P')])" --output text 2>/dev/null)"
+        chk "IAM roles"         "$(aws iam list-roles --query "length(Roles[?starts_with(RoleName,'$P')])" --output text 2>/dev/null)"
+        chk "log groups"        "$(aws logs describe-log-groups --query "length(logGroups[?contains(logGroupName,'$P')])" --output text 2>/dev/null)"
+        chk "EventBridge rules" "$(aws events list-rules --query "length(Rules[?starts_with(Name,'$P')])" --output text 2>/dev/null)"
+        chk "SNS topics"        "$(aws sns list-topics --query "length(Topics[?contains(TopicArn,'$P')])" --output text 2>/dev/null)"
+        chk "CW alarms"         "$(aws cloudwatch describe-alarms --alarm-name-prefix "$P" --query 'length(MetricAlarms)' --output text 2>/dev/null)"
+        chk "secrets"           "$(aws secretsmanager list-secrets --include-planned-deletion --filter Key=name,Values="$P" --query 'length(SecretList)' --output text 2>/dev/null)"
+        chk "snapshots RDS"     "$(aws rds describe-db-snapshots --snapshot-type manual --query "length(DBSnapshots[?starts_with(DBSnapshotIdentifier,'$P')])" --output text 2>/dev/null)"
+        echo ""
+        if [ "$fail" -eq 0 ]; then
+          echo "OK cuenta limpia: no queda nada de '$P'."
+          exit 0
+        fi
+        echo "AVISO $fail categoria(s) con residuos."
+        if [ '{{.PURGE}}' != "true" ]; then
+          echo "      Reintentar con PURGE=true para borrar los residuos borrables"
+          echo "      (task definitions INACTIVE, snapshots, target groups y subnet groups sueltos)."
+          exit 1
+        fi
+        echo ">>> PURGE=true -> borrando residuos..."
+        # task definitions: delete-task-definitions es PLURAL y acepta <=10 por llamada
+        while :; do
+          arns=$(aws ecs list-task-definitions --status INACTIVE --query "taskDefinitionArns[?contains(@,'$P')]" --output text 2>/dev/null | tr '\t' '\n' | grep . | head -10)
+          [ -z "$arns" ] && break
+          aws ecs delete-task-definitions --task-definitions $arns >/dev/null 2>&1 || break
+          echo "  purgadas 10 task definitions INACTIVE"
+        done
+        for tg in $(aws elbv2 describe-target-groups --query "TargetGroups[?starts_with(TargetGroupName,'$P') && length(LoadBalancerArns)==\`0\`].TargetGroupArn" --output text 2>/dev/null); do
+          aws elbv2 delete-target-group --target-group-arn "$tg" && echo "  borrado target group ${tg##*/}"
+        done
+        for sg in $(aws rds describe-db-subnet-groups --query "DBSubnetGroups[?starts_with(DBSubnetGroupName,'$P')].DBSubnetGroupName" --output text 2>/dev/null); do
+          aws rds delete-db-subnet-group --db-subnet-group-name "$sg" && echo "  borrado db subnet group $sg"
+        done
+        for sn in $(aws rds describe-db-snapshots --snapshot-type manual --query "DBSnapshots[?starts_with(DBSnapshotIdentifier,'$P')].DBSnapshotIdentifier" --output text 2>/dev/null); do
+          aws rds delete-db-snapshot --db-snapshot-identifier "$sn" >/dev/null && echo "  borrado snapshot $sn"
+        done
+        echo "OK purga completa. Re-auditar: task infra:verify-clean"
+
   migrate-rds-secret:
     desc: "MIGRACION (una sola vez): mueve random_password + secret del RDS de module.mlflow a la raiz, sin recrearlos"
     deps: [_init]

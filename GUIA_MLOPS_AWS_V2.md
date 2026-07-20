@@ -2108,6 +2108,8 @@ y volve cuando ya estes operando. Estan documentados en Parte 8:
   El RDS se **destruye** dejando un snapshot final; S3 (artifacts) intacto.
 - **#8.6 — REBUILD**: volver despues de un tear-down. **Restaura el RDS desde
   el ultimo snapshot** (Model Registry + tabla `forecasts`); cambia el ALB DNS.
+- **#8.8 — VERIFICAR LIMPIO**: `task infra:verify-clean` tras cualquier
+  destroy/nuke — `terraform destroy` deja residuos fuera del state.
 - **#8.7 — DESTROY**: eliminar TODO de la cuenta AWS (requiere 3 backups
   manuales previos — solo aplica si ya operaste el sistema y tenes
   modelos en el Registry, datos en RDS y Terraform state poblado).
@@ -11318,6 +11320,42 @@ task destroy
 
 **Tiempo**: 30-45 min, dominado por el vaciado de buckets versionados
 (cada modelo es ~10 MB con N versions).
+
+## 8.8 Verificar que NO quedo nada (post-destroy)
+
+> [!IMPORTANT]
+> `terraform destroy` **no deja la cuenta perfectamente limpia**. Hay residuos
+> que no viven en el state y que por lo tanto nadie borra. Correr **siempre**:
+>
+> ```bash
+> task infra:verify-clean              # audita 20 categorias; exit 1 si queda algo
+> task infra:verify-clean PURGE=true   # ademas borra los residuos borrables
+> ```
+
+Que se queda atras y por que:
+
+| Residuo | Por que sobrevive | Cuesta? |
+|---|---|---|
+| **Task definitions ECS INACTIVE** | `destroy` las *deregistra*, no las borra; quedan listadas para siempre | No, pero ensucian |
+| **Snapshots RDS finales** | Sobreviven **a proposito** (`skip_final_snapshot=false`) | Si, por GB usado |
+| **Target groups / DB subnet groups** | Solo si un destroy fallo a la mitad: nombre fijo, fuera del state | No, pero **rompen el proximo deploy** con `already exists` |
+| **Secrets en pending deletion** | Recovery window de 30 dias | No |
+
+Detalles verificados el **2026-07-20** ejecutando el ciclo completo:
+
+- Borrar task definitions es `aws ecs delete-task-definitions` — **PLURAL**. El
+  singular `delete-task-definition` **no existe**; si se ignora el stderr falla
+  en silencio y parece que funciono. Acepta hasta 10 ARNs por llamada.
+- Tras un `nuke`, los snapshots quedan pero su secret fue purgado -> son
+  **irrestaurables**. Si no vas a volver, borralos (`PURGE=true` lo hace).
+- Un destroy a medias dejo huerfanos `<project>-tg-api`, `<project>-tg-mlflow`
+  y el subnet group `<project>-rds-subnets`; el siguiente `deploy` fallo con
+  `already exists` hasta borrarlos.
+
+> **Ojo al auditar a mano**: `task infra:verify-clean` filtra por el prefijo
+> `{{.PROJECT}}`. Recursos de **otros** proyectos en la misma cuenta (EIPs,
+> instancias EC2, etc.) apareceran en un `aws ec2 describe-*` generico pero **no
+> son de este stack** — comprobar el tag `Project` antes de borrar nada.
 
 ---
 

@@ -121,6 +121,7 @@ tasks:
           ║  task batch:status             jobs activos en las colas                  ║
           ║  task ops:promote MODEL_NAME=… VERSION=N   promover a Production          ║
           ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                   ║
+          ║  task infra:verify-clean   auditar que no quede nada tras un destroy      ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
 
           ╔═══════════════════════════════════════════════════════════════════════════╗
