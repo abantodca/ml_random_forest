@@ -25,7 +25,8 @@
 version: "3"
 
 vars:
-  TF_DIR:       '{{.TF_DIR       | default "infra/envs/prod"}}'
+  # TF_DIR / RDS_ID / BACKUP_MAX_AGE_MIN se inyectan desde el Taskfile raiz
+  # (fuente unica, compartida con infra:). Ver includes en Taskfile.yml.
   SCHEDULER_FN: '{{.SCHEDULER_FN | default (printf "%s-scheduler" .PROJECT)}}'
   # QUEUE_SPOT / QUEUE_OD se inyectan desde el Taskfile raiz (fuente unica de la
   # convencion de nombres, compartida con batch:). Ver includes en Taskfile.yml.
@@ -33,10 +34,6 @@ vars:
   # Cuantos backups del RDS conserva el teardown al podar. Con 2 ciclos por
   # semana, 6 = ~3 semanas de historia.
   SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
-  # Reutilizar un backup mas nuevo que N minutos en vez de crear otro. 0 =
-  # siempre crear uno nuevo. >0 sirve para reintentar un teardown que fallo
-  # despues de respaldar, sin pagar otra vez los ~8 min de espera.
-  BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN | default "0"}}'
   # Orden reverso de apply: importante para destroy con dependencias.
   VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd"
 
@@ -49,7 +46,7 @@ tasks:
     silent: true
     cmds:
       - 'echo "=== RDS ==="'
-      - aws rds describe-db-instances --db-instance-identifier {{.PROJECT}}-mlflow
+      - aws rds describe-db-instances --db-instance-identifier {{.RDS_ID}}
         --query 'DBInstances[0].[DBInstanceStatus,DBInstanceClass,Endpoint.Address]'
         --output table 2>/dev/null || echo "  (RDS no existe o no accesible)"
       - 'echo ""'
@@ -253,7 +250,7 @@ tasks:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        if ensure_backup "{{.PROJECT}}-mlflow" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
+        if ensure_backup "{{.RDS_ID}}" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
           echo "OK backup verificado. El destroy ya no puede perder datos."
         else
           echo "AVISO el RDS no existe -> nada que respaldar; se sigue con el destroy."
@@ -266,7 +263,7 @@ tasks:
         source tasks/lib/nuke.sh
         # module.mlflow incluye el RDS con deletion_protection=true -> levantarla
         # antes del destroy.
-        lift_rds_protection "{{.PROJECT}}-mlflow"
+        lift_rds_protection "{{.RDS_ID}}"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"
           terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve \
@@ -288,8 +285,8 @@ tasks:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        assert_backup_exists "{{.PROJECT}}-mlflow"
-        prune_snapshots "{{.PROJECT}}-mlflow" "{{.SNAPSHOT_KEEP}}"
+        assert_backup_exists "{{.RDS_ID}}"
+        prune_snapshots "{{.RDS_ID}}" "{{.SNAPSHOT_KEEP}}"
       - 'echo "OK teardown completo (NAT liberado). Para volver: task rebuild"'
       - 'echo "     MLflow registry + forecasts viven en el backup; rebuild los restaura."'
       - 'echo "     Los artifacts (modelos, reports) siguen intactos en S3."'
@@ -315,7 +312,7 @@ tasks:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        SNAP=$(resolve_restore_snapshot "{{.PROJECT}}-mlflow" "{{.SNAPSHOT}}")
+        SNAP=$(resolve_restore_snapshot "{{.RDS_ID}}" "{{.SNAPSHOT}}")
         if [ -n "$SNAP" ]; then
           echo ">>> Restaurando RDS desde $SNAP (~5-10 min extra)..."
           terraform -chdir={{.TF_DIR}} apply -auto-approve \
@@ -341,7 +338,7 @@ tasks:
     cmds:
       - |
         source tasks/lib/snapshot.sh
-        list_snapshots "{{.PROJECT}}-mlflow"
+        list_snapshots "{{.RDS_ID}}"
 
   backup-now:
     desc: "Tomar un backup del RDS AHORA (sin destruir nada). Arranca el RDS si esta parado"
@@ -351,7 +348,7 @@ tasks:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        backup_now "{{.PROJECT}}-mlflow" "manual" >/dev/null
+        backup_now "{{.RDS_ID}}" "manual" >/dev/null
 
   verify-backup:
     desc: "Verificar que existe al menos un backup restaurable del RDS (exit 1 si no)"
@@ -360,7 +357,7 @@ tasks:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        assert_backup_exists "{{.PROJECT}}-mlflow"
+        assert_backup_exists "{{.RDS_ID}}"
 
   # ═══ MLflow Model Registry ═════════════════════════════════════════════════
 

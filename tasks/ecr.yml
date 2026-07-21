@@ -41,8 +41,13 @@ tasks:
 
   build:
     desc: "Build + push UNA imagen. Vars: IMG=trainer|mlflow|reports|api|ui (REQ), TAG=<override>"
+    # `enum` (Task >=3.39) valida IMG ANTES de resolver vars y aborta con un
+    # mensaje propio. Reemplaza al centinela ERROR que antes habia que propagar
+    # como quinto branch en cada una de las cadenas de abajo y chequear a mano.
     requires:
-      vars: [IMG]
+      vars:
+        - name: IMG
+          enum: [trainer, mlflow, reports, api, ui]
     deps: [login]
     vars:
       ACCOUNT:
@@ -52,15 +57,19 @@ tasks:
         sh: git rev-parse --short=12 HEAD 2>/dev/null || echo unknown
       BUILD_DATE:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
-      # Tabla IMG -> (image_name, dockerfile, context, default_tag). Cualquier IMG
-      # fuera del set valido cae en el branch ERROR validado abajo.
-      # CONTEXT: api usa contexto=raiz (necesita src/); ui usa contexto=ui/.
-      IMAGE_NAME: '{{if eq .IMG "trainer"}}{{.PROJECT}}{{else if eq .IMG "mlflow"}}{{.PROJECT}}-mlflow{{else if eq .IMG "reports"}}{{.PROJECT}}-reports{{else if eq .IMG "api"}}{{.PROJECT}}-api{{else if eq .IMG "ui"}}{{.PROJECT}}-ui{{else}}ERROR{{end}}'
-      DOCKERFILE: '{{if eq .IMG "trainer"}}Dockerfile{{else if eq .IMG "mlflow"}}docker/mlflow/Dockerfile{{else if eq .IMG "reports"}}docker/reports/Dockerfile{{else if eq .IMG "api"}}api/Dockerfile{{else if eq .IMG "ui"}}ui/Dockerfile{{else}}ERROR{{end}}'
+      # IMG -> (image_name, dockerfile, context, default_tag). Se derivan del
+      # propio IMG en vez de enumerar las 5: solo se listan las EXCEPCIONES a la
+      # convencion, asi agregar una imagen que la respete no toca estas lineas.
+      #   repo:       <project>-<img>            (excepcion: trainer = <project>)
+      #   dockerfile: <img>/Dockerfile           (excepciones: trainer, mlflow, reports)
+      #   context:    raiz                       (excepcion: ui, que no necesita src/)
+      IMAGE_NAME: '{{if eq .IMG "trainer"}}{{.PROJECT}}{{else}}{{.PROJECT}}-{{.IMG}}{{end}}'
+      DOCKERFILE: '{{if eq .IMG "trainer"}}Dockerfile{{else if or (eq .IMG "mlflow") (eq .IMG "reports")}}docker/{{.IMG}}/Dockerfile{{else}}{{.IMG}}/Dockerfile{{end}}'
       CONTEXT: '{{if eq .IMG "ui"}}ui{{else}}.{{end}}'
-      RESOLVED_TAG: '{{if eq .IMG "trainer"}}{{.TAG | default .TAG_TRAINER}}{{else if eq .IMG "mlflow"}}{{.TAG | default .TAG_MLFLOW}}{{else if eq .IMG "reports"}}{{.TAG | default .TAG_REPORTS}}{{else if eq .IMG "api"}}{{.TAG | default .TAG_API}}{{else if eq .IMG "ui"}}{{.TAG | default .TAG_UI}}{{else}}ERROR{{end}}'
+      # El tag default SI es por-imagen (TAG_TRAINER/TAG_MLFLOW/...): son valores
+      # sin convencion comun, y overridables por CLI.
+      RESOLVED_TAG: '{{if eq .IMG "trainer"}}{{.TAG | default .TAG_TRAINER}}{{else if eq .IMG "mlflow"}}{{.TAG | default .TAG_MLFLOW}}{{else if eq .IMG "reports"}}{{.TAG | default .TAG_REPORTS}}{{else if eq .IMG "api"}}{{.TAG | default .TAG_API}}{{else}}{{.TAG | default .TAG_UI}}{{end}}'
     cmds:
-      - 'test "{{.IMAGE_NAME}}" != "ERROR" || { echo "ERROR IMG debe ser trainer|mlflow|reports|api|ui (recibido {{.IMG}})"; exit 1; }'
       - 'echo ">>> Build {{.IMAGE_NAME}}:{{.RESOLVED_TAG}}  (sha-{{.GIT_SHA}})"'
       # BUILD_DATE va como --label (metadata del config final), no como --build-arg:
       # asi no invalida la cache de capas ni vuelve no-reproducible el commit.
@@ -122,6 +131,9 @@ tasks:
     cmds:
       - |
         for spec in "{{.PROJECT}}:{{.TAG_TRAINER}}" "{{.PROJECT}}-mlflow:{{.TAG_MLFLOW}}" "{{.PROJECT}}-reports:{{.TAG_REPORTS}}" "{{.PROJECT}}-api:{{.TAG_API}}" "{{.PROJECT}}-ui:{{.TAG_UI}}"; do
+          # repo/tag: `${spec%:*}` corta en el ULTIMO ':' -> los nombres de repo
+          # no pueden contener ':' (no lo hacen). Misma tabla que `build`, pero
+          # aca hace falta el par (repo, tag_default) de las 5 a la vez.
           repo="${spec%:*}"; tag="${spec##*:}"
           echo "=== $repo ($tag) ==="
           aws ecr list-images --repository-name "$repo" \

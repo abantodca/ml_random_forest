@@ -1,19 +1,29 @@
 # Helpers para destroy/nuke: vaciar buckets versionados, borrar repos ECR,
 # borrar el OIDC provider. Sourceados, no ejecutados.
 
-# empty_bucket <bucket> [delete]
+# empty_bucket <bucket> [delete] [prefix]
 #   Vacia versiones + delete markers. Si delete=true, ademas borra el bucket.
+#   Con prefix, acota el borrado a ese prefijo (y entonces delete=true no aplica:
+#   un bucket con otros prefijos vivos no se puede borrar). Lo usa
+#   `infra:reset-state` para llevarse solo envs/prod/ del bucket de tfstate,
+#   que antes reimplementaba este mismo patron version-aware por su cuenta.
 empty_bucket() {
-  local bucket="$1" delete="${2:-false}"
+  local bucket="$1" delete="${2:-false}" prefix="${3:-}"
+  # return 0 (no 1) a proposito: los callers corren con `set -e` y un bucket ya
+  # inexistente es exito, no fallo.
   if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
     echo "  $bucket no existe, skip"; return 0
   fi
-  echo "  Vaciando $bucket (versiones + delete markers)..."
+  echo "  Vaciando s3://$bucket/${prefix} (versiones + delete markers)..."
   aws s3api delete-objects --bucket "$bucket" \
-    --delete "$(aws s3api list-object-versions --bucket "$bucket" \
+    --delete "$(aws s3api list-object-versions --bucket "$bucket" ${prefix:+--prefix "$prefix"} \
       --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' \
-      --max-items 1000)" 2>/dev/null || echo "  (bucket ya vacio)"
+      --max-items 1000)" 2>/dev/null || echo "  (ya vacio, nada que borrar)"
   if [ "$delete" = "true" ]; then
+    if [ -n "$prefix" ]; then
+      echo "  (prefix + delete=true: no se borra el bucket, solo el prefijo)"
+      return 0
+    fi
     echo "  Borrando bucket $bucket..."
     aws s3 rb "s3://$bucket"
   fi

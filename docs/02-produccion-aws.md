@@ -5914,7 +5914,8 @@ tasks/
 version: "3"
 
 vars:
-  TF_DIR:  '{{.TF_DIR | default "infra/envs/prod"}}'
+  # TF_DIR y RDS_ID se inyectan desde el Taskfile raiz (fuente unica, compartida
+  # con ops:). Ver `includes:` en Taskfile.yml.
   # Ultimos 7 chars del account ID (sufijo de buckets para evitar colisiones).
   # Misma fuente que tasks/local.yml -> coherencia local/prod en nombres de bucket.
   # Resuelto una vez por invocacion del include.
@@ -6378,7 +6379,8 @@ Una sola via de submit (el Lambda dispatcher) — valida que la variety exista e
 version: "3"
 
 vars:
-  TF_DIR:       '{{.TF_DIR       | default "infra/envs/prod"}}'
+  # TF_DIR / RDS_ID / BACKUP_MAX_AGE_MIN se inyectan desde el Taskfile raiz
+  # (fuente unica, compartida con infra:). Ver `includes:` en Taskfile.yml.
   SCHEDULER_FN: '{{.SCHEDULER_FN | default (printf "%s-scheduler" .PROJECT)}}'
   QUEUE_SPOT:   '{{.QUEUE_SPOT   | default (printf "%s-job-queue-spot"     .PROJECT)}}'
   QUEUE_OD:     '{{.QUEUE_OD     | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
@@ -6395,7 +6397,7 @@ tasks:
     silent: true
     cmds:
       - 'echo "=== RDS ==="'
-      - aws rds describe-db-instances --db-instance-identifier {{.PROJECT}}-mlflow
+      - aws rds describe-db-instances --db-instance-identifier {{.RDS_ID}}
         --query 'DBInstances[0].[DBInstanceStatus,DBInstanceClass,Endpoint.Address]'
         --output table 2>/dev/null || echo "  (RDS no existe o no accesible)"
       - 'echo ""'
@@ -6777,7 +6779,7 @@ wake_cluster() {
 # empty_bucket <bucket> [delete]
 #   Vacia versiones + delete markers. Si delete=true, ademas borra el bucket.
 empty_bucket() {
-  local bucket="$1" delete="${2:-false}"
+  local bucket="$1" delete="${2:-false}" prefix="${3:-}"
   if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
     echo "  $bucket no existe, skip"; return 0
   fi
@@ -6845,19 +6847,26 @@ version: "3"
 dotenv: [ ".env" ]
 
 # Includes namespaced por etapa. Cada tasks/X.yml documenta su uso en el header.
+#
+# CONVENCION DE VARS COMPARTIDAS: todo nombre que use mas de un archivo se
+# declara UNA vez en el `vars:` de abajo y se INYECTA aca. El include no lo
+# redeclara — si lo hiciera, tendriamos dos defaults capaces de divergir en
+# silencio (paso con TF_DIR, declarado identico en infra.yml y ops.yml).
+# Aplica a: TF_DIR, RDS_ID, QUEUE_SPOT, QUEUE_OD, BACKUP_MAX_AGE_MIN.
 includes:
   infra:
     taskfile: ./tasks/infra.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', TF_DIR: '{{.TF_DIR}}', RDS_ID: '{{.RDS_ID}}' }
   ecr:
     taskfile: ./tasks/ecr.yml
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
   batch:
     taskfile: ./tasks/batch.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}' }
   ops:
     taskfile: ./tasks/ops.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}',
+            TF_DIR: '{{.TF_DIR}}', RDS_ID: '{{.RDS_ID}}', BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN}}' }
   local:
     taskfile: ./tasks/local.yml
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
@@ -9679,7 +9688,7 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        if ensure_backup "{{.PROJECT}}-mlflow" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
+        if ensure_backup "{{.RDS_ID}}" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
           echo "OK backup verificado. El destroy ya no puede perder datos."
         else
           echo "AVISO el RDS no existe -> nada que respaldar; se sigue con el destroy."
@@ -9691,7 +9700,7 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
         set -euo pipefail
         source tasks/lib/nuke.sh
         # El RDS tiene deletion_protection=true -> levantarla antes del destroy.
-        lift_rds_protection "{{.PROJECT}}-mlflow"
+        lift_rds_protection "{{.RDS_ID}}"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"
           terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve \
@@ -9710,8 +9719,8 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        assert_backup_exists "{{.PROJECT}}-mlflow"
-        prune_snapshots "{{.PROJECT}}-mlflow" "{{.SNAPSHOT_KEEP}}"
+        assert_backup_exists "{{.RDS_ID}}"
+        prune_snapshots "{{.RDS_ID}}" "{{.SNAPSHOT_KEEP}}"
       - 'echo "OK teardown completo (NAT liberado). Para volver: task rebuild"'
       - 'echo "     MLflow Registry + forecasts viven en el backup; rebuild los restaura."'
       - 'echo "     Los artifacts (modelos, reports) siguen intactos en S3."'
@@ -9732,7 +9741,7 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        SNAP=$(resolve_restore_snapshot "{{.PROJECT}}-mlflow" "{{.SNAPSHOT}}")
+        SNAP=$(resolve_restore_snapshot "{{.RDS_ID}}" "{{.SNAPSHOT}}")
         if [ -n "$SNAP" ]; then
           echo ">>> Restaurando RDS desde $SNAP (~5-10 min extra)..."
           terraform -chdir={{.TF_DIR}} apply -auto-approve \
@@ -9758,7 +9767,7 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
     cmds:
       - |
         source tasks/lib/snapshot.sh
-        list_snapshots "{{.PROJECT}}-mlflow"
+        list_snapshots "{{.RDS_ID}}"
 
   backup-now:
     desc: "Tomar un backup del RDS AHORA (sin destruir nada). Arranca el RDS si esta parado"
@@ -9768,7 +9777,7 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        backup_now "{{.PROJECT}}-mlflow" "manual" >/dev/null
+        backup_now "{{.RDS_ID}}" "manual" >/dev/null
 
   verify-backup:
     desc: "Verificar que existe al menos un backup restaurable del RDS (exit 1 si no)"
@@ -9777,7 +9786,7 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        assert_backup_exists "{{.PROJECT}}-mlflow"
+        assert_backup_exists "{{.RDS_ID}}"
 ```
 
 Y en el bloque `vars:` de `tasks/ops.yml`, junto a `SNAPSHOT_KEEP`:
@@ -9825,7 +9834,7 @@ Y en `destroy`, insertar el backup como **primer** paso, antes de vaciar nada:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        ensure_backup "{{.PROJECT}}-mlflow" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
+        ensure_backup "{{.RDS_ID}}" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
           || echo "AVISO el RDS no existe -> nada que respaldar."
       - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
       # ... (resto del destroy sin cambios)

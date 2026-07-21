@@ -7,7 +7,7 @@ dotenv: [ ".env" ]
 includes:
   infra:
     taskfile: ./tasks/infra.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', TF_DIR: '{{.TF_DIR}}', RDS_ID: '{{.RDS_ID}}' }
   ecr:
     taskfile: ./tasks/ecr.yml
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
@@ -16,7 +16,8 @@ includes:
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}' }
   ops:
     taskfile: ./tasks/ops.yml
-    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}' }
+    vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}', QUEUE_SPOT: '{{.QUEUE_SPOT}}', QUEUE_OD: '{{.QUEUE_OD}}',
+            TF_DIR: '{{.TF_DIR}}', RDS_ID: '{{.RDS_ID}}', BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN}}' }
   local:
     taskfile: ./tasks/local.yml
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
@@ -33,10 +34,16 @@ vars:
   # includes ops: y batch: (antes se definia el mismo printf en ambos archivos).
   QUEUE_SPOT: '{{.QUEUE_SPOT | default (printf "%s-job-queue-spot"     .PROJECT)}}'
   QUEUE_OD:   '{{.QUEUE_OD   | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
+  # Directorio del env Terraform e identificador de la instancia RDS: fuente
+  # UNICA, inyectada a los includes infra: y ops: (antes cada archivo declaraba
+  # su propio default y podian divergir en silencio).
+  # OJO: RDS_ID es la INSTANCIA de base de datos. El repo ECR de la imagen de
+  # MLflow se llama igual ({{.PROJECT}}-mlflow) y NO es esto -> en ecr: y en
+  # `destroy` (purge_ecr) se sigue construyendo el nombre a mano a proposito.
+  TF_DIR:     '{{.TF_DIR     | default "infra/envs/prod"}}'
+  RDS_ID:     '{{.RDS_ID     | default (printf "%s-mlflow" .PROJECT)}}'
   # Reutilizar un backup del RDS mas nuevo que N minutos en vez de crear otro.
-  # 0 = siempre crear uno nuevo. tasks/ops.yml declara el MISMO default para su
-  # propio `teardown` (los includes reciben solo las vars listadas arriba); si
-  # cambias uno, cambia el otro.
+  # 0 = siempre crear uno nuevo.
   BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN | default "0"}}'
   HOST_UID:  { sh: id -u }
   HOST_GID:  { sh: id -g }
@@ -404,7 +411,7 @@ tasks:
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
-        ensure_backup "{{.PROJECT}}-mlflow" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
+        ensure_backup "{{.RDS_ID}}" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
           || echo "AVISO el RDS no existe -> nada que respaldar."
       - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
       - |
