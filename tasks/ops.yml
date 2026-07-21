@@ -13,10 +13,11 @@
 #   task ops:status                                   estado RDS + ECS + Batch
 #   task ops:up                                       encender idempotente (recrea ALB/NAT si faltan, espera healthy)
 #   task ops:down [COOLDOWN=600] [RELEASE_NET=false]  apagar + liberar ALB/NAT (hibernacion)
-#   task ops:teardown                                 destroy volatiles (+ snapshot final + poda)
+#   task ops:teardown                                 backup + destroy volatiles + poda
 #   task ops:rebuild [SNAPSHOT=<id>|none]             re-apply + RESTORE del RDS + up
-#   task ops:snapshots                                listar snapshots manuales
-#   task ops:snapshot-now                             snapshot manual sin destruir nada
+#   task ops:backups                                  listar backups del RDS
+#   task ops:backup-now                               backup manual sin destruir nada
+#   task ops:verify-backup                            hay backup restaurable? exit 1 si no
 #   task ops:promote MODEL_NAME=rnd-forest-POP VERSION=3 [MAX_MAPE=20]
 #   task ops:registry-list MODEL_NAME=rnd-forest-POP
 # =============================================================================
@@ -29,8 +30,13 @@ vars:
   # QUEUE_SPOT / QUEUE_OD se inyectan desde el Taskfile raiz (fuente unica de la
   # convencion de nombres, compartida con batch:). Ver includes en Taskfile.yml.
   MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
-  # Cuantos snapshots manuales del RDS conserva el teardown al podar.
-  SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "4"}}'
+  # Cuantos backups del RDS conserva el teardown al podar. Con 2 ciclos por
+  # semana, 6 = ~3 semanas de historia.
+  SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
+  # Reutilizar un backup mas nuevo que N minutos en vez de crear otro. 0 =
+  # siempre crear uno nuevo. >0 sirve para reintentar un teardown que fallo
+  # despues de respaldar, sin pagar otra vez los ~8 min de espera.
+  BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN | default "0"}}'
   # Orden reverso de apply: importante para destroy con dependencias.
   VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd"
 
@@ -213,7 +219,7 @@ tasks:
       # OJO: (1) el DNS del ALB cambia en cada ciclo sleep/wake;
       #      (2) sin la lambda keepstop, si la hibernacion pasa de 7 dias AWS
       #          re-arranca el RDS solo y nadie lo re-para -> para idle largo
-      #          usar `task ops:teardown` (destruye RDS con snapshot final).
+      #          usar `task ops:teardown` (destruye el RDS respaldandolo antes).
       - |
         if [ "{{.RELEASE_NET}}" != "true" ]; then
           echo ">>> RELEASE_NET=false -> ALB + NAT quedan encendidos (~\$1.8/dia idle)"
@@ -230,82 +236,86 @@ tasks:
   # ═══ Teardown / Rebuild ═════════════════════════════════════════════════════
 
   teardown:
-    desc: "Down + terraform destroy de modulos volatiles. Preserva storage + network"
-    prompt: "Destruira los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
+    desc: "Backup + destroy de modulos volatiles. Preserva storage + network"
+    prompt: "Se tomara un backup del RDS y se destruiran los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
     cmds:
       # RELEASE_NET=false: liberar ALB/NAT aqui seria redundante — el destroy
       # de module.mlflow y el apply enable_nat=false de abajo hacen lo mismo.
       - task: down
         vars: { RELEASE_NET: "false" }
-      - 'echo ">>> Destroy modulos volatiles (orden reverso de apply)..."'
+      # PASO 1 — BACKUP ANTES DE TOCAR NADA. Si esto falla, se aborta con la
+      # infra intacta: preferimos un teardown que no ocurre a datos perdidos.
+      # `down` (arriba) paro el RDS; ensure_backup lo re-arranca (ensure_rds_
+      # available) porque AWS no snapshotea instancias detenidas.
+      # BACKUP_MAX_AGE_MIN>0 permite reintentar un teardown fallido reutilizando
+      # el backup recien tomado, sin pagar otros ~8 min de espera.
+      - 'echo ">>> [1/4] Backup del RDS ANTES de destruir (obligatorio)..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        if ensure_backup "{{.PROJECT}}-mlflow" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
+          echo "OK backup verificado. El destroy ya no puede perder datos."
+        else
+          echo "AVISO el RDS no existe -> nada que respaldar; se sigue con el destroy."
+        fi
+      # PASO 2 — destroy. rds_skip_final_snapshot=true: el backup del paso 1 ya
+      # esta tomado y VERIFICADO, un final_snapshot seria un duplicado de ~8 min.
+      - 'echo ">>> [2/4] Destroy de modulos volatiles (orden reverso de apply)..."'
       - |
         set -euo pipefail
         source tasks/lib/nuke.sh
         # module.mlflow incluye el RDS con deletion_protection=true -> levantarla
-        # antes del destroy. El snapshot final usa nombre timestamped (sin colision).
+        # antes del destroy.
         lift_rds_protection "{{.PROJECT}}-mlflow"
-        # `down` (arriba) invoco al scheduler con action=stop y dejo el RDS
-        # detenido; AWS no permite el snapshot final en ese estado. Re-arrancarlo
-        # es lo que hace que el ciclo teardown -> snapshot -> rebuild funcione.
-        ensure_rds_available "{{.PROJECT}}-mlflow"
-        SNAP="{{.PROJECT}}-mlflow-final-$(date +%Y%m%d%H%M%S)"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"
           terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve \
-            -var "rds_final_snapshot_identifier=$SNAP" || {
+            -var "rds_skip_final_snapshot=true" || {
             echo "FAIL destroy de $mod fallo. Revisar manualmente."
+            echo "     Tus datos ESTAN a salvo: el backup del paso 1 ya existe."
             exit 1
           }
         done
       # Libera el NAT gateway + EIP (~$33/mes idle) sin tocar VPC/subnets/SGs.
       # Ya no queda nada en subnets privadas (los volatiles se destruyeron arriba).
       # `task rebuild`/deploy lo recrean (enable_nat default true).
-      - 'echo ">>> Liberando NAT gateway (enable_nat=false)..."'
+      - 'echo ">>> [3/4] Liberando NAT gateway (enable_nat=false)..."'
       - terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
-      # Retencion: el teardown deja un snapshot nuevo cada vez. Sin poda, cada
-      # ciclo suma storage facturable. Conserva los SNAPSHOT_KEEP mas recientes.
-      - 'echo ">>> Podando snapshots viejos (retencion {{.SNAPSHOT_KEEP}})..."'
+      # PASO 4 — verificar + podar. assert_backup_exists convierte una perdida
+      # silenciosa de datos en un error visible mientras se puede reaccionar.
+      # Sin poda, cada ciclo suma storage facturable: conserva SNAPSHOT_KEEP.
+      - 'echo ">>> [4/4] Verificando el backup + poda (retencion {{.SNAPSHOT_KEEP}})..."'
       - |
         set -euo pipefail
         source tasks/lib/snapshot.sh
+        assert_backup_exists "{{.PROJECT}}-mlflow"
         prune_snapshots "{{.PROJECT}}-mlflow" "{{.SNAPSHOT_KEEP}}"
-      - 'echo "OK teardown completo (NAT liberado). Para volver: task ops:rebuild"'
-      - 'echo "     Los datos (MLflow registry + forecasts) viven en el snapshot final; rebuild los restaura."'
+      - 'echo "OK teardown completo (NAT liberado). Para volver: task rebuild"'
+      - 'echo "     MLflow registry + forecasts viven en el backup; rebuild los restaura."'
+      - 'echo "     Los artifacts (modelos, reports) siguen intactos en S3."'
 
-  rebuild:
-    desc: "Re-apply de modulos volatiles + up. RESTAURA el RDS desde el ultimo snapshot (SNAPSHOT=<id> para fijar uno, SNAPSHOT=none para empezar vacio)"
+  # Apply completo que RESTAURA el RDS del backup cuando corresponde. Es el
+  # camino UNICO de "levantar": lo comparten `task deploy` (oleada C) y
+  # `ops:rebuild`, para que los dos den el mismo resultado y no exista una
+  # variante que pierda datos en silencio. Ver docs/02-produccion-aws.md #8.5.
+  #
+  # Un apply a secas crearia una instancia VACIA y el backup quedaria huerfano:
+  # ese era el bug historico —teardown -> rebuild perdia registry + forecasts
+  # sin avisar—.
+  #
+  # No se usa `task :infra:apply` porque hay que inyectar el -var del backup; el
+  # resto del comando es identico (ver tasks/infra.yml::apply). El `_init` de
+  # terraform ya lo corrio quien invoca (deploy en la oleada A; rebuild opera
+  # sobre un .terraform ya inicializado por el deploy previo).
+  apply-restore:
+    desc: "terraform apply completo restaurando el RDS del ultimo backup si existe. Vars: SNAPSHOT=<id>|none"
     vars:
       SNAPSHOT: '{{.SNAPSHOT | default ""}}'
     cmds:
-      # El RDS se destruyo en el teardown con un snapshot final. Un apply a secas
-      # crearia una instancia VACIA y el snapshot quedaria huerfano (era el bug
-      # historico: teardown -> rebuild perdia registry + forecasts en silencio).
-      # Resolvemos el snapshot y se lo pasamos a terraform como -var.
       - |
         set -euo pipefail
-        if aws rds describe-db-instances --db-instance-identifier {{.PROJECT}}-mlflow >/dev/null 2>&1; then
-          echo ">>> RDS {{.PROJECT}}-mlflow ya existe -> no se restaura nada (apply normal)."
-          echo "SNAP=" > /tmp/rebuild-snap.env
-          exit 0
-        fi
         source tasks/lib/snapshot.sh
-        if [ "{{.SNAPSHOT}}" = "none" ]; then
-          echo ">>> SNAPSHOT=none -> RDS nuevo y VACIO (no se restaura)."
-          SNAP=""
-        elif [ -n "{{.SNAPSHOT}}" ]; then
-          SNAP="{{.SNAPSHOT}}"
-          echo ">>> Snapshot fijado por el usuario: $SNAP"
-        else
-          echo ">>> Resolviendo el snapshot manual mas reciente..."
-          SNAP=$(latest_snapshot "{{.PROJECT}}-mlflow")
-        fi
-        echo "SNAP=$SNAP" > /tmp/rebuild-snap.env
-      - 'echo ">>> Apply completo (modulos volatiles se re-crean, resto no-op)..."'
-      # No se usa `task :infra:apply` porque hay que inyectar el -var del
-      # snapshot; el resto del comando es identico (ver tasks/infra.yml::apply).
-      - |
-        set -euo pipefail
-        source /tmp/rebuild-snap.env
+        SNAP=$(resolve_restore_snapshot "{{.PROJECT}}-mlflow" "{{.SNAPSHOT}}")
         if [ -n "$SNAP" ]; then
           echo ">>> Restaurando RDS desde $SNAP (~5-10 min extra)..."
           terraform -chdir={{.TF_DIR}} apply -auto-approve \
@@ -313,30 +323,44 @@ tasks:
         else
           terraform -chdir={{.TF_DIR}} apply -auto-approve
         fi
+
+  rebuild:
+    desc: "Re-apply de modulos volatiles + up. RESTAURA el RDS desde el ultimo backup (SNAPSHOT=<id> para fijar uno, SNAPSHOT=none para empezar vacio)"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
+    cmds:
+      - 'echo ">>> Apply completo (modulos volatiles se re-crean, resto no-op)..."'
+      - task: apply-restore
+        vars: { SNAPSHOT: '{{.SNAPSHOT}}' }
       - task: up
 
-  snapshots:
-    desc: "Listar los snapshots manuales del RDS (los que puede consumir `rebuild`)"
+  backups:
+    desc: "Listar los backups del RDS (los que pueden consumir `deploy`/`rebuild`)"
+    aliases: [snapshots]
     silent: true
     cmds:
       - |
         source tasks/lib/snapshot.sh
         list_snapshots "{{.PROJECT}}-mlflow"
 
-  snapshot-now:
-    desc: "Tomar un snapshot manual del RDS AHORA (sin destruir nada). Requiere el RDS available"
+  backup-now:
+    desc: "Tomar un backup del RDS AHORA (sin destruir nada). Arranca el RDS si esta parado"
+    aliases: [snapshot-now]
     silent: true
     cmds:
       - |
         set -euo pipefail
-        SNAP="{{.PROJECT}}-mlflow-manual-$(date +%Y%m%d%H%M%S)"
-        echo ">>> Creando snapshot $SNAP..."
-        aws rds create-db-snapshot \
-          --db-instance-identifier {{.PROJECT}}-mlflow \
-          --db-snapshot-identifier "$SNAP" >/dev/null
-        echo ">>> Esperando a que quede available (~5 min)..."
-        aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP"
-        echo "OK $SNAP disponible. 'task ops:rebuild' lo tomaria como el mas reciente."
+        source tasks/lib/snapshot.sh
+        backup_now "{{.PROJECT}}-mlflow" "manual" >/dev/null
+
+  verify-backup:
+    desc: "Verificar que existe al menos un backup restaurable del RDS (exit 1 si no)"
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        assert_backup_exists "{{.PROJECT}}-mlflow"
 
   # ═══ MLflow Model Registry ═════════════════════════════════════════════════
 

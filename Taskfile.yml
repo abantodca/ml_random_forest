@@ -33,6 +33,11 @@ vars:
   # includes ops: y batch: (antes se definia el mismo printf en ambos archivos).
   QUEUE_SPOT: '{{.QUEUE_SPOT | default (printf "%s-job-queue-spot"     .PROJECT)}}'
   QUEUE_OD:   '{{.QUEUE_OD   | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
+  # Reutilizar un backup del RDS mas nuevo que N minutos en vez de crear otro.
+  # 0 = siempre crear uno nuevo. tasks/ops.yml declara el MISMO default para su
+  # propio `teardown` (los includes reciben solo las vars listadas arriba); si
+  # cambias uno, cambia el otro.
+  BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN | default "0"}}'
   HOST_UID:  { sh: id -u }
   HOST_GID:  { sh: id -g }
   # Patron reutilizado: correr un modulo Python en el container trainer sin
@@ -96,9 +101,9 @@ tasks:
           ║    c) task infra:apply                aplica el cambio                    ║
           ║  Reempezar de cero (borra el tfstate):  task infra:reset-state            ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
-            ⓘ En la 1ª vez NO hay backups: el RDS nace vacio y 'task snapshots'
-            sale vacio (no es error). El 1er snapshot lo crea tu 1er 'task
-            teardown'; desde ahi 'task rebuild' ya restaura registry+forecasts.
+            ⓘ En la 1ª vez NO hay backups: el RDS nace vacio y 'task backups'
+            sale vacio (no es error). El 1er backup lo crea tu 1er 'task teardown';
+            desde ahi 'task deploy' y 'task rebuild' ya restauran registry+forecasts.
 
             ⚠ Tras el 1er 'task deploy', AWS manda un mail "Subscription
             Confirmation" a alert_email: ABRELO y confirma. Sin ese clic la
@@ -106,22 +111,33 @@ tasks:
             (FAILED/SUCCEEDED). Si cambias alert_email, repites la confirmacion.
 
           ╔═══════════════════════════════════════════════════════════════════════════╗
-          ║  AWS · DÍA A DÍA (ya desplegado)        detalle: infra:/ecr:/batch:/ops:  ║
+          ║  AWS · CICLO DE TRABAJO   prender → entrenar → apagar   (2 dias/semana)   ║
           ╠═══════════════════════════════════════════════════════════════════════════╣
-          ║  task wake · sleep      encender · apagar (pausa corta, mantiene NAT)     ║
-          ║  task teardown          apagar largo: destruye RDS con snapshot (~$1/mes) ║
-          ║  task rebuild           restaura el RDS del snapshot y enciende           ║
-          ║  task snapshots         listar snapshots del RDS restaurables             ║
+          ║  1) task deploy       levanta todo y RESTAURA el ultimo backup del RDS    ║
+          ║  2) task batch:train VARIETIES=A,B,C,D PARALLEL=4   entrena en Batch (bg) ║
+          ║     task batch:watch  BLOQUEA hasta SUCCEEDED/FAILED                      ║
+          ║  3) task teardown     respalda el RDS y destruye los volatiles (~$1/mes)  ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  Vuelve TODO: runs, Registry, forecasts (backup RDS) + modelos y reports  ║
+          ║  (S3, nunca se van). Lo unico que cambia cada ciclo: el DNS del ALB.      ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  Pausa de 1-2 noches:  task sleep · wake   (5 min, no destruye el RDS)    ║
+          ║  Backups:  task backups · ops:backup-now · ops:verify-backup              ║
+          ║  Volver sin re-buildear imagenes:  task rebuild  (= deploy, mas corto)    ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
+
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║  AWS · OPERACION (ya desplegado)          detalle: infra:/ecr:/batch:/ops:║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
           ║  task status · urls     estado del cluster · URLs publicas del ALB        ║
           ║  task smoke             deploy + 1 job Batch POP de humo                  ║
-          ║  task batch:train VARIETIES=POP            entrenamiento en Batch (bg)    ║
-          ║  task batch:train VARIETIES=A,B,C,D PARALLEL=4   4 variedades en paralelo ║
           ║  task batch:logs FOLLOW=true   logs EN VIVO (Ctrl+C no detiene el job)    ║
-          ║  task batch:watch              BLOQUEA hasta SUCCEEDED/FAILED             ║
           ║  task batch:status             jobs activos en las colas                  ║
           ║  task ops:promote MODEL_NAME=… VERSION=N   promover a Production          ║
-          ║  ⚠ destructivo (riesgo creciente):  task destroy · nuke                   ║
           ║  task infra:verify-clean   auditar que no quede nada tras un destroy      ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║  ⚠ task destroy / nuke   NO son 'teardown mas fuerte': VACIAN los buckets ║
+          ║    S3 -> los modelos y reports NO vuelven. Para apagar y volver: teardown.║
           ╚═══════════════════════════════════════════════════════════════════════════╝
 
           ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -151,7 +167,8 @@ tasks:
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║  Mas detalle                                                              ║
           ╠═══════════════════════════════════════════════════════════════════════════╣
-          ║  Catalogo completo:  task --list     Runbook AWS: docs/02-produccion-aws.md ║
+          ║  Catalogo completo:  task --list                                          ║
+          ║  Runbook AWS:  docs/02-produccion-aws.md   ciclo #8.2.0 · backups #8.5    ║
           ╚═══════════════════════════════════════════════════════════════════════════╝
 
         EOF
@@ -299,7 +316,9 @@ tasks:
   # ═══ Atajos high-level del stack AWS ════════════════════════════════════════
 
   deploy:
-    desc: "AWS: stand-up completo desde cero o aplicar cambios de infra (storage -> 5 imagenes -> resto) + URLs. (Para solo reanudar: `wake`; tras teardown: `rebuild`)"
+    desc: "AWS: stand-up completo desde cero o aplicar cambios de infra (storage -> 5 imagenes -> resto) + URLs. RESTAURA el RDS del ultimo backup si existe. Vars: SNAPSHOT=<id>|none. (Para solo reanudar: `wake`)"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
     cmds:
       # Pre-check: si los buckets *-data-* / *-artifacts-* existen en AWS pero
       # no en tfstate (tipico tras nuke parcial o re-bootstrap), `apply
@@ -313,8 +332,15 @@ tasks:
         vars: { TARGET: module.storage }
       - 'echo ">>> Oleada B: build + push 5 imagenes..."'
       - task: ecr:build-all
+      # Oleada C: apply del resto. Antes de crear el RDS se busca un backup — el
+      # MISMO resolver que usa `rebuild` (tasks/lib/snapshot.sh), para que un
+      # `deploy` posterior a un teardown/destroy recupere el historico en vez de
+      # levantar una instancia vacia en silencio. Si el RDS ya existe, o no hay
+      # backups (cuenta virgen), degrada a un apply normal. Ver #8.5 de la guia.
+      # La implementacion vive en ops:apply-restore, compartida con `rebuild`.
       - 'echo ">>> Oleada C: apply resto (network, mlflow, batch, ...)..."'
-      - task: infra:apply
+      - task: ops:apply-restore
+        vars: { SNAPSHOT: '{{.SNAPSHOT}}' }
       - 'echo ""'
       - 'echo "Deploy completo. URLs publicas:"'
       - task: infra:urls
@@ -351,25 +377,35 @@ tasks:
       - task: infra:urls
 
   teardown:
-    desc: "AWS: apagado LARGO. sleep + destroy de volatiles (RDS incluido, con snapshot final), LIBERA el NAT. Piso ~$1/mes. Volver: `rebuild`"
+    desc: "AWS: apagado LARGO. sleep + backup del RDS + destroy de volatiles, LIBERA el NAT. Piso ~$1/mes. Volver: `rebuild`"
     cmds:
       - task: ops:teardown
 
   rebuild:
-    desc: "AWS: volver tras un `teardown`. Recrea NAT + volatiles y RESTAURA el RDS desde el ultimo snapshot. Vars: SNAPSHOT=<id>|none. (Si solo estaba dormido con sleep, usa `wake`)"
+    desc: "AWS: volver tras un `teardown`. Recrea NAT + volatiles y RESTAURA el RDS desde el ultimo backup. Vars: SNAPSHOT=<id>|none. (Si solo estaba dormido con sleep, usa `wake`)"
     cmds:
       - task: ops:rebuild
 
-  snapshots:
-    desc: "AWS: listar los snapshots manuales del RDS (los candidatos que consume `rebuild`)"
+  backups:
+    desc: "AWS: listar los backups del RDS (los candidatos que consumen `deploy`/`rebuild`)"
+    aliases: [snapshots]
     cmds:
-      - task: ops:snapshots
+      - task: ops:backups
 
   destroy:
-    desc: "AWS DESTRUCTIVO: drena Batch, vacia S3/ECR, terraform destroy total"
-    prompt: "Destruira envs/prod (S3 + ECR + RDS + ...). Irreversible. Continuar?"
+    desc: "AWS DESTRUCTIVO: backup del RDS, drena Batch, vacia S3/ECR, terraform destroy total. Los artifacts de S3 NO se recuperan (para apagar y volver: `teardown`)"
+    prompt: "Destruira envs/prod (S3 + ECR + RDS + ...). El RDS se respalda, pero los artifacts de S3 NO se recuperan. Irreversible. Continuar?"
     cmds:
       - task: ops:down
+      # El backup va primero: si el destroy falla a la mitad, los datos del RDS
+      # ya estan a salvo. OJO: esto NO respalda los artifacts de S3, que se
+      # vacian abajo. Ver docs/02-produccion-aws.md #8.7.
+      - 'echo ">>> Backup del RDS antes de destruir..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        ensure_backup "{{.PROJECT}}-mlflow" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
+          || echo "AVISO el RDS no existe -> nada que respaldar."
       - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
       - |
         set -e

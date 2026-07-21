@@ -192,17 +192,19 @@ tasks:
     deps: [_init]
     cmds:
       # El RDS tiene deletion_protection=true (default). Se levanta via AWS CLI
-      # antes del destroy y se toma un snapshot final con nombre timestamped
-      # (evita colision si destruyes varias veces). Ver tasks/lib/nuke.sh.
+      # antes del destroy. Ver tasks/lib/nuke.sh.
+      #
+      # rds_skip_final_snapshot=true: quien invoca esta tarea (`task destroy`,
+      # `ops:teardown`) YA tomo un backup verificado ANTES de empezar a destruir
+      # (ensure_backup, docs/02-produccion-aws.md #8.5). Un final_snapshot aca
+      # seria un duplicado de ~8 min. Si la corres suelta y queres red de
+      # seguridad, hace `task ops:backup-now` primero.
       - |
         set -euo pipefail
         source tasks/lib/nuke.sh
         lift_rds_protection "{{.PROJECT}}-mlflow"
-        # El flujo de destroy para el RDS antes (scheduler action=stop) y AWS
-        # RECHAZA snapshotear una instancia detenida -> hay que re-arrancarla.
-        ensure_rds_available "{{.PROJECT}}-mlflow"
         terraform -chdir={{.TF_DIR}} destroy -auto-approve \
-          -var "rds_final_snapshot_identifier={{.PROJECT}}-mlflow-final-$(date +%Y%m%d%H%M%S)"
+          -var "rds_skip_final_snapshot=true"
 
   destroy-target:
     desc: "terraform destroy parcial. Vars: TARGET=module.X (REQ)"

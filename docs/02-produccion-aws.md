@@ -101,9 +101,13 @@ Cada uno responde a una pregunta concreta:
 | Modo | Pregunta que responde | Tiempo | Costo despues |
 |---|---|---|---|
 | **STAND-UP** | "Es la primera vez, parto de cero" | 2-3 horas | ~$75/mes (operando) |
-| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15 min | ~$1/mes (storage + snapshot; RDS y NAT liberados) |
+| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15-25 min | ~$1/mes (storage + backups; RDS y NAT liberados) |
 | **REBUILD** | "Volvi y quiero levantar otra vez sin perder modelos/data" | 25-40 min | ~$75/mes |
 | **DESTROY** | "Termine el proyecto / migro a otra cuenta, borra TODO" | 30-45 min | $0/mes |
+
+TEAR-DOWN ↔ REBUILD es el par del **ciclo recurrente** (prender unos días,
+trabajar, apagar): el estado viaja solo vía backup del RDS + S3, sin pasos
+manuales. Ver #8.2.0 para el runbook y #8.5 para el mecanismo.
 
 Diagrama de transiciones:
 
@@ -196,14 +200,17 @@ y volve cuando ya estes operando. Estan documentados en Parte 8:
 
 - **#8.5 — TEAR-DOWN**: apagar todo preservando state + datos (~$1/mes
   hibernado — NAT liberado vía `enable_nat=false` —, reversible con rebuild).
-  El RDS se **destruye** dejando un snapshot final; S3 (artifacts) intacto.
+  El RDS se **destruye** tomando un backup verificado antes; S3 (artifacts) intacto.
+  Es el modo del ciclo recurrente de prender/apagar (#8.2.0).
 - **#8.6 — REBUILD**: volver despues de un tear-down. **Restaura el RDS desde
-  el ultimo snapshot** (Model Registry + tabla `forecasts`); cambia el ALB DNS.
+  el ultimo backup** (Model Registry + tabla `forecasts`); cambia el ALB DNS.
+  `task deploy` restaura igual: comparten el mismo resolver (#8.5).
 - **#8.8 — VERIFICAR LIMPIO**: `task infra:verify-clean` tras cualquier
   destroy/nuke — `terraform destroy` deja residuos fuera del state.
-- **#8.7 — DESTROY**: eliminar TODO de la cuenta AWS (requiere 3 backups
-  manuales previos — solo aplica si ya operaste el sistema y tenes
-  modelos en el Registry, datos en RDS y Terraform state poblado).
+- **#8.7 — DESTROY**: eliminar TODO de la cuenta AWS. Respalda el RDS solo,
+  pero **vacía los buckets de S3**: los artifacts no vuelven. Requiere archivar
+  a mano lo que quieras conservar. No es el modo para ahorrar — para eso,
+  tear-down.
 
 La matriz cruzada de costos entre modos (stand-up vs tear-down vs destroy)
 esta en #9.3.
@@ -726,19 +733,19 @@ variable "rds_deletion_protection" {
 }
 
 variable "rds_skip_final_snapshot" {
-  description = "skip_final_snapshot del RDS MLflow. Default false: toma snapshot final por default. destroy/teardown lo manejan con un identifier timestamped."
+  description = "skip_final_snapshot del RDS MLflow. Default false (protectivo: un destroy a mano igual deja copia). teardown/destroy lo pasan en TRUE porque ya tomaron un backup verificado ANTES del destroy (ensure_backup, #8.5) y el final_snapshot seria un duplicado de ~8 min."
   type        = bool
   default     = false
 }
 
 variable "rds_final_snapshot_identifier" {
-  description = "Identificador del snapshot final del RDS (cuando rds_skip_final_snapshot=false). teardown/destroy pasan uno timestamped."
+  description = "Identificador del snapshot final del RDS (solo si rds_skip_final_snapshot=false). Red de seguridad para destroys manuales; las tareas del repo no lo usan (respaldan antes). Vacio = <project>-mlflow-final."
   type        = string
   default     = ""
 }
 
 variable "rds_snapshot_identifier" {
-  description = "Snapshot desde el que RESTAURAR el RDS al crearlo. Vacio (default) = instancia nueva y vacia. Lo inyecta `task ops:rebuild` con el snapshot final mas reciente; ver tasks/lib/snapshot.sh y #8.6."
+  description = "Backup desde el que RESTAURAR el RDS al crearlo. Vacio (default) = instancia nueva y vacia. Lo inyectan `task deploy` y `task ops:rebuild` via resolve_restore_snapshot(); ver tasks/lib/snapshot.sh y #8.5."
   type        = string
   default     = ""
 }
@@ -2176,18 +2183,19 @@ borrar los otros — Terraform los procesa igual.
 tfstate (queda solo en SM). **Ambos viven en la raiz**
 (`infra/envs/prod/rds_secret.tf`), **no en este modulo**: `task teardown`
 destruye `module.mlflow` con el RDS dentro, y si la credencial se fuera con el,
-el `rebuild` generaria una password nueva incompatible con la del snapshot
+el `rebuild` generaria una password nueva incompatible con la del backup
 restaurado. El modulo las recibe como `var.rds_password` y
-`var.rds_password_secret_arn`. Ver #8.5 "Ciclo snapshot -> restore".
+`var.rds_password_secret_arn`. Ver #8.5 "Ciclo backup → restauración".
 `subnet_group` en private subnets x2
 porque RDS exige 2 AZs aunque sea single-AZ. `skip_final_snapshot` y
-`deletion_protection` ahora son **variables con defaults protectivos**
-(`deletion_protection=true`, `skip_final_snapshot=false` → toma snapshot
-final): el RDS arranca protegido por default. `task destroy`/`task teardown`
-levantan la protección automáticamente vía AWS CLI
+`deletion_protection` son **variables con defaults protectivos**
+(`deletion_protection=true`, `skip_final_snapshot=false`): el RDS arranca
+protegido, de modo que un `terraform destroy` corrido a mano igual deja copia.
+`task destroy`/`task teardown` levantan la protección vía AWS CLI
 (`aws rds modify-db-instance --no-deletion-protection`, helper
-`lift_rds_protection` en `tasks/lib/nuke.sh`) y pasan un
-`rds_final_snapshot_identifier` timestamped antes del destroy.
+`lift_rds_protection` en `tasks/lib/nuke.sh`) y pasan
+`rds_skip_final_snapshot=true`, porque ellos ya tomaron un **backup verificado
+antes** de empezar a destruir (#8.5).
 
 > **Equivalente en AWS Console**:
 >
@@ -2202,8 +2210,8 @@ levantan la protección automáticamente vía AWS CLI
 > - **RDS** = Postgres **managed** (backups, parches, replicación a cargo de AWS); vos solo usás la endpoint que te da.
 > - **Por qué Postgres acá**: MLflow lo usa como **backend store** (metadata de runs: params, metrics, tags). Los artifacts pesados (`.joblib`, `.html`) van a **S3**, no a Postgres — así la DB no crece a TB.
 > - **Por qué Secrets Manager y no env var**: el password queda **rotable** sin re-deploy y no aparece en plano en `terraform.tfstate` (solo el ARN).
-> - **`skip_final_snapshot` + `deletion_protection`**: ahora son variables con defaults protectivos (`deletion_protection=true`, `skip_final_snapshot=false`) → el RDS arranca protegido y toma snapshot final. No hay que tocarlos a mano: `task teardown`/`task destroy` levantan la protección por CLI (`lift_rds_protection`) y pasan un `rds_final_snapshot_identifier` timestamped antes del destroy.
-> - **`snapshot_identifier`** (restore): vacío = instancia nueva y vacía; con valor, el RDS **se crea a partir de ese snapshot**. Lo inyecta `task ops:rebuild` resolviendo el más reciente. Lleva `ignore_changes` **obligatorio** porque es *ForceNew*: sin él, un apply posterior sin el mismo `-var` recrearía la instancia y perdería lo restaurado. Ver #8.6.
+> - **`skip_final_snapshot` + `deletion_protection`**: variables con defaults protectivos (`deletion_protection=true`, `skip_final_snapshot=false`) → el RDS arranca protegido y un destroy manual igual deja copia. No hay que tocarlos: `task teardown`/`task destroy` levantan la protección por CLI (`lift_rds_protection`) y pasan `rds_skip_final_snapshot=true` porque ya respaldaron antes de destruir.
+> - **`snapshot_identifier`** (restauración): vacío = instancia nueva y vacía; con valor, el RDS **se crea a partir de ese backup**. Lo inyectan `task deploy` y `task ops:rebuild` vía `resolve_restore_snapshot()`. Lleva `ignore_changes` **obligatorio** porque es *ForceNew*: sin él, un apply posterior sin el mismo `-var` recrearía la instancia y perdería lo restaurado. Ver #8.5.
 
 ```hcl
 # infra/modules/mlflow/rds.tf
@@ -2234,18 +2242,21 @@ resource "aws_db_instance" "mlflow" {
   publicly_accessible    = false
   apply_immediately      = true
 
-  # Proteccion de datos (default true / snapshot final). Las tareas de
-  # destroy/teardown levantan deletion_protection via AWS CLI antes del destroy.
+  # Proteccion de datos. Defaults protectivos para que un `terraform destroy`
+  # corrido a mano igual deje copia. Las tareas de destroy/teardown levantan
+  # deletion_protection via AWS CLI y pasan skip_final_snapshot=true: ya tomaron
+  # un backup verificado ANTES de destruir (ensure_backup, #8.5), y duplicarlo
+  # costaria ~8 min mas de espera.
   deletion_protection       = var.rds_deletion_protection
   skip_final_snapshot       = var.rds_skip_final_snapshot
   final_snapshot_identifier = var.rds_skip_final_snapshot ? null : (var.rds_final_snapshot_identifier != "" ? var.rds_final_snapshot_identifier : "${var.project}-mlflow-final")
 
-  # Restore-from-snapshot: vacio (default) = instancia NUEVA y VACIA. Con valor,
-  # la instancia se crea a partir de ese snapshot. Lo inyecta `task ops:rebuild`
-  # resolviendo el snapshot final mas reciente (tasks/lib/snapshot.sh), cerrando
-  # el ciclo teardown -> snapshot -> rebuild. Ver #8.6.
+  # Restauracion: vacio (default) = instancia NUEVA y VACIA. Con valor, la
+  # instancia se crea a partir de ese backup. Lo inyectan `task deploy` y
+  # `task ops:rebuild` via resolve_restore_snapshot() (tasks/lib/snapshot.sh),
+  # cerrando el ciclo backup -> restauracion. Ver #8.5.
   #
-  # Al restaurar, AWS conserva db_name/username/password DEL SNAPSHOT y los
+  # Al restaurar, AWS conserva db_name/username/password DEL BACKUP y los
   # argumentos de arriba se ignoran; por eso la credencial master vive en la
   # raiz (infra/envs/prod/rds_secret.tf) y sigue siendo la correcta.
   snapshot_identifier = var.rds_snapshot_identifier != "" ? var.rds_snapshot_identifier : null
@@ -6520,7 +6531,7 @@ tasks:
       # OJO: (1) el DNS del ALB cambia en cada ciclo sleep/wake;
       #      (2) sin la lambda keepstop, si la hibernacion pasa de 7 dias AWS
       #          re-arranca el RDS solo y nadie lo re-para -> para idle largo
-      #          usar `task ops:teardown` (destruye RDS con snapshot final).
+      #          usar `task ops:teardown` (destruye el RDS respaldandolo antes).
       - |
         if [ "{{.RELEASE_NET}}" != "true" ]; then
           echo ">>> RELEASE_NET=false -> ALB + NAT quedan encendidos (~\$1.8/dia idle)"
@@ -6588,7 +6599,7 @@ tasks:
 
 - `ops:up` es **idempotente**: pre-check `/health` y solo invoca `scheduler.start` si esta DOWN. Lo usan tanto el operador manual como el flujo CI auto-train (el `wake.sh` escribe el estado previo a `/tmp/wake-status` para que el workflow decida si tiene que apagar al final).
 - `ops:down` con `COOLDOWN=N` (default 0) cubre el "down ahora" manual y el "espera N seg y apaga" del CI post-train con una sola task.
-- `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$1/mes (storage + snapshots del RDS), sin tener que destruir toda la red.
+- `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$1/mes (storage + backups del RDS), sin tener que destruir toda la red.
 - `ops:promote` delega en `scripts/promote_model.py` (Python con `MlflowClient`) — 3 gates: MAPE absoluto, A/B contra Production actual, transition con `archive_existing_versions=True`.
 
 #### 4.1.7 Helpers `tasks/lib/*.sh`
@@ -7047,11 +7058,14 @@ El `default` de Tramo I sección 4.6 lista solo el pipeline local. En Tramo II s
             task ops:promote MODEL_NAME=... VERSION=N  promover a Production
 
         ▸ AWS — Teardown / Recovery / Destroy
-            task teardown           destroy volatiles (preserva storage + network)
-            task rebuild            re-apply tras teardown + up   (recovery, no destructivo)
+            task teardown           backup + destroy volatiles (preserva storage + network)
+            task rebuild            restaura el RDS del backup + up  (recovery, no destructivo)
+            task backups            listar los backups del RDS restaurables
+            task ops:backup-now     backup manual sin destruir nada
             task ops:state-drift    detecta buckets S3 en AWS ausentes en tfstate
                                     (causa BucketAlreadyExists en apply; corre auto en deploy)
             task destroy            DESTRUCTIVO: S3 + ECR + RDS + todo lo demas
+                                    respalda el RDS, pero VACIA S3: los artifacts no vuelven
             task nuke               DESTRUCTIVO + borra tfstate + OIDC (irreversible)
 
         ▸ Variables  (override por CLI: VAR=valor)
@@ -8352,7 +8366,7 @@ Trigger: **solo `workflow_dispatch`**.
 
 | Modo | Que destruye | Que preserva | Reversible con |
 |---|---|---|---|
-| **TEAR-DOWN** | Modulos volatiles (mlflow, reports, batch, lambdas, monitoring, scheduler, cicd, consumer_iam) + libera el NAT (`enable_nat=false`) | S3 + ECR + network (VPC/subnets/SGs, sin NAT) + tfstate + OIDC | `task rebuild` (~25-40 min: restaura el RDS del snapshot final; modelos intactos en S3). Costo restante: ~$1/mes. |
+| **TEAR-DOWN** | Modulos volatiles (mlflow, reports, batch, lambdas, monitoring, scheduler, cicd, consumer_iam) + libera el NAT (`enable_nat=false`) | S3 + ECR + network (VPC/subnets/SGs, sin NAT) + tfstate + OIDC | `task rebuild` (~25-40 min: restaura el RDS del backup; artifacts intactos en S3). Costo restante: ~$1/mes. |
 | **DESTROY** | TODOS los modulos administrados (incluye storage). Vacia buckets versionados + purga ECR antes del `terraform destroy`. | tfstate bucket + OIDC provider | Re-crear via `task deploy`. Costo: $0/mes. |
 | **NUKE** | DESTROY + tfstate bucket + OIDC provider. Cuenta limpia. | Nada | Re-bootstrap desde cero (Parte 2). |
 
@@ -8384,8 +8398,8 @@ name: Destroy
 # Tres modos via input `modo`:
 #   TEAR-DOWN -> destroy volatiles + libera NAT (enable_nat=false). Preserva
 #                S3 + ECR + network (sin NAT) + tfstate + OIDC.
-#                Reversible con `task rebuild` (restaura el RDS del snapshot).
-#                Costo restante: ~$1/mes (S3 + snapshots).
+#                Reversible con `task rebuild` (restaura el RDS del backup).
+#                Costo restante: ~$1/mes (S3 + backups).
 #   DESTROY   -> terraform destroy de TODOS los modulos (incluye storage). Vacia
 #                buckets versionados + purga ECR antes. Preserva tfstate + OIDC.
 #   NUKE      -> DESTROY + borra tfstate bucket + OIDC. Cuenta limpia.
@@ -8889,6 +8903,52 @@ terraform -chdir=infra/envs/prod apply -target=module.batch -var=trainer_image_t
 
 ### 8.2 Manual semanal / mensual
 
+#### 8.2.0 Ciclo de trabajo recurrente (2 días por semana)
+
+El patrón de uso real de este proyecto: **prender dos días, trabajar, apagar**.
+No hay nada que recordar de un ciclo al otro — el estado viaja solo, vía el
+backup del RDS (metadata) y S3 (artifacts). Ver #8.5 para el mecanismo.
+
+```bash
+# ── DÍA DE TRABAJO ──────────────────────────────────────────────────────────
+task deploy                  # levanta todo y RESTAURA el último backup si existe
+                             #   (cuenta virgen o SNAPSHOT=none -> RDS vacío)
+task status                  # confirma RDS available + servicios healthy + URLs
+
+task batch:train VARIETIES=A,B,C,D PARALLEL=4     # entrenar en grupos de 4
+task batch:watch                                   # bloquea hasta SUCCEEDED/FAILED
+# ... UI :8501 para pronósticos, reports para los HTML del campeón ...
+
+# ── AL TERMINAR ─────────────────────────────────────────────────────────────
+task teardown                # backup verificado -> destroy -> poda. ~$1/mes
+```
+
+**Qué garantiza el ciclo**, y qué no:
+
+| Al volver con `task deploy` | ¿Vuelve? |
+|---|---|
+| Runs de MLflow, métricas, params, tags | ✅ (backup del RDS) |
+| Model Registry: versiones, stages, transitions | ✅ (backup del RDS) |
+| Pronósticos persistidos por la API (`forecasts`) | ✅ (backup del RDS) |
+| Modelos `.joblib` y reports HTML | ✅ (nunca se fueron: viven en S3) |
+| Excels de entrada | ✅ (nunca se fueron: viven en S3) |
+| DNS del ALB | ❌ **cambia en cada ciclo** — no lo pongas en bookmarks |
+
+> [!TIP]
+> **El único costo recurrente de este ciclo son ~30-40 min de espera** (destroy
+> + backup al apagar; restore + cold start al prender). Si la pausa es de una o
+> dos noches y no de días, `task sleep` / `task wake` es mucho más rápido (5 min)
+> porque *para* el RDS en vez de destruirlo. La regla: **>1 semana → teardown;
+> 1-2 noches → sleep**. Ojo: pasados 7 días AWS re-arranca solo un RDS parado, y
+> ahí `sleep` deja de ahorrar (#8.5, "Período de gracia de RDS").
+
+> [!WARNING]
+> **En este ciclo nunca uses `task destroy`.** `teardown` y `destroy` suenan
+> parecido y hacen cosas muy distintas: `destroy` **vacía los buckets de S3**, y
+> ahí viven los modelos y los reports. El backup del RDS te devolvería un Model
+> Registry apuntando a artifacts que ya no existen. `destroy` es para cerrar el
+> proyecto (#8.7), no para ahorrar.
+
 #### 8.2.1 Bajar todo para ahorrar (tear-down)
 
 **Por que se hace**: fin de mes, vacaciones, pausa del proyecto.
@@ -8898,6 +8958,11 @@ Conocido como "scale to near-zero".
 task teardown
 # Confirmar con "y" al prompt de Task
 ```
+
+Antes de destruir nada toma un **backup del RDS y espera a que quede
+`available`** — si eso falla, el teardown aborta con la infra intacta. Al
+terminar verifica que el backup quedó y poda los viejos. El mecanismo completo
+está en #8.5.
 
 **Por que el orden importa** (ver Parte 4.8.3):
 1. **scheduler primero**: si esta arriba, va a re-encender RDS+Fargate
@@ -8913,6 +8978,10 @@ task teardown
 ```bash
 task rebuild
 ```
+
+Restaura el RDS desde el último backup. `task deploy` hace exactamente lo mismo
+(comparten el resolver, #8.5): usá `rebuild` cuando volvés de un teardown y
+`deploy` cuando además querés re-buildear imágenes.
 
 **Por que cambia el ALB DNS**: el `aws_lb.main` se recrea con un nombre
 distinto en su DNS. Si tenias bookmarks, actualizalos. Si quisieras
@@ -9150,17 +9219,17 @@ gasto, evento de costo inesperado, pausar el proyecto.
 
 - ECS Fargate services (MLflow + Reports): `desired_count = 0`
 - RDS instance: **DESTRUIDA** (es parte de `module.mlflow`, uno de los
-  VOLATILE_MODULES). Antes del destroy se toma un **snapshot final manual
-  timestamped** (`<project>-mlflow-final-YYYYMMDDHHMMSS`), y `task rebuild`
-  **restaura desde ese snapshot** para recuperar Model Registry + `forecasts`.
-  Ver "Ciclo snapshot -> restore" mas abajo.
+  VOLATILE_MODULES). Antes de destruir nada se toma un **backup verificado**
+  (`<project>-mlflow-backup-YYYYMMDDHHMMSS`), y `task rebuild`/`task deploy`
+  **restauran desde ese backup** para recuperar Model Registry + `forecasts`.
+  Ver "Ciclo backup → restauración" mas abajo.
   (Quien solo *para* el RDS es `task sleep`, no el teardown.)
 - Batch compute environments: `desired_vcpus = 0` (no hay EC2 corriendo)
 - ALB + listener: borrados (se recrean en rebuild — el DNS cambia)
 - NAT Gateway + EIP: **liberados** vía `enable_nat=false` (~$33/mes ahorro), sin destruir el resto de la red
 - Subnets/VPC/SGs: se preservan (el toggle `enable_nat` baja solo el NAT, no `module.network` entero)
 
-**Costo despues del tear-down**: ~$1/mes (S3 + ECR + los snapshots retenidos; ver matriz #9.3). El tear-down preserva `module.network` (VPC/subnets/SGs) pero **libera el NAT** vía `enable_nat=false` (`terraform apply -target=module.network -var enable_nat=false`), eliminando el ~$33/mes idle. `task rebuild`/`deploy` lo recrean. Al destruirse el RDS tambien desaparece el storage gp3 (~$2.30/mes) y en su lugar se paga solo el snapshot, facturado sobre datos **usados** (no sobre los 20 GB asignados): centavos para esta base.
+**Costo despues del tear-down**: ~$1/mes (S3 + ECR + los backups retenidos; ver matriz #9.3). El tear-down preserva `module.network` (VPC/subnets/SGs) pero **libera el NAT** vía `enable_nat=false` (`terraform apply -target=module.network -var enable_nat=false`), eliminando el ~$33/mes idle. `task rebuild`/`deploy` lo recrean. Al destruirse el RDS tambien desaparece el storage gp3 (~$2.30/mes) y en su lugar se paga solo el backup, facturado sobre datos **usados** (no sobre los 20 GB asignados): centavos para esta base.
 
 #### Comando `task teardown`
 
@@ -9168,88 +9237,602 @@ gasto, evento de costo inesperado, pausar el proyecto.
 task teardown
 # Pide confirmacion: Task pide "y" para proceder.
 # Pasos internos (tasks/ops.yml :: teardown):
-#  1. ops:down -> aborta si hay Batch jobs RUNNING; invoca la Lambda
+#  0. ops:down -> aborta si hay Batch jobs RUNNING; invoca la Lambda
 #     ml-training-scheduler (action=stop) para apagar RDS + Fargate.
-#  2. Loop `terraform destroy -target=$mod` sobre los modulos VOLATILES, en orden:
+#  1. [1/4] ensure_backup: BACKUP ANTES DE TOCAR NADA, y se espera a que quede
+#     `available`. Incluye ensure_rds_available, porque el paso 0 PARO el RDS y
+#     AWS rechaza snapshotear una instancia detenida. Si esto falla, el teardown
+#     ABORTA con la infra intacta: mejor no apagar que perder datos.
+#  2. [2/4] lift_rds_protection + loop `terraform destroy -target=$mod` sobre los
+#     modulos VOLATILES, en orden reverso de apply:
 #     scheduler -> lambdas -> monitoring -> batch -> reports -> api -> ui -> mlflow -> cicd -> consumer_iam
-#  3. Antes del loop levanta la proteccion del RDS via AWS CLI
-#     (lift_rds_protection en tasks/lib/nuke.sh) y pasa rds_final_snapshot_identifier timestamped.
-#  3b. ensure_rds_available: el paso 1 (ops:down) PARO el RDS, y AWS rechaza
-#     snapshotear una instancia detenida -> la re-arranca y espera `available`.
-#  4. `terraform apply -target=module.network -var enable_nat=false` -> LIBERA el NAT (~$33/mes).
-#  5. prune_snapshots (tasks/lib/snapshot.sh) borra los snapshots manuales mas
-#     viejos y conserva los SNAPSHOT_KEEP ultimos (default 4).
+#     Pasa rds_skip_final_snapshot=true: el backup del paso 1 ya esta verificado.
+#  3. [3/4] `terraform apply -target=module.network -var enable_nat=false` -> LIBERA el NAT (~$33/mes).
+#  4. [4/4] assert_backup_exists (falla ruidosamente si no quedo backup) +
+#     prune_snapshots: conserva los SNAPSHOT_KEEP ultimos (default 6).
 #  storage es PERMANENTE: NO se destruye. network se preserva pero con el NAT liberado.
 ```
 
-#### Ciclo snapshot -> restore
+#### Ciclo backup → restauración
 
-El teardown destruye el RDS, y ahi viven **MLflow tracking + Model Registry** y la
-tabla **`forecasts`** de la API (misma instancia, bases distintas). El unico
-puente entre un teardown y el rebuild siguiente es el snapshot:
+Esta es la pieza que hace que apagar y volver a levantar sea **"como si nada
+hubiera pasado"**. Es la sección de referencia del ciclo: #8.6 (rebuild) y #8.7
+(destroy) apuntan acá en vez de repetirla.
+
+##### Vocabulario único
+
+La guía, los taskfiles y los mensajes en pantalla usan **estas tres palabras y
+no sinónimos**. Antes convivían "snapshot final", "snapshot manual", "backup" y
+"restore" para nombrar lo mismo, y eso hacía que dos secciones parecieran
+describir mecanismos distintos:
+
+| Palabra | Qué es exactamente | Dónde vive |
+|---|---|---|
+| **backup** | un snapshot **manual** del RDS | AWS RDS (no es un objeto de S3) |
+| **restaurar** | crear el RDS a partir de un backup (`rds_snapshot_identifier`) | `terraform apply` |
+| **artifacts** | modelos `.joblib` + reports HTML + Excels de entrada | **S3**, fuera de este ciclo |
+
+> [!IMPORTANT]
+> **Los backups de Postgres NO son objetos de S3.** Son snapshots de RDS,
+> almacenamiento gestionado por AWS, y se listan con `task backups` (no con
+> `aws s3 ls`). Lo que sí vive en S3 son los **artifacts**. Son dos mecanismos
+> de persistencia distintos y se pierden por causas distintas — ver la tabla
+> "Qué sobrevive a qué" abajo.
+
+##### Qué sobrevive a qué
+
+| Dato | Dónde vive | `sleep` | `teardown` | `destroy` | `nuke` |
+|---|---|---|---|---|---|
+| MLflow tracking + Model Registry (metadata) | RDS | ✅ vivo | ✅ **backup** | ✅ **backup** (¹) | ✅ backup, pero (²) |
+| Tabla `forecasts` de la API | RDS | ✅ vivo | ✅ **backup** | ✅ **backup** (¹) | ✅ backup, pero (²) |
+| Modelos `.joblib` + reports HTML | S3 `artifacts` | ✅ | ✅ intacto | ❌ **se vacía** | ❌ se vacía |
+| Excels de entrada | S3 `data` | ✅ | ✅ intacto | ❌ **se vacía** | ❌ se vacía |
+| Imágenes de contenedor | ECR | ✅ | ✅ intacto | ❌ purgado | ❌ purgado |
+| Terraform state | S3 `tfstate` | ✅ | ✅ intacto | ✅ intacto | ❌ borrado |
+
+(¹) El backup del RDS sobrevive al `destroy` — los snapshots no son un recurso
+gestionado por Terraform. Pero **el `destroy` sí vacía los buckets de S3**, así
+que los artifacts no vuelven. Restaurar el RDS te devuelve el Registry apuntando
+a artifacts que ya no existen.
+(²) `nuke` corre `purge_secret` de la password master: el backup queda en la
+cuenta pero **sin credencial**, es decir irrestaurable en la práctica (ver #8.7).
+
+> **Conclusión operativa**: para el ciclo recurrente usá **`teardown` + `rebuild`**,
+> nunca `destroy`. Es el único par que devuelve el sistema completo — metadata y
+> artifacts. `destroy` es para cerrar el proyecto, no para ahorrar.
+
+##### El flujo, de punta a punta
 
 ```
-task teardown ──► snapshot final timestamped ──► (poda: retiene 4)
-                            │
-task rebuild  ◄─────────────┘  latest_snapshot() lo resuelve y lo pasa como
-                               -var rds_snapshot_identifier=<id>
+        ┌──────────────── APAGAR (task teardown / destroy) ────────────────┐
+        │  1. ensure_backup    ← backup ANTES de destruir nada, y se       │
+        │                        ESPERA a que quede `available`           │
+        │  2. terraform destroy  (rds_skip_final_snapshot=true: el backup  │
+        │                         ya está tomado y verificado)             │
+        │  3. assert_backup_exists  ← falla ruidosamente si no quedó nada  │
+        │  4. prune_snapshots       ← retención (SNAPSHOT_KEEP, default 6) │
+        └──────────────────────────────────────────────────────────────────┘
+                                      │
+                          backup manual timestamped
+                                      │
+        ┌───────────── LEVANTAR (task deploy / rebuild — mismo camino) ────┐
+        │  5. resolve_restore_snapshot                                     │
+        │       ¿el RDS ya existe?  → no restaura (apply normal)           │
+        │       SNAPSHOT=none       → RDS vacío                            │
+        │       SNAPSHOT=<id>       → ese backup (se valida `available`)   │
+        │       por defecto         → el backup más reciente               │
+        │       no hay ninguno      → RDS vacío, y NO es un error          │
+        │  6. terraform apply -var rds_snapshot_identifier=<id>            │
+        └──────────────────────────────────────────────────────────────────┘
 ```
+
+**Dos propiedades de este diseño, y por qué importan:**
+
+1. **El backup se toma ANTES del destroy, no durante.** El `final_snapshot` de
+   `aws_db_instance` se materializa *en medio* del destroy. Si falla ahí —el caso
+   real es el RDS en `stopped` → `InvalidDBInstanceState`— el destroy aborta a la
+   mitad y quedás con la infra rota **y sin backup**. Tomándolo antes y
+   verificándolo, el peor caso pasa a ser "el teardown falló pero tus datos están
+   a salvo". Por eso el destroy corre con `rds_skip_final_snapshot=true`: el
+   backup ya existe, duplicarlo sólo agrega 8 min y storage.
+
+2. **`deploy` y `rebuild` resuelven el backup con la MISMA función.** Antes sólo
+   `rebuild` restauraba; un `destroy` seguido de `task deploy` levantaba un RDS
+   **vacío** aunque el backup estuviera ahí, en silencio. Ahora los dos caminos
+   llaman a `resolve_restore_snapshot()` y dan el mismo resultado.
 
 > [!NOTE]
 > **La primera vez NO hay backups, y es lo esperado.** En una cuenta virgen el
-> `task deploy` inicial crea el RDS **vacio**: todavia no existe ningun snapshot
-> porque nunca hubo un teardown. `task snapshots` sale vacio y eso no es un error.
+> `task deploy` inicial crea el RDS **vacío**: nunca hubo un teardown, así que no
+> existe ningún backup. `task backups` sale vacío y eso no es un error.
 >
-> El primer snapshot nace en tu **primer `task teardown`**. Recien a partir de
-> ahi el ciclo tiene algo que restaurar, y `task rebuild` empieza a recuperar
-> Model Registry + `forecasts`. Resumen:
->
-> | Momento | Snapshots en la cuenta | Que hace el rebuild/deploy |
+> | Momento | Backups en la cuenta | Qué hace `deploy`/`rebuild` |
 > |---|---|---|
-> | 1er `task deploy` (cuenta virgen) | 0 | RDS **vacio** (no hay nada que restaurar) |
+> | 1er `task deploy` (cuenta virgen) | 0 | RDS **vacío** (no hay nada que restaurar) |
 > | 1er `task teardown` | 1 | — |
-> | `task rebuild` siguiente | 1 | **restaura** desde ese snapshot |
-> | teardown/rebuild sucesivos | hasta 4 (poda) | restaura el mas reciente |
+> | `deploy`/`rebuild` siguiente | 1 | **restaura** desde ese backup |
+> | ciclos sucesivos | hasta 6 (poda) | restaura el más reciente |
 >
-> `latest_snapshot()` maneja el caso vacio devolviendo string vacio (no falla):
+> `latest_snapshot()` maneja el caso vacío devolviendo string vacío (no falla):
 > el apply corre sin `-var` y crea la instancia limpia. Por eso las mismas tareas
-> sirven para el primer stand-up y para los ciclos posteriores.
+> sirven para el estreno y para los ciclos posteriores — no hay un "modo primera
+> vez" que recordar.
 
-> [!WARNING]
-> **El RDS tiene que estar `available` para que el snapshot final salga.** El
-> teardown primero llama a `ops:down`, que invoca al scheduler con `action=stop`
-> y **para** la instancia. Si se destruye en ese estado, AWS responde
-> `InvalidDBInstanceState: Cannot create a snapshot because the database
-> instance ... is not currently in the available state` y el destroy **aborta a
-> la mitad**: infra parcialmente destruida y **sin snapshot final**.
-> Por eso `ops:teardown` e `infra:destroy` llaman a `ensure_rds_available`
-> (`tasks/lib/nuke.sh`) antes del destroy: re-arranca la instancia y espera.
-> Cuesta ~5-10 min extra, y es lo que hace que el ciclo sea confiable.
+##### Tres detalles de implementación que **no son opcionales**
 
-Tres detalles de implementacion que **no son opcionales**:
-
-1. **La credencial master vive en la raiz**, `infra/envs/prod/rds_secret.tf`, no
-   dentro de `module.mlflow`. Si viviera dentro, el teardown la destruiria junto
-   con el modulo y el rebuild generaria una password NUEVA — que no coincide con
-   la del snapshot restaurado (AWS conserva la credencial del snapshot). MLflow y
-   la API no autenticarian y el backup seria inservible.
-2. **El RDS debe estar `available`** antes del destroy que toma el snapshot
-   (`ensure_rds_available`, ver el aviso de arriba).
+1. **La credencial master vive en la raíz**, `infra/envs/prod/rds_secret.tf`, no
+   dentro de `module.mlflow`. Si viviera dentro, el teardown la destruiría junto
+   con el módulo y el rebuild generaría una password NUEVA — que no coincide con
+   la del backup restaurado (AWS conserva la credencial del snapshot). MLflow y
+   la API no autenticarían y **el backup sería inservible**: existe, está íntegro
+   y no sirve. Ver [ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md).
+2. **El RDS debe estar `available` para poder respaldarlo.** `ops:down` (que el
+   teardown invoca primero) lo **para**, y AWS rechaza snapshotear una instancia
+   detenida. `ensure_rds_available` (`tasks/lib/nuke.sh`) la re-arranca y espera.
+   Con el backup movido al *pre*-destroy esto dejó de ser un riesgo de pérdida de
+   datos y pasó a ser sólo ~5-10 min de espera.
 3. **`snapshot_identifier` lleva `lifecycle { ignore_changes }`** en
    `modules/mlflow/rds.tf`. El argumento es *ForceNew*: sin eso, cualquier apply
    posterior que no repita el mismo `-var` (por ejemplo el apply completo que
-   hace `ops:up` cuando el ALB no existe) veria `""` contra el valor del state y
-   **destruiria y recrearia el RDS**, perdiendo lo restaurado.
+   hace `ops:up` cuando el ALB no existe) vería `""` contra el valor del state y
+   **destruiría y recrearía el RDS**, perdiendo lo restaurado.
 
-Los **artifacts** de MLflow (modelos serializados, reportes HTML) ya viven en S3
-y no dependen de este ciclo: sobreviven a teardown y destroy por igual.
-
-Tareas de apoyo:
+##### Tareas de apoyo
 
 ```bash
-task snapshots            # listar los snapshots manuales restaurables
-task ops:snapshot-now     # snapshot manual sin destruir nada (RDS debe estar available)
+task backups              # listar los backups restaurables (alias: task snapshots)
+task ops:backup-now       # backup manual sin destruir nada (RDS debe estar available)
+task ops:verify-backup    # ¿hay al menos un backup restaurable? exit 1 si no
 ```
+
+##### Implementación
+
+> Los **taskfiles sí viven en el repo** (`Taskfile.yml`, `tasks/`) y ya
+> implementan lo de arriba — los bloques que siguen son la referencia de qué
+> hace cada uno, no algo que haya que pegar. Lo que sí es **pegable** es el
+> Terraform de esta guía: `infra/` se removió del repo y se copia desde acá.
+
+**(a) `tasks/lib/snapshot.sh`** — el motor del ciclo. `backup_now`,
+`ensure_backup`, `assert_backup_exists` y `resolve_restore_snapshot` se sumaron
+a las tres funciones que ya existían:
+
+```bash
+#!/usr/bin/env bash
+# =============================================================================
+# tasks/lib/snapshot.sh  -  Backups del RDS: crear, verificar, restaurar, podar
+# =============================================================================
+# Sourceado (no ejecutado) desde tasks/ops.yml, tasks/infra.yml y Taskfile.yml.
+# Asume el CWD en la raiz del repo (Task siempre corre desde ahi).
+#
+# VOCABULARIO UNICO (mismas palabras en tasks, docs y mensajes en pantalla):
+#   backup    = un snapshot MANUAL del RDS. Unica copia de MLflow tracking +
+#               Model Registry + la tabla `forecasts`.
+#   restaurar = crear el RDS a partir de un backup (rds_snapshot_identifier).
+#   artifacts = modelos .joblib + reports HTML. Viven en S3, NO en el RDS, y no
+#               participan de este ciclo: sobreviven al teardown solos.
+#
+# CICLO — ver docs/02-produccion-aws.md #8.5 "Ciclo backup -> restauracion".
+#   apagar:   ensure_backup -> destroy (skip_final_snapshot=true)
+#             -> assert_backup_exists -> prune_snapshots
+#   levantar: resolve_restore_snapshot -> apply [-var rds_snapshot_identifier]
+#
+# POR QUE EL BACKUP VA ANTES DEL DESTROY (y no como final_snapshot de Terraform):
+#   El `final_snapshot` de aws_db_instance se toma DURANTE el destroy. Si algo
+#   falla ahi —el caso real es el RDS en `stopped` -> InvalidDBInstanceState— el
+#   destroy aborta a la mitad y quedas con la infra rota Y sin backup. Tomandolo
+#   antes, verificado y `available`, el destroy ya no puede perder datos.
+#
+# Solo se miran snapshots `manual`: los `automated` (backup_retention_period = 7)
+# se borran junto con la instancia y no sirven como fuente de
+# `aws_db_instance.snapshot_identifier`.
+#
+# Uso:  source tasks/lib/snapshot.sh
+# =============================================================================
+
+# ─── Consulta ────────────────────────────────────────────────────────────────
+
+# latest_snapshot <db-instance-id>
+#   Imprime en stdout el identifier del backup mas reciente (por
+#   SnapshotCreateTime) que este `available`. Si no hay ninguno, imprime vacio
+#   y retorna 0 (NO es un error: es el caso de un stand-up desde cero).
+#   Todo el ruido va a stderr para no contaminar la sustitucion de comandos.
+latest_snapshot() {
+  local db_id="$1"
+  local snap
+  snap=$(aws rds describe-db-snapshots \
+    --snapshot-type manual \
+    --query "sort_by(DBSnapshots[?DBInstanceIdentifier=='${db_id}' && Status=='available'], &SnapshotCreateTime)[-1].DBSnapshotIdentifier" \
+    --output text 2>/dev/null || echo "")
+
+  # La CLI devuelve el string "None" cuando el query no matchea nada.
+  if [ -z "$snap" ] || [ "$snap" = "None" ]; then
+    echo "  No hay backups de $db_id -> el RDS se creara VACIO." >&2
+    echo ""
+    return 0
+  fi
+  echo "  Backup mas reciente de $db_id: $snap" >&2
+  echo "$snap"
+}
+
+# list_snapshots <db-instance-id>
+#   Tabla legible de los backups (mas nuevo primero).
+list_snapshots() {
+  local db_id="$1"
+  aws rds describe-db-snapshots \
+    --snapshot-type manual \
+    --query "reverse(sort_by(DBSnapshots[?DBInstanceIdentifier=='${db_id}'], &SnapshotCreateTime))[].[DBSnapshotIdentifier,Status,SnapshotCreateTime,AllocatedStorage]" \
+    --output table
+}
+
+# ─── Creacion ────────────────────────────────────────────────────────────────
+
+# backup_now <db-instance-id> [etiqueta]
+#   Crea un backup y ESPERA a que quede `available`. Imprime el identifier en
+#   stdout; todo lo demas va a stderr para poder capturarlo con $(...).
+#   Retorna 1 si el RDS no existe: quien llama decide si eso es fatal.
+backup_now() {
+  local db_id="$1"
+  local label="${2:-backup}"
+  local snap
+
+  if ! aws rds describe-db-instances --db-instance-identifier "$db_id" >/dev/null 2>&1; then
+    echo "  RDS $db_id no existe -> no hay nada que respaldar." >&2
+    return 1
+  fi
+
+  # AWS rechaza snapshotear una instancia detenida (InvalidDBInstanceState) y
+  # `ops:down` la deja parada. ensure_rds_available vive en nuke.sh; se sourcea
+  # aca si el caller no lo hizo, para que backup_now sea autosuficiente.
+  if ! command -v ensure_rds_available >/dev/null 2>&1; then
+    # shellcheck source=tasks/lib/nuke.sh
+    source tasks/lib/nuke.sh
+  fi
+  ensure_rds_available "$db_id" >&2
+
+  snap="${db_id}-${label}-$(date +%Y%m%d%H%M%S)"
+  echo "  Creando backup $snap..." >&2
+  aws rds create-db-snapshot \
+    --db-instance-identifier "$db_id" \
+    --db-snapshot-identifier "$snap" >/dev/null
+
+  echo "  Esperando a que $snap quede available (~3-8 min)..." >&2
+  aws rds wait db-snapshot-available --db-snapshot-identifier "$snap"
+  echo "  OK backup $snap verificado y restaurable." >&2
+  echo "$snap"
+}
+
+# ensure_backup <db-instance-id> [etiqueta] [max-edad-minutos]
+#   "Si no hay backup, lo hace; si ya hay uno fresco, trabaja con ese."
+#   Garantiza que exista un backup `available` ANTES de una operacion
+#   destructiva. Imprime en stdout el identifier del backup vigente.
+#
+#   max-edad-minutos (default 0 = siempre crea uno nuevo). Con un valor > 0
+#   reutiliza el ultimo backup si es mas nuevo que esa edad: sirve para
+#   reintentar un teardown que fallo DESPUES de haber respaldado, sin volver a
+#   pagar los ~8 min de espera.
+#
+#   Retorna 1 si el RDS no existe (nada que respaldar): hacer teardown de una
+#   infra ya destruida es legitimo, y el caller lo trata como no-fatal.
+ensure_backup() {
+  local db_id="$1"
+  local label="${2:-backup}"
+  local max_age_min="${3:-0}"
+  local last created age_min
+
+  if ! aws rds describe-db-instances --db-instance-identifier "$db_id" >/dev/null 2>&1; then
+    echo "  RDS $db_id no existe -> no hay nada que respaldar (skip)." >&2
+    return 1
+  fi
+
+  if [ "$max_age_min" -gt 0 ]; then
+    last=$(aws rds describe-db-snapshots \
+      --snapshot-type manual \
+      --query "sort_by(DBSnapshots[?DBInstanceIdentifier=='${db_id}' && Status=='available'], &SnapshotCreateTime)[-1].[DBSnapshotIdentifier,SnapshotCreateTime]" \
+      --output text 2>/dev/null || echo "")
+    if [ -n "$last" ] && [ "$last" != "None" ]; then
+      created=$(echo "$last" | awk '{print $2}')
+      age_min=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 60 ))
+      if [ "$age_min" -le "$max_age_min" ]; then
+        echo "  Ya hay un backup de hace ${age_min} min (<= ${max_age_min}) -> se reutiliza." >&2
+        echo "$last" | awk '{print $1}'
+        return 0
+      fi
+    fi
+  fi
+
+  backup_now "$db_id" "$label"
+}
+
+# ─── Verificacion ────────────────────────────────────────────────────────────
+
+# assert_backup_exists <db-instance-id>
+#   Falla ruidosamente si NO quedo ningun backup restaurable. Se corre DESPUES
+#   del teardown/destroy: convierte una perdida silenciosa de datos (el bug
+#   historico de este repo) en un error visible mientras todavia se puede
+#   reaccionar.
+assert_backup_exists() {
+  local db_id="$1"
+  local snap
+  snap=$(aws rds describe-db-snapshots \
+    --snapshot-type manual \
+    --query "sort_by(DBSnapshots[?DBInstanceIdentifier=='${db_id}' && Status=='available'], &SnapshotCreateTime)[-1].DBSnapshotIdentifier" \
+    --output text 2>/dev/null || echo "")
+
+  if [ -z "$snap" ] || [ "$snap" = "None" ]; then
+    echo ""
+    echo "ERROR No quedo NINGUN backup de $db_id."
+    echo "      MLflow Registry y la tabla forecasts NO son recuperables."
+    echo "      Si el RDS todavia existe: task ops:backup-now"
+    return 1
+  fi
+  echo "  OK backup vigente: $snap (lo consumira el proximo deploy/rebuild)."
+}
+
+# ─── Restauracion ────────────────────────────────────────────────────────────
+
+# resolve_restore_snapshot <db-instance-id> [preferencia]
+#   Fuente UNICA de la decision "restaurar o arrancar limpio". La comparten
+#   `task deploy` y `task rebuild` para que el resultado sea identico por
+#   cualquiera de los dos caminos.
+#
+#   Imprime en stdout el identifier a restaurar, o vacio si corresponde crear un
+#   RDS nuevo. Los mensajes van a stderr.
+#
+#   preferencia:
+#     ""      (default) -> el backup mas reciente, si existe
+#     "none"            -> forzar RDS vacio (ignora los backups)
+#     "<id>"            -> ese backup exacto (se valida que exista y este available)
+#
+#   Precedencia deliberada: si el RDS YA existe, nunca se restaura. Restaurar es
+#   una operacion de CREACION (snapshot_identifier es ForceNew); pasarlo sobre
+#   una instancia viva la recrearia y destruiria los datos actuales.
+resolve_restore_snapshot() {
+  local db_id="$1"
+  local pref="${2:-}"
+  local st
+
+  if aws rds describe-db-instances --db-instance-identifier "$db_id" >/dev/null 2>&1; then
+    echo "  RDS $db_id ya existe -> no se restaura nada (apply normal)." >&2
+    echo ""
+    return 0
+  fi
+
+  if [ "$pref" = "none" ]; then
+    echo "  SNAPSHOT=none -> RDS nuevo y VACIO (no se restaura)." >&2
+    echo ""
+    return 0
+  fi
+
+  if [ -n "$pref" ]; then
+    st=$(aws rds describe-db-snapshots --db-snapshot-identifier "$pref" \
+      --query 'DBSnapshots[0].Status' --output text 2>/dev/null || echo "")
+    if [ "$st" != "available" ]; then
+      echo "ERROR El backup '$pref' no existe o no esta available (estado: ${st:-inexistente})." >&2
+      echo "      Ver los disponibles con: task backups" >&2
+      return 1
+    fi
+    echo "  Backup fijado por el usuario: $pref" >&2
+    echo "$pref"
+    return 0
+  fi
+
+  latest_snapshot "$db_id"
+}
+
+# ─── Retencion ───────────────────────────────────────────────────────────────
+
+# prune_snapshots <db-instance-id> <keep-n>
+#   Borra los backups mas viejos, conservando los <keep-n> ultimos.
+#   Idempotente. Con menos de keep-n backups no hace nada.
+prune_snapshots() {
+  local db_id="$1"
+  local keep="${2:-6}"
+  local all count victims
+
+  all=$(aws rds describe-db-snapshots \
+    --snapshot-type manual \
+    --query "reverse(sort_by(DBSnapshots[?DBInstanceIdentifier=='${db_id}'], &SnapshotCreateTime))[].DBSnapshotIdentifier" \
+    --output text 2>/dev/null || echo "")
+  if [ -z "$all" ] || [ "$all" = "None" ]; then
+    echo "  No hay backups de $db_id -> nada que podar."
+    return 0
+  fi
+
+  # `tr` porque --output text separa por tabs en una sola linea.
+  count=$(echo "$all" | tr '\t' '\n' | grep -c . || true)
+  if [ "$count" -le "$keep" ]; then
+    echo "  $count backup(s) <= retencion ($keep) -> nada que podar."
+    return 0
+  fi
+
+  victims=$(echo "$all" | tr '\t' '\n' | tail -n +$((keep + 1)))
+  echo "  $count backups, retencion $keep -> borrando $((count - keep)):"
+  for s in $victims; do
+    echo "    - $s"
+    aws rds delete-db-snapshot --db-snapshot-identifier "$s" >/dev/null
+  done
+}
+```
+
+**(b) `tasks/ops.yml`** — `teardown` respalda antes de destruir y verifica
+después; `rebuild` delega la decisión al resolver compartido. Reemplazar el
+bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
+
+```yaml
+  # ═══ Teardown / Rebuild ═════════════════════════════════════════════════════
+
+  teardown:
+    desc: "Backup + destroy de modulos volatiles. Preserva storage + network"
+    prompt: "Se tomara un backup del RDS y se destruiran los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
+    cmds:
+      # RELEASE_NET=false: liberar ALB/NAT aqui seria redundante — el destroy
+      # de module.mlflow y el apply enable_nat=false de abajo hacen lo mismo.
+      - task: down
+        vars: { RELEASE_NET: "false" }
+      # PASO 1 — BACKUP ANTES DE TOCAR NADA. Si esto falla, se aborta con la
+      # infra intacta: preferimos un teardown que no ocurre a datos perdidos.
+      # `down` (arriba) paro el RDS; ensure_backup lo re-arranca (ensure_rds_
+      # available) porque AWS no snapshotea instancias detenidas.
+      # BACKUP_MAX_AGE_MIN>0 permite reintentar un teardown fallido reutilizando
+      # el backup recien tomado, sin pagar otros ~8 min de espera.
+      - 'echo ">>> [1/4] Backup del RDS ANTES de destruir (obligatorio)..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        if ensure_backup "{{.PROJECT}}-mlflow" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
+          echo "OK backup verificado. El destroy ya no puede perder datos."
+        else
+          echo "AVISO el RDS no existe -> nada que respaldar; se sigue con el destroy."
+        fi
+      # PASO 2 — destroy. rds_skip_final_snapshot=true: el backup del paso 1 ya
+      # esta tomado y VERIFICADO, un final_snapshot seria un duplicado de ~8 min.
+      - 'echo ">>> [2/4] Destroy de modulos volatiles (orden reverso de apply)..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/nuke.sh
+        # El RDS tiene deletion_protection=true -> levantarla antes del destroy.
+        lift_rds_protection "{{.PROJECT}}-mlflow"
+        for mod in {{.VOLATILE_MODULES}}; do
+          echo ">>> terraform destroy -target=$mod"
+          terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve \
+            -var "rds_skip_final_snapshot=true" || {
+            echo "FAIL destroy de $mod fallo. Revisar manualmente."
+            echo "     Tus datos ESTAN a salvo: el backup del paso 1 ya existe."
+            exit 1
+          }
+        done
+      # Libera el NAT gateway + EIP (~$33/mes idle) sin tocar VPC/subnets/SGs.
+      - 'echo ">>> [3/4] Liberando NAT gateway (enable_nat=false)..."'
+      - terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
+      # PASO 4 — verificar + podar. assert_backup_exists convierte una perdida
+      # silenciosa en un error visible mientras todavia se puede reaccionar.
+      - 'echo ">>> [4/4] Verificando el backup + poda (retencion {{.SNAPSHOT_KEEP}})..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        assert_backup_exists "{{.PROJECT}}-mlflow"
+        prune_snapshots "{{.PROJECT}}-mlflow" "{{.SNAPSHOT_KEEP}}"
+      - 'echo "OK teardown completo (NAT liberado). Para volver: task rebuild"'
+      - 'echo "     MLflow Registry + forecasts viven en el backup; rebuild los restaura."'
+      - 'echo "     Los artifacts (modelos, reports) siguen intactos en S3."'
+
+  # Apply completo que RESTAURA el RDS del backup cuando corresponde. Es el
+  # camino UNICO de "levantar": lo comparten `task deploy` (oleada C) y
+  # `ops:rebuild`, para que los dos den el mismo resultado y no exista una
+  # variante que pierda datos en silencio.
+  #
+  # Un apply a secas crearia una instancia VACIA y el backup quedaria huerfano:
+  # ese era el bug historico —teardown -> rebuild perdia registry + forecasts
+  # sin avisar—.
+  apply-restore:
+    desc: "terraform apply completo restaurando el RDS del ultimo backup si existe. Vars: SNAPSHOT=<id>|none"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        SNAP=$(resolve_restore_snapshot "{{.PROJECT}}-mlflow" "{{.SNAPSHOT}}")
+        if [ -n "$SNAP" ]; then
+          echo ">>> Restaurando RDS desde $SNAP (~5-10 min extra)..."
+          terraform -chdir={{.TF_DIR}} apply -auto-approve \
+            -var "rds_snapshot_identifier=$SNAP"
+        else
+          terraform -chdir={{.TF_DIR}} apply -auto-approve
+        fi
+
+  rebuild:
+    desc: "Re-apply de modulos volatiles + up. RESTAURA el RDS desde el ultimo backup (SNAPSHOT=<id> para fijar uno, SNAPSHOT=none para empezar vacio)"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
+    cmds:
+      - 'echo ">>> Apply completo (modulos volatiles se re-crean, resto no-op)..."'
+      - task: apply-restore
+        vars: { SNAPSHOT: '{{.SNAPSHOT}}' }
+      - task: up
+
+  backups:
+    desc: "Listar los backups del RDS (los que puede consumir `deploy`/`rebuild`)"
+    aliases: [snapshots]
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/snapshot.sh
+        list_snapshots "{{.PROJECT}}-mlflow"
+
+  backup-now:
+    desc: "Tomar un backup del RDS AHORA (sin destruir nada). Arranca el RDS si esta parado"
+    aliases: [snapshot-now]
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        backup_now "{{.PROJECT}}-mlflow" "manual" >/dev/null
+
+  verify-backup:
+    desc: "Verificar que existe al menos un backup restaurable del RDS (exit 1 si no)"
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        assert_backup_exists "{{.PROJECT}}-mlflow"
+```
+
+Y en el bloque `vars:` de `tasks/ops.yml`, junto a `SNAPSHOT_KEEP`:
+
+```yaml
+vars:
+  # Cuantos backups del RDS conserva el teardown al podar. Con 2 ciclos por
+  # semana, 6 = ~3 semanas de historia.
+  SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
+  # Reutilizar un backup mas nuevo que N minutos en vez de crear otro. 0 =
+  # siempre crear uno nuevo. >0 sirve para reintentar un teardown que fallo
+  # despues de respaldar, sin pagar otra vez los ~8 min de espera.
+  BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN | default "0"}}'
+```
+
+**(c) `Taskfile.yml`** — `deploy` busca backups igual que `rebuild`, y `destroy`
+respalda antes. La Oleada C de `deploy` delega en la tarea compartida (el
+Taskfile raíz no define `TF_DIR`, y duplicar el bloque reintroduciría justo la
+divergencia que este diseño elimina):
+
+```yaml
+      # La implementacion vive en ops:apply-restore, compartida con `rebuild`.
+      - 'echo ">>> Oleada C: apply resto (network, mlflow, batch, ...)..."'
+      - task: ops:apply-restore
+        vars: { SNAPSHOT: '{{.SNAPSHOT}}' }
+```
+
+...declarando `SNAPSHOT: '{{.SNAPSHOT | default ""}}'` en las `vars:` de `deploy`
+(acepta `SNAPSHOT=none` y `SNAPSHOT=<id>` igual que `rebuild`), y
+`BACKUP_MAX_AGE_MIN` en las `vars:` globales (el include `ops:` sólo recibe las
+vars listadas en `includes:`, así que el default vive declarado en los dos
+lados — si cambiás uno, cambiá el otro).
+
+Y en `destroy`, insertar el backup como **primer** paso, antes de vaciar nada:
+
+```yaml
+  destroy:
+    desc: "AWS DESTRUCTIVO: backup del RDS, drena Batch, vacia S3/ECR, terraform destroy total"
+    prompt: "Destruira envs/prod (S3 + ECR + RDS + ...). Los artifacts de S3 NO se recuperan. Continuar?"
+    cmds:
+      - task: ops:down
+      # El backup va primero: si el destroy falla a la mitad, los datos del RDS
+      # ya estan a salvo. OJO: esto NO respalda los artifacts de S3 — ver #8.7.
+      - 'echo ">>> Backup del RDS antes de destruir..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        ensure_backup "{{.PROJECT}}-mlflow" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
+          || echo "AVISO el RDS no existe -> nada que respaldar."
+      - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
+      # ... (resto del destroy sin cambios)
+```
+
+En `tasks/infra.yml::destroy`, el `-var` del final snapshot ya no hace falta
+(el backup lo toma quien llama): pasar `-var "rds_skip_final_snapshot=true"`.
 
 #### Periodo de gracia de RDS — por que el teardown lo evita
 
@@ -9262,7 +9845,7 @@ instancia arranca sola y nadie la vuelve a parar, se factura completa sin que
 nadie la use. Opciones:
 
 - **Teardown (recomendada para 1+ semana)**: no hay instancia que pueda
-  auto-arrancar. El estado queda en el snapshot final y `task rebuild` lo
+  auto-arrancar. El estado queda en el backup y `task rebuild` lo
   restaura. Es el flujo automatizado descrito arriba.
 - **Lambda `ml-training-rds-keepstop`** (Parte 3.11): detecta que el RDS
   arranco solo y lo vuelve a parar (cron cada 6h). Sirve mientras el stack esta
@@ -9281,15 +9864,16 @@ de MLflow para mirar runs viejos.
 #### Comando `task rebuild`
 
 ```bash
-task rebuild                       # restaura desde el snapshot mas reciente (default)
-task rebuild SNAPSHOT=<id>         # restaura desde uno especifico (ver `task snapshots`)
+task rebuild                       # restaura desde el backup mas reciente (default)
+task rebuild SNAPSHOT=<id>         # restaura desde uno especifico (ver `task backups`)
 task rebuild SNAPSHOT=none         # arranca con un RDS VACIO (descarta el historico)
 # Pasos internos (tasks/ops.yml :: rebuild):
-#  1. Resuelve el snapshot a restaurar:
+#  1. resolve_restore_snapshot() decide que restaurar (ver #8.5). Es la MISMA
+#     funcion que usa `task deploy`, no logica duplicada:
 #     - si el RDS YA existe -> no restaura nada (apply normal, idempotente).
 #     - SNAPSHOT=none -> instancia vacia.
-#     - SNAPSHOT=<id> -> ese.
-#     - por defecto -> latest_snapshot() = el manual mas reciente `available`.
+#     - SNAPSHOT=<id> -> ese (se valida que exista y este `available`).
+#     - por defecto -> el backup mas reciente `available`.
 #       Si no hay ninguno (stand-up desde cero) sigue con instancia vacia.
 #  2. terraform apply COMPLETO (sin -target) con -var rds_snapshot_identifier=<id>:
 #     los modulos volatiles se re-crean, el resto es no-op.
@@ -9299,15 +9883,20 @@ task rebuild SNAPSHOT=none         # arranca con un RDS VACIO (descarta el histo
 ```
 
 > [!IMPORTANT]
-> El rebuild restaura **Model Registry + tabla `forecasts`** desde el snapshot
-> final que dejo el teardown. Sin ese restore (comportamiento anterior a esta
-> version) el apply creaba un RDS **vacio** y el historico se perdia en silencio.
-> Si el resultado no es el esperado, `task snapshots` lista los candidatos y
+> El rebuild restaura **Model Registry + tabla `forecasts`** desde el backup que
+> dejó el teardown. Sin ese restore (comportamiento anterior a esta versión) el
+> apply creaba un RDS **vacío** y el histórico se perdía en silencio.
+> Si el resultado no es el esperado, `task backups` lista los candidatos y
 > `task rebuild SNAPSHOT=<id>` permite elegir otro.
 >
-> **Ojo si es tu primera vez**: esta seccion presupone que ya hubo un teardown.
-> En una cuenta virgen no hay snapshots y el flujo correcto es `task deploy`
-> (#1.1), no `rebuild` — ver la nota "la primera vez NO hay backups" en #8.5.
+> **`deploy` y `rebuild` restauran igual.** Comparten `resolve_restore_snapshot()`
+> (#8.5), así que no hay un camino "correcto" y otro que pierde datos. La
+> diferencia es de alcance, no de seguridad: `deploy` además corre el pre-check
+> de drift y re-buildea las 5 imágenes; `rebuild` asume que ya están en ECR.
+>
+> **Ojo si es tu primera vez**: esta sección presupone que ya hubo un teardown.
+> En una cuenta virgen no hay backups y el flujo correcto es `task deploy`
+> (#1.1) — ver la nota "la primera vez NO hay backups" en #8.5.
 
 **Tiempo**: 25-40 min, dominado por el restore del snapshot (~5-10 min) + RDS
 cold start (5 min) + Fargate task launch (~3 min) + ALB target registration (~2 min).
@@ -9327,13 +9916,33 @@ nuevo ALB.)
 > backups de la sub-sección siguiente (export Registry → JSON, snapshot
 > manual RDS, export tfstate) — sin ellos no hay forma de recuperar.
 >
-> **Ojo con los snapshots**: `task destroy` hace `purge_secret` del
-> `<project>-rds-password`. Los snapshots del RDS **sobreviven en la cuenta**,
+> **Ojo con los backups**: `task destroy` hace `purge_secret` del
+> `<project>-rds-password`. Los backups del RDS **sobreviven en la cuenta**,
 > pero su credencial master ya no está en Secrets Manager. Si pensás restaurar
 > alguno más adelante, **guardá el password aparte antes de destruir**:
 > `aws secretsmanager get-secret-value --secret-id <project>-rds-password --query SecretString --output text`.
 > (Este problema no aplica a `teardown`/`rebuild`: ahí el secret vive en la raíz
-> y no se toca.)
+> y no se toca — [ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md).)
+
+> [!IMPORTANT]
+> **`destroy` NO es "teardown pero más".** Es la diferencia entre pausar y
+> cerrar, y se confunde justamente porque el RDS se comporta igual en los dos:
+>
+> | | `teardown` | `destroy` |
+> |---|---|---|
+> | Backup del RDS antes de destruir | ✅ | ✅ |
+> | `deploy`/`rebuild` restauran ese backup | ✅ | ✅ |
+> | Artifacts en S3 (modelos, reports) | ✅ **intactos** | ❌ **buckets vaciados** |
+> | Excels de entrada en S3 | ✅ intactos | ❌ vaciados |
+> | Imágenes en ECR | ✅ intactas | ❌ purgadas |
+> | Credencial master del RDS | ✅ se preserva | ❌ `purge_secret` |
+>
+> O sea: tras un `destroy`, `task deploy` **sí** te devuelve el Model Registry —
+> pero apuntando a `.joblib` y reports que ya no existen, y sin la credencial
+> para abrir el backup. Recuperación real = re-entrenar.
+>
+> **Para el ciclo recurrente de prender/apagar usá `teardown` (#8.5), nunca
+> `destroy`.**
 
 Cuando lo uso: cierre del proyecto, migracion a otra cuenta, hard reset
 para empezar de cero.
@@ -9356,7 +9965,8 @@ para empezar de cero.
 - VPC + NAT + ALB + Fargate + Batch + Lambdas + EventBridge + SNS +
   CloudWatch alarms + log groups
 
-**ANTES de destruir, hacer 3 backups manuales**:
+**ANTES de destruir, archivar esto fuera del proyecto** (el RDS lo respalda
+`task destroy` solo; lo demás no lo respalda nadie):
 
 ```bash
 # Pre-requisito: tener un bucket de archive FUERA del proyecto (otra cuenta
@@ -9375,11 +9985,28 @@ mlflow models search > artifacts/model-registry-export.json
 aws s3 cp artifacts/model-registry-export.json \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/"
 
-# (2) Snapshot manual de RDS (queda independiente del instance)
-#     Equivalente automatizado: `task ops:snapshot-now` (crea + espera available).
+# (2) Backup del RDS (queda independiente de la instancia)
+#     `task destroy` ya lo hace solo (paso 2 del comando, ver abajo); esto es
+#     el equivalente manual. Automatizado y con espera: `task ops:backup-now`.
 aws rds create-db-snapshot \
   --db-instance-identifier ml-training-mlflow \
   --db-snapshot-identifier "ml-training-mlflow-final-$(date +%Y-%m-%d)"
+
+# (2-bis) LA CREDENCIAL DEL BACKUP. Sin esto el snapshot de (2) es inservible:
+#     `task destroy` purga el secret y AWS conserva la password VIEJA dentro del
+#     backup. Guardala fuera del proyecto ANTES de destruir.
+aws secretsmanager get-secret-value --secret-id ml-training-rds-password \
+  --query SecretString --output text > /tmp/rds-password-final.txt
+aws s3 cp /tmp/rds-password-final.txt \
+  "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/"
+
+# (2-ter) Los ARTIFACTS. `task destroy` vacia los buckets del proyecto: si no
+#     los copias afuera, los modelos y reports no vuelven (el backup del RDS
+#     solo trae la metadata que los referencia).
+aws s3 sync "s3://ml-training-artifacts-${ACCOUNT_SUFFIX}/" \
+  "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/artifacts/"
+aws s3 sync "s3://ml-training-data-${ACCOUNT_SUFFIX}/" \
+  "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/data/"
 
 # (3) Export del Terraform state como ultimo backup
 cd infra/envs/prod
@@ -9402,9 +10029,14 @@ task destroy
 # Pide confirmacion: Task pide "y" en dos prompts.
 # Pasos internos (Taskfile :: destroy):
 #  1. ops:down (apaga scheduler/RDS/Fargate; aborta si hay jobs RUNNING).
-#  2. Vaciar buckets versionados data + artifacts (incluye versions + delete markers).
-#  3. purge_ecr de los 5 repos (ml-training, -mlflow, -reports, -api, -ui).
-#  4. infra:destroy -> terraform destroy total de envs/prod (incluye S3 + RDS).
+#  2. ensure_backup del RDS: backup verificado ANTES de tocar nada (#8.5).
+#     Cubre la metadata (Registry + forecasts), NO los artifacts de S3.
+#  3. Vaciar buckets versionados data + artifacts (incluye versions + delete markers).
+#     <- ACA se pierden los modelos y los reports. Es irreversible.
+#  4. purge_ecr de los 5 repos (ml-training, -mlflow, -reports, -api, -ui).
+#  5. infra:destroy -> terraform destroy total de envs/prod (incluye S3 + RDS),
+#     con rds_skip_final_snapshot=true porque el backup del paso 2 ya existe.
+#  6. purge_secret del rds-password -> el backup queda SIN credencial (ver aviso).
 # NOTA: el bucket tfstate y el OIDC provider NO los borra `task destroy`;
 #       para eso esta `task nuke` (destroy + empty tfstate + delete_oidc).
 ```

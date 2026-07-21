@@ -257,46 +257,56 @@ del bootstrap OIDC (`task infra:bootstrap-oidc`); se activa después con
   para el RDS, pero **mantiene NAT + ALB** (wake instantáneo). Piso ~$50/mes.
   Con `RELEASE_NET=true` (default) también libera ALB+NAT → piso ~$4/mes.
 - **`task teardown`** — para idle largo: destruye los módulos volátiles (**el
-  RDS incluido**, con snapshot final) y libera el NAT preservando VPC/storage.
-  Piso ~$1/mes. `task rebuild` lo recrea **restaurando el RDS del snapshot**.
+  RDS incluido**, respaldándolo antes) y libera el NAT preservando VPC/storage.
+  Piso ~$1/mes. `task rebuild` lo recrea **restaurando el RDS del backup**.
 - **Fargate Spot** en `reports` + `ui` (stateless, ~70% más baratos); MLflow y
   API quedan on-demand a propósito (MLflow es crítico durante runs largos).
 - **RDS** `db.t4g.small` (no `micro`): hostea MLflow + `forecasts`, con
-  `deletion_protection` + snapshot final por default (las tareas de teardown lo
-  levantan vía AWS CLI para permitir el destroy).
+  `deletion_protection` por default (las tareas de teardown lo levantan vía AWS
+  CLI para permitir el destroy, tras haber respaldado).
 
-**Ciclo de persistencia teardown → rebuild.** `sleep` *para* el RDS; `teardown`
-lo **destruye**. Como MLflow tracking/registry y la tabla `forecasts` viven en esa
-instancia (invariante #7), el estado sobrevive únicamente vía snapshot:
+**Ciclo backup → restauración.** `sleep` *para* el RDS; `teardown` lo
+**destruye**. Como MLflow tracking/registry y la tabla `forecasts` viven en esa
+instancia (invariante #7), su estado sobrevive únicamente vía **backup** (un
+snapshot manual de RDS — no un objeto de S3):
 
 ```mermaid
 graph LR
-    td["task teardown"] -->|"snapshot final<br/>timestamped"| snap[("RDS snapshot<br/>manual")]
-    td -->|"prune_snapshots<br/>retiene 4"| snap
-    snap -->|"latest_snapshot()<br/>-var rds_snapshot_identifier"| rb["task rebuild"]
+    td["task teardown<br/>task destroy"] -->|"1· ensure_backup<br/><i>ANTES de destruir</i>"| snap[("backup RDS<br/>manual, verificado")]
+    td -->|"2· destroy<br/>skip_final_snapshot"| x(["infra volátil"])
+    td -->|"3· assert_backup_exists<br/>4· prune (retiene 6)"| snap
+    snap -->|"resolve_restore_snapshot()<br/>-var rds_snapshot_identifier"| rb["task deploy<br/>task rebuild"]
     rb --> rds[("RDS restaurado<br/>registry + forecasts")]
     sec["random_password + secret<br/><i>en la raíz, NO en module.mlflow</i>"] -.credencial válida.-> rds
+    s3[("S3 artifacts<br/><i>nunca se fue</i>")] -.modelos + reports.-> rds
 ```
 
-Tres piezas hacen que esto no se rompa:
+Cuatro piezas hacen que esto no se rompa:
+- **El backup se toma ANTES del destroy**, no como `final_snapshot` de Terraform
+  (que se materializa *durante* el destroy). Si el destroy falla a la mitad —el
+  caso real es el RDS en `stopped` → `InvalidDBInstanceState`— con el orden
+  viejo quedabas sin infra y sin backup. `ensure_rds_available`
+  (`tasks/lib/nuke.sh`) re-arranca la instancia para poder respaldarla.
+- **`deploy` y `rebuild` restauran con la misma función**
+  (`resolve_restore_snapshot`). Antes sólo `rebuild` lo hacía, y un `deploy`
+  posterior a un destroy levantaba un RDS vacío en silencio.
 - La **credencial master vive en la raíz** (`infra/envs/prod/rds_secret.tf`), no
   en `module.mlflow`. Si viviera dentro, el teardown la destruiría y el rebuild
-  generaría una password nueva incompatible con la del snapshot restaurado.
-- El RDS debe estar **`available`** al destruirlo: `teardown` llama antes a
-  `ops:down`, que lo **para**, y AWS rechaza snapshotear una instancia detenida
-  (`InvalidDBInstanceState`) abortando el destroy a la mitad y sin snapshot.
-  `ensure_rds_available` (`tasks/lib/nuke.sh`) lo re-arranca y espera.
+  generaría una password nueva incompatible con la del backup restaurado.
 - `snapshot_identifier` lleva **`ignore_changes`** obligatorio: es `ForceNew`, y
   sin él cualquier apply posterior que no repita el `-var` recrearía el RDS.
 
-Los artifacts de MLflow (modelos, reports) ya viven en S3 y no dependen de esto.
+Los artifacts de MLflow (modelos, reports) viven en S3 y **no participan de este
+ciclo**: `teardown` no toca `module.storage`, así que siguen ahí sin necesidad de
+restaurarlos. Ojo: `destroy` sí **vacía** esos buckets — respalda el RDS pero no
+los artifacts, por eso no es el modo para apagar y volver.
 
-> **En el primer stand-up no hay snapshot todavía** — el `task deploy` de una
-> cuenta virgen crea el RDS vacío, y `task snapshots` sale vacío sin que sea un
-> error. El primer snapshot lo produce el primer `task teardown`; recién desde
-> ahí el `rebuild` tiene algo que restaurar. `latest_snapshot()` devuelve vacío
-> en ese caso y el apply corre sin `-var`, así que las mismas tareas sirven para
-> el estreno y para los ciclos siguientes. Detalle en [`02-produccion-aws.md` #8.5](02-produccion-aws.md#parte-8--runbook-operativo-extendido).
+> **En el primer stand-up no hay backup todavía** — el `task deploy` de una
+> cuenta virgen crea el RDS vacío, y `task backups` sale vacío sin que sea un
+> error. El primer backup lo produce el primer `task teardown`; recién desde ahí
+> hay algo que restaurar. `latest_snapshot()` devuelve vacío en ese caso y el
+> apply corre sin `-var`, así que las mismas tareas sirven para el estreno y para
+> los ciclos siguientes. Detalle en [`02-produccion-aws.md` #8.5](02-produccion-aws.md#parte-8--runbook-operativo-extendido).
 
 ---
 
@@ -328,7 +338,7 @@ descarte con su **punto de cruce**: la condición concreta que lo volvería corr
 | **Step Functions** | ~$0 a este volumen | La orquestación cabe en Task + Lambda dispatcher. Una máquina de estados para "entrená N variedades" es infraestructura sin problema que resolver | Cuando el pipeline tenga ramas condicionales y reintentos por paso |
 | **Feature store** (SageMaker FS / Feast) | ~$50+/mes + un servicio más | Las features se generan **dentro** del Pipeline y se serializan con él ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)). Un feature store agrega la sincronización train/serving que hoy no existe porque no hace falta | Cuando haya features online, o varios equipos consumiendo las mismas |
 | **Kubernetes / EKS** | ~$73/mes solo el control plane | ECS Fargate cubre 4 servicios stateless sin plano de control que mantener | Cuando el equipo ya opere EKS para otra cosa |
-| **Multi-AZ en RDS** | ~2× el costo del RDS | El RPO real lo da el snapshot del ciclo teardown/rebuild ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)). Una caída de AZ cuesta un rebuild, no datos | Cuando la API pase a ser crítica de negocio en horario continuo |
+| **Multi-AZ en RDS** | ~2× el costo del RDS | El RPO real lo da el backup del ciclo teardown/rebuild ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)). Una caída de AZ cuesta un rebuild, no datos | Cuando la API pase a ser crítica de negocio en horario continuo |
 | **Airflow / MWAA** | ~$350/mes (MWAA) | No hay DAGs: hay un job de training disparado por cron o a mano | Cuando haya dependencias entre pipelines de varios equipos |
 | **Tests en CI** | — | Ver [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). **No es una decisión de arquitectura, es deuda asumida y fechada** | Ya. Es lo primero que agregaría |
 
@@ -343,11 +353,12 @@ Cosas que ya fallaron o que fallan de forma que el mensaje de error no explica.
 | 3 | Mover el cómputo de lags al loader | el MAPE de CV **mejora** — y es mentira | Los lags van dentro del Pipeline ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)) |
 | 4 | Leer env flags en `transform()` | el `.joblib` produce columnas distintas en otra máquina | Hornear flags en `flags_` durante el `fit` ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)) |
 | 5 | Renombrar un `step_XX_verbo/` | los `.joblib` viejos dejan de deserializar | No se renombran ([ADR-005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md)) |
-| 6 | `random_password` del RDS dentro de `module.mlflow` | el rebuild restaura el snapshot y **no autentica**: backup inservible | El secreto vive en `envs/prod/` ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)) |
-| 7 | `teardown` con el RDS parado | `InvalidDBInstanceState`, destroy a medias y **sin snapshot** | `ensure_rds_available` lo re-arranca antes (`tasks/lib/nuke.sh`) |
+| 6 | `random_password` del RDS dentro de `module.mlflow` | el rebuild restaura el backup y **no autentica**: backup inservible | El secreto vive en `envs/prod/` ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)) |
+| 7 | `teardown` con el RDS parado | `InvalidDBInstanceState`: no se puede respaldar una instancia detenida | `ensure_rds_available` lo re-arranca antes de respaldar (`tasks/lib/nuke.sh`) |
 | 8 | `snapshot_identifier` sin `ignore_changes` | cualquier apply posterior **recrea el RDS** | Es `ForceNew`: el `ignore_changes` es obligatorio |
-| 9 | Cambiar `MODEL_REGISTRY_PREFIX` de un lado solo | la API no encuentra los modelos que el trainer registró | Es un contrato: se cambia en los dos lados a la vez |
-| 10 | Correr `python main.py` en el host en vez del contenedor | resultados que no reproducen los de producción | Las dependencias pineadas viven en la imagen |
+| 9 | `destroy` usado para apagar y volver | respalda el RDS pero **vacía S3**: los artifacts no vuelven | Para el ciclo recurrente, `teardown` ([`02-produccion-aws.md` #8.2.0](02-produccion-aws.md)) |
+| 10 | Cambiar `MODEL_REGISTRY_PREFIX` de un lado solo | la API no encuentra los modelos que el trainer registró | Es un contrato: se cambia en los dos lados a la vez |
+| 11 | Correr `python main.py` en el host en vez del contenedor | resultados que no reproducen los de producción | Las dependencias pineadas viven en la imagen |
 
 ---
 

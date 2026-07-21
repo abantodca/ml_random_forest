@@ -9,7 +9,7 @@ comentario (*"Por que aca (ADR del ciclo teardown/rebuild)"*) pero nunca recibi�
 El lifecycle del stack tiene cuatro modos, y dos de ellos destruyen infraestructura:
 `task ops:teardown` elimina los `VOLATILE_MODULES` para dejar de pagar, y `task ops:rebuild` la
 vuelve a levantar. `module.mlflow` contiene el RDS, así que en un teardown **la instancia se borra**
-(con snapshot final timestamped).
+(tras tomarle un backup verificado — ver `02-produccion-aws.md` #8.5).
 
 El problema, literal de `infra/envs/prod/rds_secret.tf:1-26`:
 
@@ -26,11 +26,11 @@ en el teardown —se descubre en el rebuild, cuando ya necesitás los datos.
 
 `random_password` y su `aws_secretsmanager_secret` se declaran en **`infra/envs/prod/`**, no dentro
 de `modules/mlflow/`. El módulo recibe la password como input. Así el secreto **sobrevive** al ciclo
-teardown → rebuild y sigue coincidiendo con el que quedó grabado en el snapshot.
+teardown → rebuild y sigue coincidiendo con el que quedó grabado en el backup.
 
 ## Consecuencias
 
-**Se gana:** el snapshot del RDS es efectivamente restaurable. El ciclo de ahorro —que es el punto
+**Se gana:** el backup del RDS es efectivamente restaurable. El ciclo de ahorro —que es el punto
 del diseño— no destruye la recuperabilidad.
 
 **Se pierde:** la composición es menos limpia. El módulo `mlflow` no es autocontenido: depende de que
@@ -44,7 +44,7 @@ desplegado *"rotaria la password y romperia el RDS vivo"*. Si hiciera falta move
 
 | Alternativa | Por qué no |
 |---|---|
-| `random_password` dentro de `modules/mlflow/` | Se destruye con el módulo; el rebuild genera una password nueva que no coincide con el snapshot → backup irrecuperable |
+| `random_password` dentro de `modules/mlflow/` | Se destruye con el módulo; el rebuild genera una password nueva que no coincide con la del backup → backup irrecuperable |
 | Password fija en `tfvars` | Secreto en texto plano y versionado |
 | Rotar la password en cada rebuild y actualizar la base restaurada | Requiere levantar la base con la password vieja para poder cambiarla — el huevo y la gallina |
 
