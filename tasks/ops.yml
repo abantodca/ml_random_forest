@@ -31,8 +31,8 @@ vars:
   # QUEUE_SPOT / QUEUE_OD se inyectan desde el Taskfile raiz (fuente unica de la
   # convencion de nombres, compartida con batch:). Ver includes en Taskfile.yml.
   MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
-  # Cuantos backups del RDS conserva el teardown al podar. Con 2 ciclos por
-  # semana, 6 = ~3 semanas de historia.
+  # Cuantos backups del RDS conserva el teardown al podar. Con 1 ciclo por
+  # semana (deploy miercoles / teardown jueves), 6 = ~6 semanas de historia.
   SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
   # Orden reverso de apply: importante para destroy con dependencias.
   VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd"

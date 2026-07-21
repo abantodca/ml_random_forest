@@ -16,7 +16,8 @@
 >
 > Regla mental: **almacenar es barato y constante; computar es lo que cuesta, y solo cuando corrés.**
 > Por eso Batch escala a cero, el scheduler apaga RDS y Fargate fuera de horario, y los artefactos
-> viven en S3. **~$75/mes** con el scheduler en L-V 08-12 PET (#9).
+> viven en S3. **~$29/mes** con el ciclo miercoles+jueves 08-16 PET y teardown
+> semanal (#9).
 
 Índice:
 
@@ -819,7 +820,16 @@ variable "work_start_hour_local" {
 variable "work_end_hour_local" {
   description = "Hora local de apagado del scheduler."
   type        = number
-  default     = 12
+  default     = 16
+}
+
+# Dias que el scheduler considera laborables. DEBE wirearse a module.scheduler
+# (#3.10.5): el modulo tiene su propio default y si no se pasa, el valor de aqui
+# se ignora en silencio. Tokens de EventBridge cron ("WED,THU" o "MON-FRI").
+variable "workdays_cron" {
+  description = "Dias con ventana encendida (ciclo miercoles+jueves)."
+  type        = string
+  default     = "WED,THU"
 }
 
 variable "consumer_org" {
@@ -2522,8 +2532,17 @@ resource "aws_ecs_task_definition" "mlflow" {
   family                   = "${var.project}-mlflow"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "2048" # 2 vCPU
-  memory                   = "4096" # 4 GB
+  # Rightsizing (#9.4.5): 2 vCPU/4 GB -> 1 vCPU/3 GB, ~-$3.10/mes. El server es
+  # IO-bound (Postgres + proxy a S3 con --serve-artifacts), no CPU-bound.
+  #
+  # Por que 3 GB y no 2: `mlflow server` levanta 4 workers gunicorn por defecto
+  # (no pasamos --workers) y el trainer loguea 4 variedades en PARALELO. A
+  # ~300 MB de RSS por worker, 2 GB queda sin margen para el buffer de artifacts.
+  # Los 1 GB extra cuestan $0.30/mes — mas barato que un OOM a mitad de un run.
+  # Combos Fargate validos con cpu=1024: memoria 2048..8192 en pasos de 1024.
+  # Rollback: volver a "2048"/"4096" si ves OOMKilled en el log group de mlflow.
+  cpu                      = "1024" # 1 vCPU
+  memory                   = "3072" # 3 GB
   execution_role_arn       = aws_iam_role.mlflow_exec.arn
   task_role_arn            = aws_iam_role.mlflow_task.arn
 
@@ -4175,7 +4194,7 @@ variable "tz_offset_hours" {
 }
 variable "workdays_cron" {
   type    = string
-  default = "MON,WED,FRI" # Patch 13.1: solo L/Mi/V (antes: "MON-FRI")
+  default = "WED,THU" # ciclo miercoles+jueves (antes: "MON,WED,FRI")
 }
 variable "log_retention_days" { type = number }
 variable "lambdas_src_dir" { type = string }
@@ -4210,6 +4229,26 @@ en hardening (futuro).
 locals {
   start_hour_utc = (var.work_start_hour_local - var.tz_offset_hours + 24) % 24
   stop_hour_utc  = (var.work_end_hour_local - var.tz_offset_hours + 24) % 24
+
+  # Guarda para cortes nocturnos. Con el default actual (16:00 PET -> 21:00 UTC)
+  # NO se activa: el stop cae el mismo dia UTC y stop_days == workdays_cron.
+  #
+  # Se activa con cualquier corte >= 19:00 PET, que cruza medianoche en UTC
+  # (20:00 PET = 01:00 UTC del dia SIGUIENTE). Como EventBridge evalua en UTC,
+  # ahi los tokens de dia deben correrse uno: parar el miercoles 20:00 PET es
+  # `cron(0 1 ? * THU *)`. Sin este shift el stop se adelantaria un dia entero
+  # (apagaria el martes por la noche y dejaria el jueves encendido).
+  stop_wraps_day = (var.work_end_hour_local - var.tz_offset_hours) >= 24
+
+  # Solo soporta listas por comas ("WED,THU"), no rangos ("MON-FRI"): con un
+  # rango habria que expandirlo antes. workdays_cron usa lista por convencion.
+  next_day = {
+    MON = "TUE", TUE = "WED", WED = "THU", THU = "FRI",
+    FRI = "SAT", SAT = "SUN", SUN = "MON"
+  }
+  stop_days = local.stop_wraps_day ? join(",", [
+    for d in split(",", var.workdays_cron) : local.next_day[trimspace(upper(d))]
+  ]) : var.workdays_cron
 }
 
 data "archive_file" "scheduler" {
@@ -4283,11 +4322,19 @@ resource "aws_lambda_function" "scheduler" {
       # ahora vienen como input wireado desde module.batch en envs/prod.
       JOB_QUEUE_SPOT     = var.job_queue_spot_name
       JOB_QUEUE_ONDEMAND = var.job_queue_ondemand_name
-      # Patch 13.1: propagar workdays + ventana al _keepstop (sino el
-      # martes/jueves queda "dentro de ventana" y nunca re-para el RDS).
-      WORKDAYS_CRON  = var.workdays_cron
-      WORK_START_UTC = tostring(local.start_hour_utc)
-      WORK_END_UTC   = tostring(local.stop_hour_utc)
+      # Propagar workdays + ventana al _keepstop (sino los dias sin ventana
+      # quedarian "dentro" y nunca re-pararia el RDS).
+      #
+      # La ventana viaja en hora LOCAL, no UTC. Con el default (08-16 PET =
+      # 13-21 UTC) daria igual, pero en cuanto el corte pasa de las 19:00 PET
+      # el rango UTC da la vuelta a medianoche (13..01) y rompe la comparacion
+      # `start <= h < end` (13 <= h < 1 es siempre falso -> el keepstop
+      # apagaria el RDS cada 6h en plena jornada). _keepstop convierte a local
+      # con TZ_OFFSET_HOURS y compara sin wrap, asi la ventana es movible.
+      WORKDAYS_CRON    = var.workdays_cron
+      WORK_START_LOCAL = tostring(var.work_start_hour_local)
+      WORK_END_LOCAL   = tostring(var.work_end_hour_local)
+      TZ_OFFSET_HOURS  = tostring(var.tz_offset_hours)
     }
   }
 
@@ -4299,27 +4346,29 @@ resource "aws_lambda_function" "scheduler" {
 
 3 crons: `start` (8 AM PET), `stop` (12 PM PET), `keepstop` (cada 6h
 defensa contra el auto-arranque de RDS post-7-dias-stopped). El offset
-PET→UTC se calcula en `locals` y se enchufa al `cron(0 H ? * MON-FRI *)`.
+PET→UTC se calcula en `locals` y se enchufa al `cron(0 H ? * WED,THU *)`.
+El `stop` usa `local.stop_days` (los tokens corridos un dia) porque con corte
+a las 20:00 PET la hora UTC cae al dia siguiente — ver el `locals` de #3.10.2.a.
 
 > **Equivalente en AWS Console**:
 >
 > | Recurso Terraform | Servicio | Que harias click-a-click |
 > |---|---|---|
-> | `aws_cloudwatch_event_rule.start` | **EventBridge** | `EventBridge > Rules > Create rule`. **Name**: `ml-training-start`. **Event bus**: default. **Rule type**: Schedule. **Schedule pattern**: A fine-grained schedule that runs at a specific time. **Cron expression**: `cron(0 13 ? * MON,WED,FRI *)` (13 UTC = 08:00 PET; default workdays_cron). |
+> | `aws_cloudwatch_event_rule.start` | **EventBridge** | `EventBridge > Rules > Create rule`. **Name**: `ml-training-start`. **Event bus**: default. **Rule type**: Schedule. **Schedule pattern**: A fine-grained schedule that runs at a specific time. **Cron expression**: `cron(0 13 ? * WED,THU *)` (13 UTC = 08:00 PET; default workdays_cron). |
 > | `aws_cloudwatch_event_target.start` | **EventBridge** | Dentro de la rule: `Add target > Lambda function > ml-training-scheduler`. **Configure target input**: Constant (JSON text): `{"action": "start"}`. |
-> | `aws_cloudwatch_event_rule.stop` + target | **EventBridge** | Mismo wizard, name `-stop`, cron `cron(0 17 ? * MON,WED,FRI *)` (17 UTC = 12:00 PET), input `{"action":"stop"}`. |
+> | `aws_cloudwatch_event_rule.stop` + target | **EventBridge** | Mismo wizard, name `-stop`, cron `cron(0 21 ? * WED,THU *)` (21 UTC = 16:00 PET, mismo dia), input `{"action":"stop"}`. Si movés el corte a ≥19:00 PET los días se corren solos vía `local.stop_days` — ver #3.10.2.a. |
 > | `aws_cloudwatch_event_rule.rds_keepstop` + target | **EventBridge** | Mismo wizard, name `-rds-keepstop`, **Schedule pattern**: A schedule that runs at a regular rate. **Rate expression**: `rate(6 hours)`. Input `{"action":"keepstop"}`. |
 >
 > **Conceptualmente — por qué 3 rules y no 1 sola**:
 > - Una sola rule con 3 targets ejecutaría los 3 inputs en cada tick. Cada rule tiene 1 propósito y 1 cron.
 > - **Cron de EventBridge**: `cron(min hour day-of-month month day-of-week year)` (6 campos, no los 5 de Linux). El `?` = "no me importa" (mutuamente excluyente entre day-of-month y day-of-week).
-> - **`MON,WED,FRI`**: este repo entrena 3 días; cualquier subset funciona.
+> - **`WED,THU`**: este repo opera 2 días; cualquier subset funciona. Usa lista por comas, no rangos — `local.stop_days` no expande `MON-FRI`.
 > - **`rate(6 hours)` para keepstop**: RDS dejado `stopped` >7 días lo enciende AWS solo "por mantenimiento" (~$15 sorpresa/mes). El keepstop lo re-apaga si lo encuentra `available` fuera de ventana.
 
 ```hcl
 resource "aws_cloudwatch_event_rule" "start" {
   name                = "${var.project}-start"
-  description         = "L-V ${var.work_start_hour_local}:00 PET start RDS+Fargate"
+  description         = "${var.workdays_cron} ${var.work_start_hour_local}:00 PET start RDS+Fargate"
   schedule_expression = "cron(0 ${local.start_hour_utc} ? * ${var.workdays_cron} *)"
 }
 
@@ -4333,8 +4382,8 @@ resource "aws_cloudwatch_event_target" "start" {
 # ----- EventBridge: cron STOP L-V <stop_hour_utc>:00 -----------------
 resource "aws_cloudwatch_event_rule" "stop" {
   name                = "${var.project}-stop"
-  description         = "L-V ${var.work_end_hour_local}:00 PET stop RDS+Fargate"
-  schedule_expression = "cron(0 ${local.stop_hour_utc} ? * ${var.workdays_cron} *)"
+  description         = "${var.workdays_cron} ${var.work_end_hour_local}:00 PET stop RDS+Fargate"
+  schedule_expression = "cron(0 ${local.stop_hour_utc} ? * ${local.stop_days} *)"
 }
 
 resource "aws_cloudwatch_event_target" "stop" {
@@ -4419,7 +4468,7 @@ resource "aws_lambda_permission" "keepstop" {
 > **NOTA**: este es el **archivo real de produccion** `infra/lambdas/scheduler.py`
 > (paridad 1:1 con el repo). Incluye los patches integrados:
 > - **Patch 13.1 — ventana configurable**: `_parse_workdays` parsea `WORKDAYS_CRON`
->   (`MON,WED,FRI` o `MON-FRI`) y `_keepstop` usa `WORK_START_UTC`/`WORK_END_UTC`
+>   (`WED,THU`) y `_keepstop` usa `WORK_START_LOCAL`/`WORK_END_LOCAL`/`TZ_OFFSET_HOURS`
 >   (inyectados por el modulo, #3.10.2) en vez de tener la ventana hardcodeada.
 > - **Patch 13.3 — wake secuencial**: `_start` arranca **RDS → MLflow (con wait
 >   hasta available/running) → Reports + API + UI**, no en paralelo. Asi el
@@ -4435,7 +4484,8 @@ Acciones:
 - start:    arranca RDS + ECS services secuencialmente (RDS -> MLflow -> Reports)
 - stop:     baja ECS services a 0 + para RDS. Antes chequea Batch jobs RUNNING.
 - keepstop: cada 6h. Si RDS quedo RUNNING fuera de ventana, lo re-para.
-            Ventana parametrizada via WORKDAYS_CRON + WORK_START_UTC + WORK_END_UTC.
+            Ventana parametrizada via WORKDAYS_CRON + WORK_START_LOCAL +
+            WORK_END_LOCAL + TZ_OFFSET_HOURS (se evalua en hora local, no UTC).
 """
 
 from __future__ import annotations
@@ -4463,8 +4513,8 @@ RDS_INSTANCE       = os.environ["RDS_INSTANCE"]
 JOB_QUEUE_SPOT     = os.environ["JOB_QUEUE_SPOT"]
 JOB_QUEUE_ONDEMAND = os.environ["JOB_QUEUE_ONDEMAND"]
 
-# Patch 13.1: workdays + horas configurables via env (default = comportamiento
-# original MON-FRI 13-17 UTC). EventBridge cron usa los mismos tokens (MON,WED,FRI).
+# Patch 13.1: workdays + horas configurables via env (default = ciclo
+# WED,THU 08-16 PET). EventBridge cron usa los mismos tokens (WED,THU).
 _WEEKDAY_MAP = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
 
 
@@ -4582,18 +4632,28 @@ def _stop():
 
 
 def _keepstop():
-    """Defense: si RDS quedo RUNNING fuera de ventana, re-pararlo (Patch 13.1)."""
-    log.info("=== KEEPSTOP ===")
-    workdays = _parse_workdays(os.environ.get("WORKDAYS_CRON", "MON-FRI"))
-    start_utc = int(os.environ.get("WORK_START_UTC", "13"))
-    end_utc = int(os.environ.get("WORK_END_UTC", "17"))
+    """Defense: si RDS quedo RUNNING fuera de ventana, re-pararlo (Patch 13.1).
 
-    utc_hour = time.gmtime().tm_hour
-    weekday = time.gmtime().tm_wday   # 0=lunes
-    in_window = (weekday in workdays) and (start_utc <= utc_hour < end_utc)
+    La ventana se evalua en hora LOCAL (PET), no UTC. Con el default (08-16 PET)
+    daria lo mismo, pero con un corte >= 19:00 PET el rango en UTC pasa a ser
+    13..01 — cruza medianoche y `start <= h < end` nunca se cumple, con lo que
+    TODO instante contaria como "fuera de ventana" y el keepstop pararia el RDS
+    a mitad de jornada. En local el rango no da la vuelta y el weekday tampoco
+    se corre de dia, asi la ventana se puede mover sin romper nada.
+    """
+    log.info("=== KEEPSTOP ===")
+    workdays = _parse_workdays(os.environ.get("WORKDAYS_CRON", "WED,THU"))
+    start_local = int(os.environ.get("WORK_START_LOCAL", "8"))
+    end_local = int(os.environ.get("WORK_END_LOCAL", "16"))
+    offset = int(os.environ.get("TZ_OFFSET_HOURS", "-5"))
+
+    now_local = time.gmtime(time.time() + offset * 3600)
+    hour = now_local.tm_hour
+    weekday = now_local.tm_wday   # 0=lunes, ya en local
+    in_window = (weekday in workdays) and (start_local <= hour < end_local)
     if in_window:
-        log.info("dentro de ventana (UTC=%02d:00, weekday=%d, workdays=%s), skip",
-                 utc_hour, weekday, sorted(workdays))
+        log.info("dentro de ventana (local=%02d:00, weekday=%d, workdays=%s), skip",
+                 hour, weekday, sorted(workdays))
         return
 
     db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]
@@ -4645,6 +4705,9 @@ module "scheduler" {
   job_queue_ondemand_name  = module.batch.job_queue_ondemand
   work_start_hour_local    = var.work_start_hour_local
   work_end_hour_local      = var.work_end_hour_local
+  # Sin esta linea el modulo cae a su propio default y el valor de envs/prod
+  # se ignora en silencio (los crons quedarian en dias distintos al esperado).
+  workdays_cron            = var.workdays_cron
   log_retention_days       = var.log_retention_days
   lambdas_src_dir          = "${path.module}/../../lambdas"
 }
@@ -7908,7 +7971,7 @@ Si rompe en CI → rompe en local con `task X`.
 | Wake / sleep RDS+Fargate | **Task** (`task wake`/`sleep`) | `ops:up` idempotente con polling RDS+ALB |
 | Disparar entreno bajo demanda | **GHA workflow_dispatch** | UI con dropdown, accesible sin AWS CLI |
 | Approval antes de deploy o promote | **GHA `environment: production`** | Solo GHA tiene approval gates |
-| Cron L-V 08-12 PET encender/apagar | **EventBridge + Lambda** (`scheduler.py`) | Serverless, sin runner |
+| Cron Mi+Ju 08-16 PET encender/apagar | **EventBridge + Lambda** (`scheduler.py`) | Serverless, sin runner |
 | Quality gate MAPE + A/B vs Production | **Task** (`task ops:promote`) llamado por GHA | Logica reutilizable local |
 | Apagar todo con confirmacion textual | **GHA workflow** (`destroy.yml`) + **Task** | Confirmacion + approval son features GHA; logica en Task |
 
@@ -8950,6 +9013,12 @@ task teardown                # backup verificado -> destroy -> poda. ~$1/mes
 > porque *para* el RDS en vez de destruirlo. La regla: **>1 semana → teardown;
 > 1-2 noches → sleep**. Ojo: pasados 7 días AWS re-arranca solo un RDS parado, y
 > ahí `sleep` deja de ahorrar (#8.5, "Período de gracia de RDS").
+>
+> **En el ciclo miércoles+jueves** la pausa es de ~6 días (jueves noche → miércoles
+> mañana): roza el límite de los 7 días, así que va **`teardown` el jueves y
+> `rebuild` el miércoles**, no `sleep`. Con `sleep` te quedarías a un día del
+> auto-arranque de RDS y encima la lambda `keepstop` —que sería quien lo re-para—
+> se destruye junto con el ALB, así que nadie lo apagaría.
 
 > [!WARNING]
 > **En este ciclo nunca uses `task destroy`.** `teardown` y `destroy` suenan
@@ -9136,9 +9205,14 @@ sobre el bucket. Si falla, verificar que el bucket creado matchea
 
 #### 8.3.7 Job arranca pero MLflow esta apagado (fuera de ventana)
 
-**Por que pasa**: lanzaste un train fuera de L-V 08-12 PET. El cron
+**Por que pasa**: lanzaste un train fuera de Mi+Ju 08-16 PET. El cron
 de stop apago MLflow (Fargate desired_count=0). El trainer intenta
 conectar a `tracking_uri` y obtiene timeout.
+
+> Si el stack ya paso por el `teardown` del jueves, MLflow no esta apagado sino
+> **destruido**: `task wake` no alcanza, va `task rebuild` (recrea volatiles +
+> restaura el RDS del backup). Y si levantas fuera de ventana, ojo con `keepstop`
+> (#3.10.2.b): cada 6h re-para el RDS si lo encuentra encendido fuera de horario.
 
 **Fix manual** (sin parche de auto-wake integrado):
 
@@ -9793,8 +9867,8 @@ Y en el bloque `vars:` de `tasks/ops.yml`, junto a `SNAPSHOT_KEEP`:
 
 ```yaml
 vars:
-  # Cuantos backups del RDS conserva el teardown al podar. Con 2 ciclos por
-  # semana, 6 = ~3 semanas de historia.
+  # Cuantos backups del RDS conserva el teardown al podar. Con 1 ciclo por
+  # semana (deploy miercoles / teardown jueves), 6 = ~6 semanas de historia.
   SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
   # Reutilizar un backup mas nuevo que N minutos en vez de crear otro. 0 =
   # siempre crear uno nuevo. >0 sirve para reintentar un teardown que fallo
@@ -10112,7 +10186,7 @@ flowchart TD
     Q([Tu pregunta de costos])
 
     subgraph Base[Presupuesto base]
-        B1["Operar normal L-V 08-12<br/>≈ <b>$75/mes</b><br/>→ 9.1"]
+        B1["Operar normal Mi+Ju 08-16<br/>≈ <b>$29/mes</b><br/>→ 9.1"]
     end
 
     subgraph Alt[Escenarios alternativos]
@@ -10141,42 +10215,52 @@ flowchart TD
 
 **Notas clave:**
 
-- Los números son estimados con asunciones específicas (10 trainings/mes, 5 GB S3, 80h/mes scheduler). Tus números reales se desvían según variedades, frecuencia de re-train y tráfico ALB+NAT.
-- El item que más pesa estando operando: NAT GW $32/mes 24×7. En hibernado ya no pesa: `task teardown` lo libera (`enable_nat=false`), no solo los VPC endpoints. Para bajarlo también mientras operás, ir a 9.4.1 (VPC endpoints, hardening futuro). Aplica si tráfico NAT > 80 GB/mes.
+- Los números son estimados con asunciones específicas (10 trainings/mes, 5 GB S3, 69h/mes encendido + 139h/mes de existencia). Tus números reales se desvían según variedades, frecuencia de re-train y tráfico ALB+NAT.
+- El item que más pesa estando operando es **Fargate: $20.54/mes** (49% del total), repartido en 4 tasks. El NAT dejó de ser el líder al pasar a teardown semanal ($32 → $7). Para bajar Fargate: recortar la ventana de 12h, o apagar `reports`/`ui` cuando no se usen (son los dos FARGATE_SPOT, ~$5 juntos).
 - Los "(futuro)" en 9.4 son intencionales: cada optimización cuesta horas de ingeniería. Re-leer a los 60 días de operación real.
 
-> **Gotcha Parte 9**: confundir "operando normal" con "24/7". El default lockeado es scheduler L-V 08-12 = 80h/mes de Fargate; pasar a 24/7 (scheduler OFF) duplica el número. Validar con `aws events describe-rule --name ml-training-start` y comparar con Cost Explorer (±20% de #9.1).
+> **Gotcha Parte 9**: confundir las horas de **encendido** con las de **existencia**. El default lockeado es Mi+Ju 08-16 = 69h/mes de Fargate y RDS, pero el ALB y el NAT facturan las ~139h que el stack existe (incluida la noche del miércoles con todo apagado) — y facturarían 720h si te olvidás del `teardown` del jueves, que es el error de $42/mes. Validar con `aws events describe-rule --name ml-training-start` y comparar con Cost Explorer (±20% de #9.1).
 
-### 9.1 Escenario lockeado: scheduler L-V 08-12 PET — ~$75/mes
+### 9.1 Escenario lockeado: ciclo miércoles+jueves 08-16 PET — ~$29/mes
 
-Asume: 80 horas/mes del stack encendido (4h × 5 dias × ~4 semanas; el scheduler
-prende/apaga MLflow + Reports + **API + UI** juntos), 10 trainings/mes promedio
-(1h cada uno), 5 GB de S3 storage total, ~3.5 GB de ECR images (5 repos).
+Hay **dos relojes distintos** y confundirlos es el error clásico al estimar:
+
+| Reloj | Qué factura | Horas/mes |
+|---|---|---|
+| **Existencia** — el recurso existe en la cuenta | ALB, NAT GW, storage del RDS | ~139h (miércoles 08:00 → jueves 16:00 = 32h/semana × 4.3) |
+| **Encendido** — el scheduler lo tiene arriba | Fargate ×4, cómputo del RDS | ~69h (8h × 2 días × 4.3) |
+
+La diferencia son las ~16h de la noche del miércoles: el ALB y el NAT siguen
+facturando (existen) mientras el scheduler tiene Fargate en 0 y el RDS parado.
+Es exactamente lo que el auto-stop ahorra en este ciclo — nada más.
+
+Asume además: 10 trainings/mes (1h cada uno), 5 GB de S3, ~3.5 GB de ECR (5 repos).
 
 | Item | Calculo | Mensual (USD) |
 |---|---|---|
 | S3 (5 GB Standard) | 5 × $0.023 | $0.12 |
 | S3 (versiones no-current con lifecycle 90d) | ~10 GB | $0.23 |
 | ECR (~3.5 GB, 5 repos) | 3.5 × $0.10 | $0.35 |
-| RDS db.t4g.small (80h/mes; hostea MLflow + forecasts) | 80 × $0.032 | $2.56 |
-| RDS storage (20 GB gp3) | 20 × $0.115 | $2.30 |
-| Fargate MLflow (2 vCPU, 4 GB, 80h) | 80 × ($0.04048 × 2 + $0.004445 × 4) | $7.90 |
-| Fargate Reports (0.5 vCPU, 1 GB, 80h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 80 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.97 |
-| Fargate API (1 vCPU, 2 GB, 80h) | 80 × ($0.04048 × 1 + $0.004445 × 2) | $3.95 |
-| Fargate UI (0.5 vCPU, 1 GB, 80h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 80 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.97 |
-| ALB (24/7) | 720h × $0.0225 | $16.20 |
-| ALB LCU | <0.5 LCU promedio | $0.50 |
-| NAT Gateway (24/7) | 720h × $0.045 | $32.40 |
+| RDS db.t4g.small (69h encendido; hostea MLflow + forecasts) | 69 × $0.032 | $2.21 |
+| RDS storage (20 GB gp3, solo mientras la instancia existe) | 20 × $0.115 × (139/720) | $0.44 |
+| RDS snapshots (retencion 6 = ~6 semanas, ~10 GB) | 10 × $0.095 | $0.60 |
+| Fargate MLflow (**1 vCPU, 3 GB** tras el rightsizing de #9.4.5, 69h) | 69 × ($0.04048 × 1 + $0.004445 × 3) | $3.71 |
+| Fargate Reports (0.5 vCPU, 1 GB, 69h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 69 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.70 |
+| Fargate API (1 vCPU, 2 GB, 69h) | 69 × ($0.04048 × 1 + $0.004445 × 2) | $3.41 |
+| Fargate UI (0.5 vCPU, 1 GB, 69h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 69 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.70 |
+| ALB (139h de existencia, no 720) | 139 × $0.0225 | $3.13 |
+| ALB LCU | <0.5 LCU promedio | $0.15 |
+| NAT Gateway (139h de existencia, no 720) | 139 × $0.045 | $6.25 |
 | NAT egress data | 10 GB | $0.45 |
 | EC2 Spot c6i.2xlarge (10 jobs × 1h) | 10 × $0.102 | $1.02 |
 | Lambdas (negligible) | ~1000 invocs/mes | $0.10 |
-| EventBridge | ~120 events/mes | $0.10 |
+| EventBridge | ~50 events/mes | $0.10 |
 | SNS | ~10 publishes/mes | $0.01 |
 | CloudWatch Logs (14d retention, 1 GB) | 1 × $0.50 | $0.50 |
 | CloudWatch Custom Metrics (N MAPE + 3 base; N=6 ejemplo) | (N+3) × $0.30 | $2.70 |
 | CloudWatch PutMetricData API | ~10k calls/mes | $0.01 |
 | Data transfer (ALB out a Internet) | 5 GB | $0.45 |
-| **Total** | | **~$75** |
+| **Total** | | **~$29** |
 
 > **Notas del calculo**:
 > - **Custom Metrics $0.30/serie**: cobro por metrica unica (combinacion
@@ -10198,16 +10282,32 @@ prende/apaga MLflow + Reports + **API + UI** juntos), 10 trainings/mes promedio
 >   Si activas `api_preload_models=true` o subis `api_memory` a 4096, la linea
 >   "Fargate API" escala proporcional (4 GB × 80h × $0.004445 ≈ +$1.4/mes).
 
-**Por que el numero crecio de ~$68 a ~$75**: la version training-only daba ~$68
-(sin API ni UI). El App stack de la Capa 4.5 suma ~$6 (2 Fargate + RDS small).
-$75 es realista con el monorepo completo (training + serving) del V2.
+**Por que el numero bajo de ~$75 a ~$29**, en tres movimientos:
+
+| Movimiento | Delta | Acumulado |
+|---|---|---|
+| Baseline anterior (L-V 08-12, ALB+NAT 24/7) | — | $75 |
+| **Teardown semanal**: ALB+NAT pasan de 720h a ~139h de existencia | **−$41** | $34 |
+| **Ventana 8h × 2 dias** (69h encendido, antes 80h) | −$2 | $32 |
+| **Rightsizing MLflow** 2 vCPU/4 GB → 1 vCPU/3 GB (#9.4.5) | −$3 | **$29** |
+
+El 90% del ahorro vino del primer movimiento. ALB + NAT eran $48.60/mes —el 65%
+del total— porque facturaban 24/7 **aunque el scheduler apagara todo lo demas**:
+el auto-stop nunca los toco. Destruirlos cada jueves es lo que mueve la aguja.
+
+Los otros dos son de segundo orden pero baratos de aplicar (dos numeros en
+`envs/prod`, cero cambios de arquitectura). Post-rightsizing el reparto queda
+mas parejo: Fargate $10.53 (36%), red $9.38 (32%), el resto observabilidad y
+storage — ya no hay un item dominante que atacar.
 
 ### 9.2 Comparativa con escenarios alternativos
 
 | Escenario | Cambio vs default | Costo total/mes | Cuando elegirlo |
 |---|---|---|---|
-| **Hibernado** | tear-down (sección 8.5; libera NAT vía `enable_nat=false`) | ~$3 | Pausa de 1+ semana |
-| **Default (lockeado)** | Scheduler L-V 08-12 PET | **~$75** | Operacion normal |
+| **Hibernado** | tear-down (sección 8.5; libera NAT vía `enable_nat=false`) | ~$3 | Las 5 semanas/mes que el stack no existe |
+| **Default (lockeado)** | Ciclo Mi+Ju 08-16 PET + teardown semanal + MLflow rightsizeado | **~$29** | Operacion normal |
+| **Ventana 12h (corte 20:00)** | `work_end_hour_local = 20` | ~$37 | Si necesitás las tardes; +$2/mes por hora de ventana |
+| **Sin teardown** | Mismo scheduler, pero el stack queda parado en vez de destruido (ALB+NAT 24/7) | ~$71 | Nunca: son $42/mes de red ociosa |
 | **24/7** | Scheduler OFF, stack (MLflow+Reports+API+UI) + RDS siempre on | ~$195 | Equipo distribuido multi-timezone |
 | **No-NAT** | VPC endpoints en vez de NAT GW (hardening, futuro) | ~$36 | Trafico NAT < 10 GB/mes |
 | **Multi-AZ RDS** | RDS Multi-AZ (hardening, futuro) | +$13 sobre default | Compliance / SLA estricto |
@@ -10224,24 +10324,28 @@ documentados en secciones 8.5 a 8.7).
 |---|---|---|---|
 | S3 (todos los buckets, ~5 GB) | $0.12 | $0.12 | $0 |
 | ECR (5 repos, ~3.5 GB) | $0.35 | $0.35 | $0 |
-| RDS db.t4g.small (L-V 08-12 PET ≈ 80h/mes) | $2.56 | $0 (destruido) | $0 |
-| RDS allocated storage (20 GB gp3) | $2.30 | $0 (instancia destruida) | $0 |
-| RDS snapshots manuales (retencion 4, datos usados ~1-2 GB) | $0.10 | $0.20 | $0 |
-| ECS Fargate MLflow (2 vCPU, 4 GB, 80h/mes) | $7.90 | $0 | $0 |
-| ECS Fargate Reports (0.5 vCPU, 1 GB, 80h/mes) | $1.97 | $0 | $0 |
-| ECS Fargate API (1 vCPU, 2 GB, 80h/mes) | $3.95 | $0 | $0 |
-| ECS Fargate UI (0.5 vCPU, 1 GB, 80h/mes) | $1.97 | $0 | $0 |
-| ALB | $16 | $0 (borrado) | $0 |
-| NAT Gateway (24/7) | $32 | $0 (liberado vía `enable_nat=false`) | $0 |
-| Batch EC2 (Spot c6i.2xlarge, ~10 jobs/mes × 1h) | $3 | $0 | $0 |
+| RDS db.t4g.small (Mi+Ju 08-16 PET ≈ 69h/mes) | $2.21 | $0 (destruido) | $0 |
+| RDS allocated storage (20 GB gp3, prorrateado 139/720h) | $0.44 | $0 (instancia destruida) | $0 |
+| RDS snapshots manuales (retencion 6 ≈ 6 semanas, ~10 GB) | $0.60 | $0.60 | $0 |
+| ECS Fargate MLflow (1 vCPU, 3 GB, 69h/mes) | $3.71 | $0 | $0 |
+| ECS Fargate Reports (0.5 vCPU, 1 GB, 69h/mes) | $1.70 | $0 | $0 |
+| ECS Fargate API (1 vCPU, 2 GB, 69h/mes) | $3.41 | $0 | $0 |
+| ECS Fargate UI (0.5 vCPU, 1 GB, 69h/mes) | $1.70 | $0 | $0 |
+| ALB (139h de existencia) | $3.13 | $0 (borrado) | $0 |
+| NAT Gateway (139h de existencia) | $6.25 | $0 (liberado vía `enable_nat=false`) | $0 |
+| Batch EC2 (Spot c6i.2xlarge, ~10 jobs/mes × 1h) | $1.02 | $0 | $0 |
 | Lambdas (negligible) | $0.10 | $0.10 | $0 |
-| EventBridge / SNS / CloudWatch | $0.30 | $0.30 | $0 |
-| Data transfer (NAT egress + ALB) | $5 | $0 | $0 |
-| **Total mensual** | **~$75** | **~$1** | **$0** |
+| EventBridge / SNS / CloudWatch | $3.30 | $0.30 | $0 |
+| Data transfer (NAT egress + ALB) | $0.90 | $0 | $0 |
+| **Total mensual** | **~$29** | **~$1** | **$0** |
 
-> La suma directa de esta tabla da ~$72; los ~$75 reales (que matchean
-> sección 9.1) incluyen items consolidados aca: ALB LCU + CloudWatch Custom
-> Metrics (9 series MAPE+base × $0.30) + S3 lifecycle de versiones. La columna
+> **Ojo con la columna TEAR-DOWN**: no es un escenario alternativo al STAND-UP,
+> es la otra mitad del mismo mes. En el ciclo Mi+Ju convivís con las dos: ~32h
+> por semana en STAND-UP y el resto en TEAR-DOWN. El ~$29 de #9.1 **ya integra
+> las dos columnas** — no las sumes.
+
+> La suma directa de esta tabla da ~$41; los ~$42 de sección 9.1 incluyen
+> items consolidados aca: ALB LCU + S3 lifecycle de versiones. La columna
 > hibernado NO cambia con el App stack: el scheduler escala API+UI a 0 igual
 > que MLflow/Reports. Tabla pensada como **delta entre modos**, no como suma
 > auditable — para esa ver sección 9.1.
@@ -10250,9 +10354,8 @@ documentados en secciones 8.5 a 8.7).
 > `enable_nat=false` (`terraform apply -target=module.network`), preservando
 > VPC/subnets/SGs; `task rebuild`/`deploy` lo recrean (default `true`).
 
-Si queres bajar mas el modo operando, ver sección 9.4 (S3 lifecycle +
-Intelligent Tiering, ECR scan policies). Los VPC endpoints eliminan el
-NAT GW (~$32 menos, hardening futuro).
+Si queres bajar mas el modo operando, ver sección 9.4. El orden de palancas
+cambio con el ciclo semanal: ahora manda **Fargate** (#9.4.5), no la red.
 
 ### 9.4 Optimizaciones adicionales ((futuro))
 
@@ -10260,13 +10363,61 @@ NAT GW (~$32 menos, hardening futuro).
 tiene un costo de ingenieria o un trade-off. Aplicarlas dia 1 te frena
 sin que aporten valor hasta que la operacion tenga datos.
 
-#### 9.4.1 VPC endpoints en vez de NAT (hardening, futuro)
+#### 9.4.1 VPC endpoints en vez de NAT — ⚠️ DEJO DE CONVENIR
 
-Cambia $32/mes NAT GW por $7/mes en 4 endpoints (S3, ECR, CloudWatch,
-STS). Net: $25/mes menos. **Por que no se aplica dia 1**: agrega
-~100 lineas de Terraform y rompe si te falta un endpoint para algun
-servicio que el trainer use indirectamente. Aplicarlo despues, cuando
-tenes lista de servicios consumidos en CloudTrail.
+**Con el ciclo semanal esta optimizacion se dio vuelta y ahora sale mas cara.**
+Se documenta el porque para que nadie la re-proponga leyendo cifras viejas.
+
+El calculo original comparaba contra un NAT 24/7 ($32/mes). Con `teardown`
+semanal el NAT solo existe ~139h/mes → **$6.25**. Del otro lado, los endpoints
+de tipo *interface* facturan **$0.01/h por endpoint y por AZ**:
+
+| Opcion | Calculo | Mensual |
+|---|---|---|
+| NAT GW (hoy) | 139h × $0.045 | **$6.25** |
+| 3 interface endpoints (ECR api, ECR dkr, Logs) × 2 AZ | 6 × 139h × $0.01 | **$8.34** |
+| Ídem con 1 sola AZ (pierde HA) | 3 × 139h × $0.01 | $4.17 |
+
+El endpoint de S3 es *gateway* y es gratis — vale la pena solo por el egress
+($0.45/mes), no por el NAT. **Conclusion**: el teardown semanal ya capturo el
+ahorro que perseguian los endpoints; migrar ahora costaria ~100 lineas de
+Terraform para gastar ~$2 mas al mes, o ahorrar ~$2 resignando multi-AZ.
+No hacerlo.
+
+#### 9.4.5 Rightsizing de las tasks Fargate — ✅ APLICADO (MLflow)
+
+Fargate era el 49% de la factura. Estas opciones **no tocan la arquitectura**:
+son cambios de valor, sin mover subredes, ALB, capacity providers ni el ruteo
+por path del #6.
+
+| Cambio | Donde | Ahorro/mes | Estado |
+|---|---|---|---|
+| MLflow 2 vCPU/4 GB → **1 vCPU/3 GB** | `aws_ecs_task_definition.mlflow` (#3.5) | **−$3.10** | ✅ aplicado |
+| API 1 vCPU/2 GB → 0.5 vCPU/1 GB | `api_cpu=512`, `api_memory=1024` | −$1.70 | ❌ no aplicar sin medir |
+
+**Por que MLflow quedo en 3 GB y no en 2**: `mlflow server` levanta 4 workers
+gunicorn por defecto (no pasamos `--workers`) y el trainer loguea 4 variedades
+en paralelo. A ~300 MB de RSS por worker, 2 GB no deja margen para el buffer de
+artifacts de `--serve-artifacts`. El GB extra cuesta $0.30/mes; un OOM a mitad
+de un run de 1h cuesta mucho mas. Si aparece `OOMKilled` en el log group de
+mlflow, el rollback es volver a `2048`/`4096`.
+
+**Por que la API NO se toca**: carga pipelines sklearn en memoria. Con
+`api_preload_models=true` o varias variedades cargadas, 1 GB puede OOM — y a
+diferencia de MLflow, aca el fallo es cara al usuario. Ahorra $1.70; no vale
+el riesgo sin medir el RSS real primero.
+
+La palanca mas grande no es tecnica sino de politica: **cada hora que le sacas
+a la ventana diaria son ~$2/mes** (1h × 2 dias × 4.3 semanas × $0.23/h de
+Fargate+RDS). El corte ya esta en 16:00 (8h); bajarlo mas empieza a comerse la
+jornada util.
+
+> **Lo que NO se recomienda tocar** (romperia la arquitectura, no solo el costo):
+> mover las tasks a subredes publicas para eliminar el NAT, sacar el ALB, o
+> pasar MLflow a Spot (#9.4.4). Los tres ahorran entre $3 y $7 y a cambio
+> rompen, respectivamente, el aislamiento en subredes privadas, el ruteo por
+> path que convive con `/api/2.0/mlflow-artifacts/*` (invariante #6), y la
+> durabilidad de los runs largos de training.
 
 #### 9.4.2 S3 Intelligent-Tiering
 
@@ -10383,7 +10534,7 @@ flowchart TD
 | 13 | RDS arranco solo despues de 7 dias stopped | Hard limit AWS — auto-arranque post-7d | Scheduler keepstop (3.10.2) lo re-para cada 6h |
 | 14 | Workflow `training.yml` falla con `Unable to locate credentials` | Permissions `id-token: write` faltante en YAML | Agregar `permissions: { id-token: write, contents: read }` al job |
 | 15 | Lambda dispatcher 500: `variedades no permitidas: ['xyz']` | Variety no esta en `varieties_allowed` del terraform | Agregar a `var.varieties_allowed` y `terraform apply -target=module.lambdas` |
-| 16 | NAT GW cuesta mas de lo esperado | Trafico NAT alto (mucho egress S3 cross-region o ECR pulls grandes) | Activar VPC endpoints (sección 9.4.1) |
+| 16 | NAT GW cuesta mas de lo esperado | Casi siempre: te salteaste el `teardown` del jueves y el NAT quedo facturando 24/7 ($32 vs $7). Si el teardown corrio, revisar egress alto (S3 cross-region o ECR pulls grandes) | `task status` + `aws ec2 describe-nat-gateways`; correr `task teardown`. NO migrar a VPC endpoints: con el ciclo semanal salen mas caros (sección 9.4.1) |
 | 17 | `task batch:smoke` se cuelga mostrando `POP None`; al invocar la Lambda, `StatusCode=200` pero `body.jobId=null` y `errorMessage: AccessDeniedException ... batch:SubmitJob` (o `batch:TagResource`) | El rol `ml-training-dispatcher` no autoriza el SubmitJob: (a) la Lambda pasa la job-def por NAME, que autoriza contra el ARN **sin** `:revision` y no matchea el patron `...:*`; (b) `submit_job` pasa `tags={...}`, lo cual exige `batch:TagResource` aparte. El `200` es de la *invocacion*, no del resultado — leer `body.errorMessage`, no el StatusCode | Agregar al inline policy (#3.9) el ARN de job-def **sin** revision (junto al `:*`) y la accion `batch:TagResource`. Aplicar: `task infra:apply TARGET='module.lambdas.aws_iam_role_policy.dispatcher'`. Verificar con `aws lambda invoke ... | jq '.body.jobId'` |
 
 ---
