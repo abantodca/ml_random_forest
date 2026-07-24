@@ -178,7 +178,9 @@ el wallclock por job se acerca a `total / N` si hay cores suficientes.
 Cuando se entrenan XGB y LGB para la misma variedad, `select_champion`
 decide con un **lex-order estricto** (no un score combinado):
 
-1. **Gate de overfitting** — `|gap|*100 <= CHAMPION_MAX_GAP` como **restricción**
+1. **Gate de overfitting** —
+   `gap_rel = |MAE_test-MAE_train| / MAE_test <= CHAMPION_MAX_GAP_REL`
+   como **restricción**
    (descalifica modelos rotos). El gap NO se minimiza: minimizarlo premiaba al
    modelo más subajustado, no al que mejor predice.
 2. **Generalización** — menor **MAPE OOF** de negocio (cada fila predicha por un
@@ -192,6 +194,30 @@ textual de por qué ganó el campeón se persiste en `champion_summary["justific
 
 `composite_score` aún se computa y loguea como tag de MLflow para compatibilidad
 con dashboards históricos, pero **no** participa en la decisión.
+
+Para un uso de **forecast futuro** (no solo interpolación/nowcasting), puede
+activarse `REQUIRE_TEMPORAL_GATE=1`. La promoción exigirá entonces al menos
+`MIN_TEMPORAL_FOLDS` ventanas expanding-window, MAPE temporal bajo
+`CHAMPION_MAX_TEMPORAL_MAPE` y skill MAE no negativo frente al baseline temporal.
+El default permanece apagado para no cambiar silenciosamente el historial.
+La política y el procedimiento están en
+[`docs/04-guia-validacion-estadistica.md`](docs/04-guia-validacion-estadistica.md).
+
+El chequeo temporal reporta además el año más reciente como
+`final_holdout_*`: ese bloque no participa en Optuna y permite auditar por
+separado el último periodo. Los umbrales temporales pueden declararse por
+variedad en `VARIETY_OVERRIDES`; si no existen, aplican los globales.
+
+Existe un tercer candidato híbrido experimental, desactivado por defecto. Para
+evaluarlo localmente sin registrar ni promover:
+
+```bash
+ENABLE_EXPERIMENTAL_MIXED_BACKEND=1 \
+REGISTER_ENABLED=0 \
+python main.py --tuning dev --varieties POP --no-register
+```
+
+Sin esa variable, `BACKEND_REGISTRY` conserva únicamente XGB y LGB.
 
 ### Salidas
 
@@ -457,7 +483,7 @@ así por:
 
 | Categoría | Mejora |
 |---|---|
-| Overfitting | Cada outer fold reporta `MAE_train`, `MAE_test`, `gap`. El reporte HTML agrega "Análisis de overfitting" con verdict (verde/amarillo/rojo) según gap. El selector de campeón usa `|gap|` como **primer** criterio. |
+| Overfitting | Cada outer fold reporta `MAE_train`, `MAE_test`, `gap` y `gap_rel`. El reporte HTML agrega "Análisis de overfitting". El selector usa `gap_rel` como restricción, no como objetivo a minimizar. |
 | Selección multi-modelo | `select_champion` con lex-order estricto + tolerancias por bucket. Justificación textual auto-generada. |
 | Estabilidad varianza | `TransformedTargetRegressor` (log1p + cap p99.5 CV-safe) + `OOFEnsembleRegressor` (K=5 refits promediados). |
 | Compensación cola | `compute_sample_weights` por bins de igual ancho del target (cap=5×). |

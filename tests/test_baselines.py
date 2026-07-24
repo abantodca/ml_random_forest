@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
@@ -35,3 +36,16 @@ def test_mae_skill_score_interpretation() -> None:
     assert mae_skill_score(8.0, 10.0) == pytest.approx(0.2)
     assert mae_skill_score(10.0, 10.0) == 0.0
     assert mae_skill_score(12.0, 10.0) == pytest.approx(-0.2)
+
+
+def test_baseline_roundtrip_is_reproducible(tmp_path) -> None:
+    X = pd.DataFrame({"FUNDO": ["A", "A", "B", "B"], "FORMATO": ["G", "G", "C", "C"]})
+    y = pd.Series([2.0, 4.0, 8.0, 10.0])
+    model = HierarchicalMedianRegressor(min_group_size=2).fit(X, y)
+    expected = model.predict(X)
+
+    path = tmp_path / "baseline.joblib"
+    joblib.dump(model, path)
+    restored = joblib.load(path)
+
+    assert np.array_equal(expected, restored.predict(X))

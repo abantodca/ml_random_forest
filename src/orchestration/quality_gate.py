@@ -133,10 +133,7 @@ def apply_quality_gate(
     mape_ok = champion.oof_mape <= CHAMPION_MAX_MAPE
     gap_ok = champion.gap_rel <= CHAMPION_MAX_GAP_REL
     baseline_skill = champion.metrics.get("baseline_skill_mae")
-    baseline_ok = (
-        baseline_skill is None
-        or float(baseline_skill) >= CHAMPION_MIN_BASELINE_SKILL
-    )
+    baseline_ok = baseline_skill is None or float(baseline_skill) >= CHAMPION_MIN_BASELINE_SKILL
 
     if not mape_ok:
         logger.warning(
@@ -157,6 +154,60 @@ def apply_quality_gate(
             "el MAE frente a medianas FUNDO+FORMATO aprendidas solo con train."
         )
         return False
+
+    # Política estricta para uso realmente predictivo. Se lee en runtime para
+    # que tests, CLI y jobs que inyectan env compartan una única fuente de
+    # verdad. El modo legacy permanece idéntico con REQUIRE_TEMPORAL_GATE=0.
+    if _cfg.REQUIRE_TEMPORAL_GATE:
+        from src.variety_config import for_variety
+
+        variety_cfg = for_variety(variety)
+        min_temporal_folds = (
+            variety_cfg.min_temporal_folds
+            if variety_cfg.min_temporal_folds is not None
+            else _cfg.MIN_TEMPORAL_FOLDS
+        )
+        max_temporal_mape = (
+            variety_cfg.max_temporal_mape
+            if variety_cfg.max_temporal_mape is not None
+            else _cfg.CHAMPION_MAX_TEMPORAL_MAPE
+        )
+        min_temporal_skill = (
+            variety_cfg.min_temporal_baseline_skill
+            if variety_cfg.min_temporal_baseline_skill is not None
+            else _cfg.CHAMPION_MIN_TEMPORAL_BASELINE_SKILL
+        )
+        temporal_mape = champion.metrics.get("temporal_mape_oof")
+        temporal_skill = champion.metrics.get("temporal_baseline_skill_mae")
+        temporal_folds = champion.metrics.get("temporal_n_folds")
+        temporal_evidence_ok = (
+            temporal_mape is not None
+            and temporal_skill is not None
+            and temporal_folds is not None
+            and float(temporal_folds) >= min_temporal_folds
+        )
+        if not temporal_evidence_ok:
+            logger.warning(
+                f"[{variety}] CAMPEON RECHAZADO por evidencia temporal insuficiente | "
+                f"folds={temporal_folds!r} (mínimo={min_temporal_folds}), "
+                f"MAPE={temporal_mape!r}, skill_baseline={temporal_skill!r}. "
+                "REQUIRE_TEMPORAL_GATE=1 falla cerrado: ejecuta DUAL_CV_REPORT=1 "
+                "con historia suficiente antes de registrar."
+            )
+            return False
+        temporal_ok = (
+            float(temporal_mape) <= max_temporal_mape
+            and float(temporal_skill) >= min_temporal_skill
+        )
+        if not temporal_ok:
+            logger.warning(
+                f"[{variety}] CAMPEON RECHAZADO por generalización temporal | "
+                f"MAPE_temporal={float(temporal_mape):.2f}% "
+                f"(max={max_temporal_mape}%) | "
+                f"skill_MAE_temporal={float(temporal_skill):.3f} "
+                f"(min={min_temporal_skill:.3f})."
+            )
+            return False
 
     # Aviso temporal NO bloqueante (2026-06-25): el gate de arriba usa el MAPE
     # stratified (interpolacion, optimista). Si el chequeo honesto temporal

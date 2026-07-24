@@ -114,9 +114,7 @@ def suggest_preprocessor_params(trial: optuna.Trial) -> dict[str, object]:
     incorporacion de features nuevas (LOF + t_index + log1p/sqrt versions)
     se valida via A/B en Phase 8 antes de retunear el modelo.
     """
-    method = trial.suggest_categorical(
-        "preprocessor__outliers__method", ["iqr", "percentile"]
-    )
+    method = trial.suggest_categorical("preprocessor__outliers__method", ["iqr", "percentile"])
     params: dict[str, object] = {
         "preprocessor__imputer__n_neighbors": trial.suggest_int(
             "preprocessor__imputer__n_neighbors", 3, 40
@@ -305,6 +303,31 @@ def suggest_lgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
         ),
         "regressor__regressor__path_smooth": trial.suggest_float(
             "regressor__regressor__path_smooth", 0.0, 2.0
+        ),
+    }
+
+
+def suggest_mixed_params(
+    trial: optuna.Trial,
+    n_rows: int | None = None,
+) -> dict[str, object]:
+    """Espacio conservador del híbrido Ridge + boosting residual."""
+    min_leaf_high = max(20, min(100, (n_rows or 1000) // 10))
+    return {
+        "regressor__regressor__linear_alpha": trial.suggest_float(
+            "regressor__regressor__linear_alpha", 0.1, 100.0, log=True
+        ),
+        "regressor__regressor__learning_rate": trial.suggest_float(
+            "regressor__regressor__learning_rate", 0.01, 0.15, log=True
+        ),
+        "regressor__regressor__max_leaf_nodes": trial.suggest_int(
+            "regressor__regressor__max_leaf_nodes", 7, 31
+        ),
+        "regressor__regressor__min_samples_leaf": trial.suggest_int(
+            "regressor__regressor__min_samples_leaf", 10, min_leaf_high
+        ),
+        "regressor__regressor__l2_regularization": trial.suggest_float(
+            "regressor__regressor__l2_regularization", 0.01, 20.0, log=True
         ),
     }
 

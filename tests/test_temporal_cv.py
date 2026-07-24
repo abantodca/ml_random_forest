@@ -38,3 +38,12 @@ def test_year_split_is_expanding_window() -> None:
     assert set(X.iloc[splits[1][0]]["ANIO"]) == {2022, 2023, 2024}
     assert set(X.iloc[splits[1][1]]["ANIO"]) == {2025}
 
+
+def test_last_temporal_fold_is_latest_year_holdout() -> None:
+    dates = pd.to_datetime(["2022-01-01", "2023-01-01", "2024-01-01", "2025-01-01", "2026-01-01"])
+    X = pd.DataFrame({"FECHA": dates})
+    splits = list(TemporalYearSplit(n_splits=3, min_train_years=2).split(X))
+
+    final_train, final_test = splits[-1]
+    assert X.iloc[final_train]["FECHA"].max() < X.iloc[final_test]["FECHA"].min()
+    assert X.iloc[final_test]["FECHA"].dt.year.unique().tolist() == [2026]

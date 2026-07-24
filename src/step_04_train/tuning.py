@@ -133,15 +133,11 @@ def _make_study(
                 load_if_exists=True,  # RESUME si ya existe
                 **common,
             )
-            done = sum(
-                t.state.is_finished() for t in study.get_trials(deepcopy=False)
-            )
+            done = sum(t.state.is_finished() for t in study.get_trials(deepcopy=False))
             if done:
                 logger.info(f"Optuna RESUME | study={study_name} | trials previos={done}")
         except Exception as exc:
-            logger.warning(
-                f"Optuna storage no disponible ({exc}); estudio en memoria (sin resume)"
-            )
+            logger.warning(f"Optuna storage no disponible ({exc}); estudio en memoria (sin resume)")
             study = None
     if study is None:
         study = optuna.create_study(**common)  # en memoria (default / fallback)
@@ -213,12 +209,8 @@ def _objective(
             use_sample_weights,
             logger,
             X=Xt,
-            high_season_months=getattr(
-                variety_cfg, "sample_weight_high_season_months", None
-            ),
-            high_season_toggle=getattr(
-                variety_cfg, "sample_weight_high_season", None
-            ),
+            high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
+            high_season_toggle=getattr(variety_cfg, "sample_weight_high_season", None),
             emit_log=False,
         )
         fit_with_optional_sample_weight(pipe_local, Xt, yt, sample_weight=sw_fold)
@@ -266,9 +258,7 @@ def _data_fingerprint(X: pd.DataFrame) -> str:
     return hashlib.sha1(payload).hexdigest()[:12]
 
 
-def _adapt_folds_to_n(
-    n: int, outer_folds: int, inner_folds: int
-) -> tuple[int, int]:
+def _adapt_folds_to_n(n: int, outer_folds: int, inner_folds: int) -> tuple[int, int]:
     """Recorta outer/inner folds si n es chico (nunca sube sobre el perfil).
 
     Cada outer fold de TEST apunta a ~ADAPT_FOLDS_ROWS_PER_OUTER filas y cada
@@ -467,12 +457,8 @@ def _run_outer_cv_loop(
             use_sample_weights,
             logger,
             X=X_tr,
-            high_season_months=getattr(
-                variety_cfg, "sample_weight_high_season_months", None
-            ),
-            high_season_toggle=getattr(
-                variety_cfg, "sample_weight_high_season", None
-            ),
+            high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
+            high_season_toggle=getattr(variety_cfg, "sample_weight_high_season", None),
             emit_log=False,
         )
         study = _make_study(random_state + fold_idx)
@@ -623,6 +609,7 @@ def _temporal_honesty_check(
         oof_pred = np.full(n, np.nan, dtype=float)
         mae_folds = []
         baseline_mae_folds = []
+        final_holdout: tuple[np.ndarray, np.ndarray, np.ndarray, int] | None = None
         for train_idx, test_idx in splitter.split(X):
             X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
             y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
@@ -641,12 +628,8 @@ def _temporal_honesty_check(
                 use_sample_weights,
                 logger,
                 X=X_tr,
-                high_season_months=getattr(
-                    variety_cfg, "sample_weight_high_season_months", None
-                ),
-                high_season_toggle=getattr(
-                    variety_cfg, "sample_weight_high_season", None
-                ),
+                high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
+                high_season_toggle=getattr(variety_cfg, "sample_weight_high_season", None),
                 emit_log=False,
             )
             pipe = _build_pipeline(preprocessor, model_type)
@@ -662,6 +645,16 @@ def _temporal_honesty_check(
             baseline = HierarchicalMedianRegressor().fit(X_tr, y_tr)
             baseline_pred = baseline.predict(X_te)
             baseline_mae_folds.append(float(mean_absolute_error(y_te, baseline_pred)))
+            # El último test year es un holdout final intocable: no participa
+            # en Optuna, selección de params ni calibración de umbrales dentro
+            # de este run. Se reporta separado del promedio temporal.
+            holdout_year = int(pd.to_datetime(X_te["FECHA"]).dt.year.max())
+            final_holdout = (
+                np.asarray(y_te, dtype=float),
+                np.asarray(y_pred, dtype=float),
+                np.asarray(baseline_pred, dtype=float),
+                holdout_year,
+            )
 
         y_arr = np.asarray(y, dtype=float)
         base_mask = np.isfinite(oof_pred) & np.isfinite(y_arr)
@@ -699,6 +692,30 @@ def _temporal_honesty_check(
             "temporal_n_folds": float(k_folds),
             "temporal_mape_n_excluded": float(n_mape_excl),
         }
+        if final_holdout is not None:
+            holdout_y, holdout_pred, holdout_baseline_pred, holdout_year = final_holdout
+            holdout_med = float(np.median(np.abs(holdout_y)))
+            holdout_floor = max(1e-9, TEMPORAL_MAPE_REL_FLOOR * holdout_med)
+            holdout_mae = float(mean_absolute_error(holdout_y, holdout_pred))
+            holdout_baseline_mae = float(mean_absolute_error(holdout_y, holdout_baseline_pred))
+            metrics.update(
+                {
+                    "final_holdout_year": float(holdout_year),
+                    "final_holdout_n": float(len(holdout_y)),
+                    "final_holdout_mae": holdout_mae,
+                    "final_holdout_mape": mape_safe(
+                        holdout_y,
+                        holdout_pred,
+                        min_denom=holdout_floor,
+                    ),
+                    "final_holdout_r2": float(r2_score(holdout_y, holdout_pred)),
+                    "final_holdout_baseline_mae": holdout_baseline_mae,
+                    "final_holdout_baseline_skill_mae": mae_skill_score(
+                        holdout_mae,
+                        holdout_baseline_mae,
+                    ),
+                }
+            )
         logger.info(
             f"Chequeo honesto temporal | MAPE_oof={metrics['temporal_mape_oof']:.2f}% | "
             f"R2_oof={metrics['temporal_r2_oof']:.4f} | "
@@ -707,6 +724,13 @@ def _temporal_honesty_check(
             f"n_oof={int(metrics['temporal_n_oof'])} "
             f"(forecast de anio no visto; el stratified mide interpolacion)"
         )
+        if final_holdout is not None:
+            logger.info(
+                f"Holdout final intocable | year={int(metrics['final_holdout_year'])} | "
+                f"MAPE={metrics['final_holdout_mape']:.2f}% | "
+                f"MAE={metrics['final_holdout_mae']:.4f} | "
+                f"skill_baseline={metrics['final_holdout_baseline_skill_mae']:.3f}"
+            )
         return metrics
     except Exception as exc:
         logger.warning(f"Chequeo temporal fallo (se omite del reporte): {exc}")
@@ -901,8 +925,7 @@ def perform_nested_cv(
     )
     if strat_strategy.startswith("temporal_"):
         logger.info(
-            f"CV temporal | outer={strat_strategy} | inner=purged_date | "
-            f"gap_periods configurado"
+            f"CV temporal | outer={strat_strategy} | inner=purged_date | gap_periods configurado"
         )
     elif strat_label is not None:
         logger.info(
@@ -957,9 +980,7 @@ def perform_nested_cv(
     final_study_name = None
     if OPTUNA_STORAGE_URL:
         variety = getattr(variety_cfg, "variety", None) or "novar"
-        final_study_name = (
-            f"final_{variety}_{model_type}_{_data_fingerprint(X_final)}"
-        )
+        final_study_name = f"final_{variety}_{model_type}_{_data_fingerprint(X_final)}"
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     t0 = time.perf_counter()
@@ -1039,12 +1060,8 @@ def perform_nested_cv(
         use_sample_weights,
         logger,
         X=X_final,
-        high_season_months=getattr(
-            variety_cfg, "sample_weight_high_season_months", None
-        ),
-        high_season_toggle=getattr(
-            variety_cfg, "sample_weight_high_season", None
-        ),
+        high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
+        high_season_toggle=getattr(variety_cfg, "sample_weight_high_season", None),
     )
 
     final_pipeline = _fit_final_ensemble(

@@ -26,14 +26,17 @@ localizados, sin tocar el orchestrator ni el champion:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from src.step_04_train.model_lgb import get_lgb_model
+from src.step_04_train.model_mixed import get_mixed_model
 from src.step_04_train.model_xgb import get_xgb_model
 from src.step_04_train.search_spaces import (
     suggest_lgb_params,
+    suggest_mixed_params,
     suggest_xgb_params,
 )
 
@@ -56,6 +59,18 @@ BACKEND_REGISTRY: dict[str, ModelBackend] = {
     "xgb": ModelBackend("xgb", get_xgb_model, suggest_xgb_params),
     "lgb": ModelBackend("lgb", get_lgb_model, suggest_lgb_params),
 }
+
+if os.environ.get("ENABLE_EXPERIMENTAL_MIXED_BACKEND", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    BACKEND_REGISTRY["mixed"] = ModelBackend(
+        "mixed",
+        get_mixed_model,
+        suggest_mixed_params,
+    )
 
 
 def get_backend(name: str) -> ModelBackend:

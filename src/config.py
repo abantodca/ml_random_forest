@@ -46,6 +46,15 @@ Excluidas por NULA INFORMACION (1 unico valor o MI = 0 en EDA):
 import os
 from pathlib import Path
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Lee bool de env var: '1', 'true', 'yes' (case-insensitive) -> True."""
+    val = os.environ.get(name, "").strip().lower()
+    if not val:
+        return default
+    return val in ("1", "true", "yes", "on")
+
+
 # ---------------------------------------------------------------------------
 # Rutas del proyecto (resueltas desde la raiz)
 # ---------------------------------------------------------------------------
@@ -204,7 +213,8 @@ CRAMERS_V_STRONG: float = 0.3
 RANDOM_STATE: int = int(os.environ.get("SEED", "42"))
 # El pipeline siempre entrena TODOS los backends del registry (XGB + LGB
 # hoy) cada uno con su Optuna study independiente, y `champion.select_champion`
-# elige el mejor por variedad usando lex-order (gap -> full_mape -> tiempo).
+# elige el mejor por variedad usando lex-order
+# (gate gap_rel -> MAPE OOF de negocio -> tiempo).
 # Si en el futuro se agrega un nuevo backend al BACKEND_REGISTRY, queda
 # incluido automaticamente.
 
@@ -266,9 +276,7 @@ CHAMPION_MAX_GAP_REL: float = float(os.environ.get("CHAMPION_MAX_GAP_REL", "0.40
 # Mejora mínima frente a la mediana jerárquica fold-safe. 0.05 exige reducir
 # el MAE al menos 5%; un sistema complejo que no lo logra no justifica su
 # costo ni incertidumbre operacional.
-CHAMPION_MIN_BASELINE_SKILL: float = float(
-    os.environ.get("CHAMPION_MIN_BASELINE_SKILL", "0.05")
-)
+CHAMPION_MIN_BASELINE_SKILL: float = float(os.environ.get("CHAMPION_MIN_BASELINE_SKILL", "0.05"))
 
 # CHAMPION_WARN_TEMPORAL_MAPE: umbral de AVISO (no bloqueante) sobre el MAPE del
 # chequeo honesto temporal (forecast de anio no visto, _temporal_honesty_check).
@@ -279,13 +287,28 @@ CHAMPION_MIN_BASELINE_SKILL: float = float(
 #   degrada el registro — solo emite un WARNING para dar visibilidad al riesgo
 #   de drift en produccion. Mantener el registro intacto es deliberado: no
 #   rompe los campeones ya entrenados. 30.0 = ~2x el MAPE stratified tipico.
-CHAMPION_WARN_TEMPORAL_MAPE: float = float(
-    os.environ.get("CHAMPION_WARN_TEMPORAL_MAPE", "30.0")
-)
+CHAMPION_WARN_TEMPORAL_MAPE: float = float(os.environ.get("CHAMPION_WARN_TEMPORAL_MAPE", "30.0"))
 # Piso de R2 temporal por debajo del cual el modelo practicamente no extrapola
 # mejor que la media del anio nuevo (BEAUTY dio -0.11 en el run citado).
-CHAMPION_WARN_TEMPORAL_R2: float = float(
-    os.environ.get("CHAMPION_WARN_TEMPORAL_R2", "0.20")
+CHAMPION_WARN_TEMPORAL_R2: float = float(os.environ.get("CHAMPION_WARN_TEMPORAL_R2", "0.20"))
+
+# Política temporal de promoción (opt-in para no invalidar el histórico).
+#
+# El CV estratificado responde "¿interpola bien entre fundos/formatos ya
+# observados?". Para un pronóstico futuro hace falta además el expanding-window
+# de DUAL_CV_REPORT. Con REQUIRE_TEMPORAL_GATE=1 el Registry exige:
+#   - al menos MIN_TEMPORAL_FOLDS ventanas futuras evaluadas;
+#   - MAPE temporal <= CHAMPION_MAX_TEMPORAL_MAPE;
+#   - skill MAE temporal vs mediana jerárquica >=
+#     CHAMPION_MIN_TEMPORAL_BASELINE_SKILL.
+# El default OFF conserva exactamente la política productiva actual; permite
+# activar primero en staging y endurecer promoción después de calibrar umbrales
+# por variedad. Si no hay evidencia temporal suficiente, el gate falla cerrado.
+REQUIRE_TEMPORAL_GATE: bool = _env_bool("REQUIRE_TEMPORAL_GATE", False)
+MIN_TEMPORAL_FOLDS: int = int(os.environ.get("MIN_TEMPORAL_FOLDS", "2"))
+CHAMPION_MAX_TEMPORAL_MAPE: float = float(os.environ.get("CHAMPION_MAX_TEMPORAL_MAPE", "35.0"))
+CHAMPION_MIN_TEMPORAL_BASELINE_SKILL: float = float(
+    os.environ.get("CHAMPION_MIN_TEMPORAL_BASELINE_SKILL", "0.0")
 )
 
 # ---------------------------------------------------------------------------
@@ -500,7 +523,7 @@ SAMPLE_WEIGHT_CAP: float = 5.0
 # 5% de errores esta 2-3x sobre-representado en ago-oct — picos de cosecha
 # sub-predichos). Boost multiplicativo a los meses listados; se combina con
 # los demas pesos y se renormaliza a media=1. Default OFF hasta A/B.
-# (no usa _env_bool: se define mas abajo en este modulo)
+# Conserva el parser entero histórico para no alterar esta feature flag.
 SAMPLE_WEIGHT_HIGH_SEASON: bool = bool(int(os.environ.get("SAMPLE_WEIGHT_HIGH_SEASON", "0")))
 # Meses pico POR VARIEDAD: el default (8,9,10) es el pico de POP. Otras
 # variedades tienen calendarios distintos — override con env var CSV, p.ej.
@@ -534,15 +557,6 @@ SAMPLE_WEIGHT_INV_Y_CAP: float = float(os.environ.get("SAMPLE_WEIGHT_INV_Y_CAP",
 #     -e ENABLE_OUTLIER_CASCADE_FF=1 \
 #     -e CV_OUTER_STRATEGY=temporal_year \
 #     trainer --varieties POP --tuning smoke
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    """Lee bool de env var: '1', 'true', 'yes' (case-insensitive) -> True."""
-    val = os.environ.get(name, "").strip().lower()
-    if not val:
-        return default
-    return val in ("1", "true", "yes", "on")
-
 
 # A — OutlierCapper: bounds por (FUNDO, FORMATO) con cascade fallback.
 #     Justificacion: 86% del data es FORMATO=GRANEL y 72% FUNDO=A9; bounds
@@ -733,9 +747,7 @@ MODEL_REGISTRY_PREFIX: str = os.environ.get("MODEL_REGISTRY_PREFIX", "rnd-forest
 # en vez de re-explorar a ciegas. Si no hay modelo previo -> arranque en frio.
 # Lee solo run.data.params (strings), nunca el .joblib -> sin riesgo de pickle.
 # Default ON; apagar con WARM_START_FROM_REGISTRY=0 (sin rebuild).
-WARM_START_FROM_REGISTRY: bool = bool(
-    int(os.environ.get("WARM_START_FROM_REGISTRY", "1"))
-)
+WARM_START_FROM_REGISTRY: bool = bool(int(os.environ.get("WARM_START_FROM_REGISTRY", "1")))
 
 # Guard de registro (incidente 2026-06-13): un run dev con EXANTE_MODE=1
 # paso el quality gate (20.8% < 25%) y registro su campeon experimental

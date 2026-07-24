@@ -60,6 +60,9 @@ class VarietyConfig:
           controles opt-in del candidato temporal. Permanecen None durante
           todo entrenamiento normal y solo se resuelven desde
           SHADOW_TEMPORAL_OVERRIDES.
+      max_temporal_mape / min_temporal_baseline_skill / min_temporal_folds:
+          umbrales de promoción temporal por variedad. None conserva los
+          defaults globales; deben fijarse solo con backtests repetidos.
     """
 
     variety: str
@@ -72,6 +75,9 @@ class VarietyConfig:
     cv_outer_strategy: str | None = None
     training_window_days: int | None = None
     shadow_temporal_max_mape: float | None = None
+    max_temporal_mape: float | None = None
+    min_temporal_baseline_skill: float | None = None
+    min_temporal_folds: int | None = None
 
 
 # Meses de temporada de POP (EDA 2026-05: ALTA=jun-oct, BAJA=dic-abr). UNICA

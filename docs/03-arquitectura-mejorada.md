@@ -198,7 +198,10 @@ sequenceDiagram
 ```
 
 > `--tuning smoke` **nunca** registra modelos (invariante #2). El gate de champion
-> es lex-order estricto: `|gap|` (constraint) → OOF business MAPE → wall time.
+> es lex-order estricto: `gap_rel=|gap|/MAE_test` (constraint) →
+> OOF business MAPE → wall time. Para promoción de forecast puede añadirse el
+> gate temporal opt-in descrito en
+> [`04-guia-validacion-estadistica.md`](04-guia-validacion-estadistica.md).
 
 ## 5. Secuencia — servir un pronóstico
 
