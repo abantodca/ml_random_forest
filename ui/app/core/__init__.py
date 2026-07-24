@@ -8,6 +8,7 @@ a archivos internos.
 
 from app.core.config import Configuracion
 from app.core.constants import (
+    API_BATCH_MAX_ROWS,
     CACHE_TTL_DASHBOARD_HTML,
     COLUMNAS_OPCIONALES,
     COLUMNAS_REQUERIDAS,
@@ -34,6 +35,7 @@ from app.core.exceptions import ApiConnectionError, ApiResponseError
 from app.core.logger import logger
 
 __all__ = [
+    "API_BATCH_MAX_ROWS",
     # Configuración
     "Configuracion",
     # Constantes - red / IO

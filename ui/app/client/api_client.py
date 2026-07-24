@@ -47,13 +47,24 @@ class ApiClient:
         try:
             r = requests.request(method, url, timeout=timeout, **kwargs)
             r.raise_for_status()
-            return r.json()
+            payload = r.json()
+            if not isinstance(payload, dict):
+                raise ApiResponseError(
+                    f"Respuesta JSON inválida de {method} {path}: se esperaba un objeto",
+                    r.status_code,
+                )
+            return payload
         except requests.exceptions.HTTPError as exc:
             detail = self._extract_error_detail(exc)
             status = exc.response.status_code if exc.response is not None else 0
             raise ApiResponseError(detail, status) from exc
         except requests.RequestException as exc:
             raise ApiConnectionError(str(exc)) from exc
+        except ValueError as exc:
+            raise ApiResponseError(
+                f"Respuesta no JSON de {method} {path}",
+                r.status_code,
+            ) from exc
 
     def get_text(self, path: str, *, timeout: int) -> tuple[int, str]:
         """Variante para descargar texto/HTML; devuelve (status_code, body)."""
@@ -72,5 +83,5 @@ class ApiClient:
         try:
             body = exc.response.json()
             return body.get("message") or body.get("detail") or detail
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return detail

@@ -14,7 +14,7 @@ import pandas as pd
 import pandera as pa
 from pandera.errors import SchemaErrors
 
-from app.core import COLUMNAS_OPCIONALES, COLUMNAS_REQUERIDAS
+from app.core import API_BATCH_MAX_ROWS, COLUMNAS_OPCIONALES, COLUMNAS_REQUERIDAS
 
 
 @dataclass(frozen=True)
@@ -184,6 +184,24 @@ def validate_batch_upload(
                     motivo="Columna obligatoria faltante",
                 )
                 for c in missing
+            ]
+        )
+
+    counts = df["VARIEDAD"].value_counts(dropna=False)
+    oversized = counts[counts > API_BATCH_MAX_ROWS]
+    if not oversized.empty:
+        raise BatchValidationError(
+            [
+                ValidationIssue(
+                    fila=0,
+                    columna="VARIEDAD",
+                    valor=str(variety),
+                    motivo=(
+                        f"{int(count)} filas exceden el máximo de "
+                        f"{API_BATCH_MAX_ROWS} por lote"
+                    ),
+                )
+                for variety, count in oversized.items()
             ]
         )
 

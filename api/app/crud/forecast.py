@@ -160,6 +160,8 @@ async def update_forecast(
     db: AsyncSession,
     forecast_id: int,
     forecast_update: ForecastUpdate,
+    *,
+    kghora_pred: float | None = None,
 ) -> Forecast:
     forecast = await get_forecast_by_id(db, forecast_id)
 
@@ -167,6 +169,8 @@ async def update_forecast(
     for key, value in update_data.items():
         setattr(forecast, key, value)
 
+    if kghora_pred is not None:
+        forecast.kghora_pred = kghora_pred
     if forecast.kghora_pred is not None:
         forecast.kgjn_pred = calc_kgjn(forecast.kghora_pred, forecast.horas_efectivas)
 

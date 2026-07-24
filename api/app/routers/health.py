@@ -137,6 +137,7 @@ async def reload_models(
         Resumen de la operación con modelos actualizados/cargados/fallidos
     """
     result = await mlflow.reload_models()
+    health_cache.clear()
 
     logger.info(
         "Models reload: loaded=%d updated=%d failed=%d",

@@ -180,7 +180,7 @@ def _render_upload_section() -> None:
     ):
         up = st.file_uploader(
             "Excel de pronósticos (a predecir)",
-            type=["xlsx", "xls", "csv"],
+            type=["xlsx", "csv"],
             key="grid_upload",
             label_visibility="collapsed",
         )

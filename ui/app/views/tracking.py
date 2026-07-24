@@ -121,7 +121,7 @@ def _real_subir(variety: str) -> None:
     )
     uploaded = st.file_uploader(
         "Excel de DATOS REALES (cosecha ocurrida + KG/JR_H)",
-        type=["xlsx", "xls"],
+        type=["xlsx"],
         key="real_upload",
     )
     replace = st.checkbox(

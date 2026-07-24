@@ -39,6 +39,10 @@ class HealthCache:
         """Almacena el resultado del health check (TTL aplica desde aquí)."""
         self._cache[self._KEY] = (mlflow_ok, db_ok, models_available)
 
+    def clear(self) -> None:
+        """Invalida el valor después de una recarga explícita de modelos."""
+        self._cache.clear()
+
 
 async def check_database(db: AsyncSession) -> tuple[bool, str | None]:
     """

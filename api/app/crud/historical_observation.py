@@ -79,6 +79,62 @@ async def bulk_insert(
     return len(rows)
 
 
+async def import_rows(
+    db: AsyncSession,
+    variety: str,
+    rows: list[HistoricalObservationCreate],
+    *,
+    replace: bool,
+) -> tuple[int, int]:
+    """Importa observaciones en una sola transacción.
+
+    Devuelve ``(deleted, inserted)``. Un reemplazo vacío se rechaza antes del
+    DELETE para impedir que un Excel completamente inválido borre el histórico
+    vigente. El commit ocurre una sola vez después de delete+insert.
+    """
+    if replace and not rows:
+        raise ValueError(
+            "El archivo no contiene filas históricas válidas; "
+            "se conserva el histórico existente."
+        )
+    if not rows:
+        return 0, 0
+
+    try:
+        deleted = 0
+        if replace:
+            result = await db.execute(
+                delete(HistoricalObservation).where(
+                    HistoricalObservation.variety == variety.upper()
+                )
+            )
+            deleted = int(result.rowcount or 0)
+
+        db.add_all(
+            [
+                HistoricalObservation(
+                    variety=variety.upper(),
+                    fundo=r.fundo,
+                    formato=r.formato,
+                    fecha=r.fecha,
+                    kg_ha=r.kg_ha,
+                    kg_jr_h=r.kg_jr_h,
+                    dpc=r.dpc,
+                    indus_pct=r.indus_pct,
+                    p_baya=r.p_baya,
+                    ha=r.ha,
+                    dia_cosecha=r.dia_cosecha,
+                )
+                for r in rows
+            ]
+        )
+        await db.commit()
+        return deleted, len(rows)
+    except Exception:
+        await db.rollback()
+        raise
+
+
 # ============================================================================
 # Borrado
 # ============================================================================

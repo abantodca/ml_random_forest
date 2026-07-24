@@ -21,6 +21,13 @@ from sqlalchemy.orm import DeclarativeBase
 logger = logging.getLogger(__name__)
 
 
+def _quote_pg_identifier(value: str) -> str:
+    """Escapa un identificador PostgreSQL para usarlo entre comillas dobles."""
+    if "\x00" in value:
+        raise ValueError("El nombre de base contiene un carácter nulo")
+    return '"' + value.replace('"', '""') + '"'
+
+
 class Base(DeclarativeBase):
     """Base class para todos los modelos ORM"""
 
@@ -73,7 +80,7 @@ async def ensure_database(database_url: str) -> None:
         if not exists:
             # CREATE DATABASE no admite parámetros y no puede ir en transacción;
             # el nombre proviene de nuestra config, no de input externo.
-            await conn.execute(f'CREATE DATABASE "{target_db}"')
+            await conn.execute(f"CREATE DATABASE {_quote_pg_identifier(target_db)}")
             logger.info("✅ Base de datos '%s' creada", target_db)
     finally:
         await conn.close()
@@ -150,6 +157,10 @@ async def init_db(database_url: str) -> None:
         logger.info("✅ Tablas verificadas/creadas")
 
     except Exception as e:
+        if _engine is not None:
+            await _engine.dispose()
+        _engine = None
+        _async_session_maker = None
         logger.error("❌ Error conectando a PostgreSQL: %s", e)
         raise ConnectionError(f"No se pudo conectar a PostgreSQL: {e}") from e
 

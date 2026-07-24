@@ -27,6 +27,11 @@ def forecast_predict(variety: str) -> str:
     return f"/api/forecasts/{variety}/predict"
 
 
+def forecast_predict_batch(variety: str) -> str:
+    """Predicción dry-run en lote (no persiste)."""
+    return f"/api/forecasts/{variety}/predict-batch"
+
+
 def variety_detail(name: str) -> str:
     return f"/api/varieties/{name}"
 

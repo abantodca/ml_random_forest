@@ -36,6 +36,7 @@ from app.schemas import (
     ForecastListResponse,
     ForecastResponse,
     ForecastUpdate,
+    PredictionBatchResponse,
     PredictionResponse,
 )
 from app.services import parse_excel_to_forecasts
@@ -91,6 +92,16 @@ async def predict_forecast(
     return await forecasts.predict_only(variety, forecast_data)
 
 
+@router.post("/{variety}/predict-batch", response_model=PredictionBatchResponse)
+async def predict_forecasts_batch(
+    variety: ValidatedVariety,
+    batch_data: ForecastBatchCreate,
+    forecasts: ForecastSvc,
+) -> PredictionBatchResponse:
+    """Predice hasta 1000 registros en memoria sin persistirlos."""
+    return await forecasts.predict_batch_only(variety, batch_data.forecasts)
+
+
 @router.post("/{variety}/batch", response_model=ForecastListResponse, status_code=201)
 async def create_forecasts_batch(
     variety: ValidatedVariety,
@@ -112,7 +123,7 @@ async def upload_excel_forecasts(
     variety: ValidatedVariety,
     db: DbSession,
     forecasts: ForecastSvc,
-    file: UploadFile = File(..., description="Archivo Excel (.xlsx o .xls)"),
+    file: UploadFile = File(..., description="Archivo Excel (.xlsx)"),
 ) -> ForecastListResponse:
     """
     Carga pronosticos desde un archivo Excel.
@@ -207,6 +218,7 @@ async def update_forecast(
     forecast_id: int,
     forecast_update: ForecastUpdate,
     db: DbSession,
+    forecasts: ForecastSvc,
 ) -> ForecastResponse:
     """
     Actualiza parcialmente un pronóstico existente.
@@ -217,8 +229,7 @@ async def update_forecast(
     Raises:
         404: Si no se encuentra el pronóstico
     """
-    forecast = await crud.forecast.update_forecast(db, forecast_id, forecast_update)
-    return ForecastResponse.model_validate(forecast)
+    return await forecasts.update_one(db, forecast_id, forecast_update)
 
 
 # ============================================================================

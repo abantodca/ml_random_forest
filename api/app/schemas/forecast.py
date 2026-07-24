@@ -45,7 +45,13 @@ class ForecastCreate(BaseModel):
         max_length=100,
         description="ID externo opcional para identificar pronosticos",
     )
-    kg_ha: float = Field(..., alias="KG/HA", gt=0.0, description="Kilogramos por hectarea")
+    kg_ha: float = Field(
+        ...,
+        alias="KG/HA",
+        gt=0.0,
+        le=100_000.0,
+        description="Kilogramos por hectarea",
+    )
     indus_pct: float | None = Field(
         default=None,
         alias="%INDUS",
@@ -53,16 +59,21 @@ class ForecastCreate(BaseModel):
         le=100.0,
         description="Porcentaje industrial (opcional)",
     )
-    dpc: float = Field(..., alias="DPC", description="Dias post cuaja")
+    dpc: float = Field(..., alias="DPC", ge=0.0, le=400.0, description="Dias post cuaja")
     p_baya: float | None = Field(
         default=None,
         alias="P/BAYA",
         gt=0.0,
+        le=100.0,
         description="Peso de baya (opcional)",
     )
-    ha: float = Field(..., alias="HA", gt=0.0, description="Hectareas")
+    ha: float = Field(..., alias="HA", gt=0.0, le=10_000.0, description="Hectareas")
     dia_cosecha: int = Field(
-        ..., alias="DIA_COSECHA", ge=0, description="Dia dentro de la temporada de cosecha"
+        ...,
+        alias="DIA_COSECHA",
+        ge=0,
+        le=365,
+        description="Dia dentro de la temporada de cosecha",
     )
     formato: Formato = Field(
         default=FORMATO_DEFAULT,
@@ -78,6 +89,7 @@ class ForecastCreate(BaseModel):
         default=None,
         alias="HORAS_EFECTIVAS",
         ge=0,
+        le=24,
         description="Horas efectivas trabajadas (opcional, para KGJN_PRED)",
     )
 
@@ -151,15 +163,20 @@ class ForecastUpdate(BaseModel):
 
     fecha: date | None = Field(default=None, alias="FECHA")
     external_id: str | None = Field(default=None, alias="EXTERNAL_ID")
-    kg_ha: float | None = Field(default=None, alias="KG/HA", gt=0.0)
+    kg_ha: float | None = Field(default=None, alias="KG/HA", gt=0.0, le=100_000.0)
     indus_pct: float | None = Field(default=None, alias="%INDUS", ge=0.0, le=100.0)
-    dpc: float | None = Field(default=None, alias="DPC")
-    p_baya: float | None = Field(default=None, alias="P/BAYA", gt=0.0)
-    ha: float | None = Field(default=None, alias="HA", gt=0.0)
-    dia_cosecha: int | None = Field(default=None, alias="DIA_COSECHA", ge=0)
+    dpc: float | None = Field(default=None, alias="DPC", ge=0.0, le=400.0)
+    p_baya: float | None = Field(default=None, alias="P/BAYA", gt=0.0, le=100.0)
+    ha: float | None = Field(default=None, alias="HA", gt=0.0, le=10_000.0)
+    dia_cosecha: int | None = Field(default=None, alias="DIA_COSECHA", ge=0, le=365)
     formato: Formato | None = Field(default=None, alias="FORMATO")
     fundo: Fundo | None = Field(default=None, alias="FUNDO")
-    horas_efectivas: float | None = Field(default=None, alias="HORAS_EFECTIVAS", ge=0)
+    horas_efectivas: float | None = Field(
+        default=None,
+        alias="HORAS_EFECTIVAS",
+        ge=0,
+        le=24,
+    )
 
     @field_validator("formato", mode="before")
     @classmethod
@@ -336,6 +353,14 @@ class BatchDriftReport(BaseModel):
     training_window: TrainingWindow = Field(default_factory=TrainingWindow)
     per_feature: list[BatchFeatureDrift] = Field(default_factory=list)
     row_status_counts: RowStatusCounts = Field(default_factory=RowStatusCounts)
+
+
+class PredictionBatchResponse(BaseModel):
+    """Predicciones en memoria para un lote; no persiste registros."""
+
+    items: list[PredictionResponse]
+    total: int = Field(ge=0)
+    batch_drift: BatchDriftReport | None = None
 
 
 class ForecastListResponse(BaseModel):

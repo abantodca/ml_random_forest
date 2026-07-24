@@ -15,18 +15,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from functools import partial
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud
+from app.core import PredictionError
 from app.schemas import (
     BatchDriftReport,
     DriftReport,
     ForecastCreate,
     ForecastListResponse,
     ForecastResponse,
+    ForecastUpdate,
+    PredictionBatchResponse,
     PredictionResponse,
 )
 from app.services.drift_service import DriftService
@@ -48,6 +52,20 @@ class ForecastService:
         self._mlflow = mlflow
         self._features = features
         self._drift = drift
+
+    _MODEL_INPUT_FIELDS = frozenset(
+        {
+            "fecha",
+            "kg_ha",
+            "indus_pct",
+            "dpc",
+            "p_baya",
+            "ha",
+            "dia_cosecha",
+            "formato",
+            "fundo",
+        }
+    )
 
     # ------------------------------------------------------------------
     # API pública
@@ -160,6 +178,97 @@ class ForecastService:
         )
         return self._attach_uncertainty(response, kghora, stds[0] if stds else None)
 
+    async def predict_batch_only(
+        self,
+        variety: str,
+        forecasts_data: list[ForecastCreate],
+    ) -> PredictionBatchResponse:
+        """Predice un lote en memoria con una sola llamada al modelo."""
+        preds, stds, drift_reports, batch_drift_dict = await self._predict(
+            variety,
+            forecasts_data,
+        )
+
+        items: list[PredictionResponse] = []
+        for idx, (forecast_data, kghora) in enumerate(
+            zip(forecasts_data, preds, strict=True)
+        ):
+            response = PredictionResponse(
+                variety=variety,
+                kghora_pred=kghora,
+                kgjn_pred=crud.forecast.calc_kgjn(
+                    kghora,
+                    forecast_data.horas_efectivas,
+                ),
+            )
+            response = self._attach_uncertainty(
+                response,
+                kghora,
+                stds[idx] if stds is not None else None,
+            )
+            drift_dict = drift_reports[idx] if idx < len(drift_reports) else None
+            items.append(self._attach_drift(response, drift_dict))
+
+        batch_drift: BatchDriftReport | None = None
+        if batch_drift_dict is not None:
+            try:
+                batch_drift = BatchDriftReport.model_validate(batch_drift_dict)
+            except Exception as exc:
+                logger.warning("No se pudo serializar batch drift dry-run: %s", exc)
+
+        return PredictionBatchResponse(
+            items=items,
+            total=len(items),
+            batch_drift=batch_drift,
+        )
+
+    async def update_one(
+        self,
+        db: AsyncSession,
+        forecast_id: int,
+        forecast_update: ForecastUpdate,
+    ) -> ForecastResponse:
+        """Actualiza y vuelve a predecir cuando cambia una entrada del modelo.
+
+        Antes el PATCH modificaba las features persistidas pero conservaba
+        ``kghora_pred`` del payload anterior. Eso rompía la trazabilidad
+        input→predicción. Cambios puramente administrativos (external_id u
+        horas efectivas) no invocan MLflow.
+        """
+        existing = await crud.forecast.get_forecast_by_id(db, forecast_id)
+        changes = forecast_update.model_dump(exclude_unset=True)
+        model_changed = bool(self._MODEL_INPUT_FIELDS.intersection(changes))
+
+        pred: float | None = None
+        std: float | None = None
+        drift_dict: dict[str, Any] | None = None
+        if model_changed:
+            merged = {
+                field: getattr(existing, field)
+                for field in ForecastCreate.model_fields
+            }
+            merged.update(changes)
+            forecast_data = ForecastCreate.model_validate(merged)
+            preds, stds, drift_reports, _ = await self._predict(
+                existing.variety,
+                [forecast_data],
+            )
+            pred = preds[0]
+            std = stds[0] if stds else None
+            drift_dict = drift_reports[0] if drift_reports else None
+
+        updated = await crud.forecast.update_forecast(
+            db,
+            forecast_id,
+            forecast_update,
+            kghora_pred=pred,
+        )
+        response = ForecastResponse.model_validate(updated)
+        if model_changed:
+            response = self._attach_uncertainty(response, response.kghora_pred, std)
+            response = self._attach_drift(response, drift_dict)
+        return response
+
     # ------------------------------------------------------------------
     # Helpers internos
     # ------------------------------------------------------------------
@@ -194,6 +303,7 @@ class ForecastService:
         """
         features_df = self._features.build_features(forecasts_data)
         preds, stds = await self._mlflow.predict_with_std(variety, features_df)
+        self._validate_predictions(variety, preds, stds, len(forecasts_data))
 
         # `DriftService.compute` y `compute_batch` son síncronos. En el camino
         # caliente (baseline ya cacheado por variedad) solo hacen aritmética
@@ -216,6 +326,31 @@ class ForecastService:
         )
         return preds, stds, row_drifts, batch_drift
 
+    @staticmethod
+    def _validate_predictions(
+        variety: str,
+        preds: list[float],
+        halfwidths: list[float] | None,
+        expected: int,
+    ) -> None:
+        """Evita persistir salidas incompletas, NaN, infinitas o negativas."""
+        if len(preds) != expected:
+            raise PredictionError(
+                variety,
+                f"el modelo devolvió {len(preds)} predicciones para {expected} filas",
+            )
+        if any(not math.isfinite(value) or value < 0 for value in preds):
+            raise PredictionError(variety, "el modelo devolvió predicciones no válidas")
+        if halfwidths is None:
+            return
+        if len(halfwidths) != expected:
+            raise PredictionError(
+                variety,
+                f"el modelo devolvió {len(halfwidths)} bandas para {expected} filas",
+            )
+        if any(not math.isfinite(value) or value < 0 for value in halfwidths):
+            raise PredictionError(variety, "el modelo devolvió bandas de incertidumbre no válidas")
+
     # Umbral del SEMIANCHO relativo (halfwidth/pred) para clasificar
     # confianza. El semiancho viene de MLflowService.predict_with_std:
     # conformal q90 por fundo (con factor cold-start x2) cuando el modelo
@@ -232,7 +367,13 @@ class ForecastService:
 
         `kghora_std` conserva el nombre por compatibilidad de schema pero
         contiene el SEMIANCHO de la banda (kghora_hi - kghora_pred)."""
-        if halfwidth is None or pred is None or pred <= 0:
+        if (
+            halfwidth is None
+            or pred is None
+            or pred <= 0
+            or not math.isfinite(halfwidth)
+            or halfwidth < 0
+        ):
             return response
         try:
             rel = halfwidth / pred

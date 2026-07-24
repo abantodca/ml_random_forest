@@ -22,8 +22,12 @@ from app.client.endpoints import (
     forecast_batch,
     forecast_by_id,
     forecast_create,
+    forecast_predict,
+    forecast_predict_batch,
     forecast_upload,
     forecasts_by_fecha,
+    history_list,
+    history_upload,
     variety_dashboard,
     variety_detail,
 )
@@ -42,9 +46,13 @@ __all__ = [
     "variety_dashboard",
     "forecast_create",
     "forecast_batch",
+    "forecast_predict",
+    "forecast_predict_batch",
     "forecast_upload",
     "forecast_by_id",
     "forecasts_by_fecha",
+    "history_list",
+    "history_upload",
     # Submódulo expuesto para usos `app.client.endpoints.*`
     "endpoints",
 ]

@@ -143,11 +143,15 @@ async def upload_history(
     validate_excel_file(contents, file.filename)
     rows, skipped = _parse_history_excel(contents)
 
+    deleted, inserted = await crud.historical_observation.import_rows(
+        db,
+        variety,
+        rows,
+        replace=replace,
+    )
     if replace:
-        deleted = await crud.historical_observation.delete_by_variety(db, variety)
         logger.info("History replaced: variety=%s deleted=%d", variety, deleted)
 
-    inserted = await crud.historical_observation.bulk_insert(db, variety, rows)
     logger.info("History upload: variety=%s inserted=%d skipped=%d", variety, inserted, skipped)
 
     return HistoryImportResponse(

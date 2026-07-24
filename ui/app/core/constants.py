@@ -13,6 +13,7 @@ DEFAULT_TIMEOUT_WRITE: int = 15
 # reporte del modelo (~4MB descargados de S3 vía MLflow). La API cachea el
 # HTML por variedad, así que solo el primer request paga el costo de red.
 DEFAULT_TIMEOUT_BATCH: int = 60
+API_BATCH_MAX_ROWS: int = 1000
 
 # ---------------------------------------------------------------------------
 # Cache TTL (segundos)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.client import endpoints
 from app.client.api_client import ApiClient
 from app.client.mappers import to_forecast, to_forecast_list
+from app.core import ApiResponseError
 from app.schemas import (
     DriftReport,
     ForecastListResult,
@@ -105,6 +106,40 @@ class ForecastService:
             timeout=self._client.timeout_write,
             json=payload,
         )
+        return self._to_prediction_result(data, variety, payload)
+
+    def predict_batch_dry(
+        self,
+        variety: str,
+        payloads: list[dict],
+    ) -> tuple[PredictionResult, ...]:
+        """Predice hasta 1000 filas con una llamada y sin persistir."""
+        if not payloads:
+            return ()
+
+        data = self._client.post(
+            endpoints.forecast_predict_batch(variety),
+            timeout=self._client.timeout_batch,
+            json={"forecasts": payloads},
+        )
+        items = data.get("items")
+        if not isinstance(items, list) or len(items) != len(payloads):
+            raise ApiResponseError(
+                "Respuesta batch inválida: cantidad de predicciones inesperada."
+            )
+        return tuple(
+            self._to_prediction_result(item, variety, payload)
+            for item, payload in zip(items, payloads, strict=True)
+        )
+
+    @staticmethod
+    def _to_prediction_result(
+        data: dict,
+        variety: str,
+        payload: dict,
+    ) -> PredictionResult:
+        if not isinstance(data, dict):
+            raise ApiResponseError("Respuesta de predicción inválida.")
         drift_raw = data.get("drift")
         return PredictionResult(
             variety=data.get("variety", variety),

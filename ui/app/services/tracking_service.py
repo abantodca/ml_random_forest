@@ -18,7 +18,7 @@ import pandas as pd
 
 from app.client import endpoints
 from app.client.api_client import ApiClient
-from app.core import ApiConnectionError, ApiResponseError, logger
+from app.core import API_BATCH_MAX_ROWS, ApiConnectionError, ApiResponseError, logger
 from app.schemas import (
     AccuracyPoint,
     ForecastRecord,
@@ -147,8 +147,8 @@ class TrackingService:
 
         Solo incluye claves `(fundo, formato, fecha)` que existen en AMBOS
         lados. Si hay varios pronósticos para la misma clave, gana el más
-        reciente (`created_at`). `with_decomposition` dispara una predicción
-        dry-run por punto para separar error de datos vs error de modelo.
+        reciente (`created_at`). La descomposición se calcula en lotes para
+        separar error de datos vs error de modelo sin una llamada por punto.
         """
         forecasts = self._forecasts.list(
             variety=variety,
@@ -166,12 +166,37 @@ class TrackingService:
             if prev is None or fc.created_at > prev.created_at:
                 latest[key] = fc
 
-        points: list[AccuracyPoint] = []
+        matched: list[tuple[ForecastRecord, HistoricalObservation]] = []
         for key, fc in latest.items():
             hist = real_map.get(key)
-            if hist is None:
-                continue
-            pred_on_real = self._predict_on_real(variety, fc, hist) if with_decomposition else None
+            if hist is not None:
+                matched.append((fc, hist))
+
+        pred_on_real: list[float | None] = [None] * len(matched)
+        if with_decomposition:
+            for start in range(0, len(matched), API_BATCH_MAX_ROWS):
+                chunk = matched[start : start + API_BATCH_MAX_ROWS]
+                payloads = [
+                    self._prediction_payload_on_real(fc, hist)
+                    for fc, hist in chunk
+                ]
+                try:
+                    predictions = self._forecasts.predict_batch_dry(variety, payloads)
+                except (ApiConnectionError, ApiResponseError) as exc:
+                    logger.warning(
+                        "predict_batch_on_real falló (%s, filas %d-%d): %s",
+                        variety,
+                        start + 1,
+                        start + len(chunk),
+                        exc,
+                    )
+                    continue
+                pred_on_real[start : start + len(chunk)] = [
+                    prediction.kghora for prediction in predictions
+                ]
+
+        points: list[AccuracyPoint] = []
+        for idx, (fc, hist) in enumerate(matched):
             points.append(
                 AccuracyPoint(
                     variety=variety,
@@ -180,23 +205,25 @@ class TrackingService:
                     fecha=fc.fecha[:10],
                     pred_original=fc.kghora_pred,
                     real=hist.kg_jr_h,
-                    pred_on_real=pred_on_real,
+                    pred_on_real=pred_on_real[idx],
                 )
             )
         points.sort(key=lambda p: p.fecha)
         return points
 
-    def _predict_on_real(
-        self, variety: str, fc: ForecastRecord, hist: HistoricalObservation
-    ) -> float | None:
-        """Re-predice usando las features REALES del cosechado.
+    @staticmethod
+    def _prediction_payload_on_real(
+        fc: ForecastRecord,
+        hist: HistoricalObservation,
+    ) -> dict:
+        """Construye los inputs reales para descomponer el error.
 
         Cada feature usa su valor real si el Excel de reales lo trae; si no,
         cae al valor proyectado del pronóstico. Cuando la observación real
         incluye todas las features, la descomposición es 100% exacta; si solo
         trae KG/HA, `error_data` aísla únicamente la proyección de KG/HA.
         """
-        payload = build_prediction_payload(
+        return build_prediction_payload(
             fecha=fc.fecha[:10],
             kg_ha=hist.kg_ha,
             dpc=hist.dpc if hist.dpc is not None else fc.dpc,
@@ -207,11 +234,6 @@ class TrackingService:
             indus_pct=hist.indus_pct if hist.indus_pct is not None else fc.indus_pct,
             p_baya=hist.p_baya if hist.p_baya is not None else fc.p_baya,
         )
-        try:
-            return self._forecasts.predict_dry(variety, payload).kghora
-        except (ApiConnectionError, ApiResponseError) as exc:
-            logger.warning("predict_on_real falló (%s/%s): %s", variety, fc.fecha, exc)
-            return None
 
     # ---- agregación semanal (cierre de semana) ---------------------------
 
