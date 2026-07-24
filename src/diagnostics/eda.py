@@ -39,6 +39,7 @@ from src.config import (
     EDA_SKEW_HIGH,
     NUMERIC_FEATURES,
     OUTLIER_FRACTION_WARN,
+    RAW_FEATURE_COLUMNS,
     REPORTS_DIR,
     SKEW_THRESHOLD,
     TARGET,
@@ -365,12 +366,15 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     """Ejecuta el EDA completo para una variedad y devuelve el path al HTML."""
     init_dirs()
     out_dir = out_dir or REPORTS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_path = out_dir / f"EDA_{variety}_{ts}.html"
 
     # ---- 1. Carga raw ----
     logger.info(f"[EDA/{variety}] cargando data raw...")
-    X, y = load_data(sheet=variety)
+    # EDA observa los niveles originales. El agrupamiento fold-safe vive en el
+    # pipeline de entrenamiento, no en la carga exploratoria.
+    X, y = load_data(sheet=variety, collapse_rare_categories=False)
     df = X.copy()
     df[TARGET] = y.values
     if DATE_COLUMN in df.columns:
@@ -434,7 +438,8 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
         high_threshold=CORRELATION_HIGH_THRESHOLD,
     )
     vif_results = compute_vif(numeric_only)
-    mi_results = compute_mutual_information(numeric_only, df[TARGET])
+    mi_columns = [column for column in RAW_FEATURE_COLUMNS if column in df.columns]
+    mi_results = compute_mutual_information(df[mi_columns], df[TARGET])
 
     # ---- 5-bis. Categoricas (FORMATO, FUNDO, ...) ----
     cat_cols = [c for c in CATEGORICAL_FEATURES if c in df.columns]
@@ -558,6 +563,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _main() -> int:
+    init_dirs()
     from src.utils.logger import setup_logging
 
     setup_logging()

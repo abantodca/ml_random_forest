@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    median_absolute_error,
+    r2_score,
+)
 
 from src.config import MAPE_MIN_DENOM
 
@@ -40,7 +45,7 @@ def mape_safe(y_true, y_pred, min_denom: float = MAPE_MIN_DENOM) -> float:
 def calculate_regression_metrics(
     y_true, y_pred, min_denom: float = MAPE_MIN_DENOM
 ) -> dict[str, float]:
-    """Devuelve {mae, rmse, r2, mape, mape_n_excluded}.
+    """Métricas complementarias de escala, porcentaje y sesgo.
 
     MAE/RMSE/R2 se calculan sobre TODAS las filas (son robustos a escala).
     MAPE descarta observaciones con |y_true| < `min_denom` para evitar que un
@@ -54,6 +59,28 @@ def calculate_regression_metrics(
     mae = float(mean_absolute_error(y_true, y_pred))
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     r2 = float(r2_score(y_true, y_pred))
+    median_ae = float(median_absolute_error(y_true, y_pred))
+    bias = float(np.mean(y_pred - y_true))
+    abs_denom_sum = float(np.sum(np.abs(y_true)))
+    wape = (
+        float(np.sum(np.abs(y_true - y_pred)) / abs_denom_sum * 100.0)
+        if abs_denom_sum > 0
+        else float("nan")
+    )
+    smape_denom = np.abs(y_true) + np.abs(y_pred)
+    smape_valid = smape_denom > 0
+    smape = (
+        float(
+            np.mean(
+                2.0
+                * np.abs(y_true[smape_valid] - y_pred[smape_valid])
+                / smape_denom[smape_valid]
+            )
+            * 100.0
+        )
+        if smape_valid.any()
+        else float("nan")
+    )
 
     valid = _mape_valid_mask(y_true, min_denom)
     n_excluded = int((~valid).sum())
@@ -62,4 +89,14 @@ def calculate_regression_metrics(
     else:
         mape = float("nan")
 
-    return {"mae": mae, "rmse": rmse, "r2": r2, "mape": mape, "mape_n_excluded": n_excluded}
+    return {
+        "mae": mae,
+        "median_ae": median_ae,
+        "rmse": rmse,
+        "r2": r2,
+        "mape": mape,
+        "wape": wape,
+        "smape": smape,
+        "bias": bias,
+        "mape_n_excluded": n_excluded,
+    }

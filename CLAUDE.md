@@ -69,7 +69,7 @@ owner). La validación es lint + stack local: `task build` → `task train VARIE
 TUNING=smoke` → revisar UI/MLflow.
 
 El **CD** (GHA OIDC → ECR/ECS deploy) es deliberadamente Terraform pegable en
-`docs/02-produccion-aws.md` #3.10 (`infra/modules/cicd/`), no un workflow committeado.
+`docs/02-produccion-aws.md` #3.11 (`infra/modules/cicd/`), no un workflow committeado.
 
 ### Running the apps standalone (rarely needed; compose is the norm)
 
@@ -84,10 +84,17 @@ python main.py --tuning dev --varieties POP        # trainer CLI (needs a venv +
 ```bash
 task deploy        # full stand-up: storage -> 5 ECR images -> rest of infra
 task smoke         # deploy + one Batch POP smoke job
-task wake / sleep  # power the prod stack on/off (RDS+MLflow+reports+api+ui as a block; scheduler-driven cost model)
+task rebuild / teardown  # THE weekly cycle: rebuild Wednesday, teardown Thursday
+task wake / sleep  # short pauses only (1-2 nights); scheduler scales Fargate to 0 + stops RDS
 task status        # terraform outputs + cluster state + public URLs
 task destroy / nuke  # DESTRUCTIVE (nuke also removes tfstate + OIDC)
 ```
+
+**Operating model**: the prod stack lives only Wednesday-Thursday, window 08:00-16:00 PET
+(`workdays_cron = "WED,THU"`), and is torn down in between — see `docs/02-produccion-aws.md` #9.
+`teardown`/`rebuild` is the recurring cycle, **not** `destroy` (which empties the S3 buckets
+holding models and reports) and **not** `sleep` (the ~6-day pause brushes against RDS's
+7-day auto-restart, and the `keepstop` lambda that would re-stop it dies with the ALB).
 
 ## Non-obvious invariants (learned by reading across files — keep these intact)
 

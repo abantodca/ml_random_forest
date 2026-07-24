@@ -1,12 +1,20 @@
 # Guía experta — Producción en AWS (Terraform, AWS Batch + ECS Fargate + MLflow)
 
-> Tramo II del stack: promover a AWS el **mismo binario** que validaste en local
+> [!WARNING]
+> El camino base conserva el perfil económico del proyecto. Con ALB público por
+> HTTP y sin autenticación aplicada a todos los paths, es un **entorno de
+> laboratorio controlado**, no una exposición productiva segura. Antes de
+> permitir acceso desde Internet se debe completar el gate de la Parte 10:
+> HTTPS, autenticación, secretos separados, pruebas, imágenes inmutables y
+> observabilidad de inferencia.
+
+> Tramo II del stack: promover a AWS el **mismo contrato de imagen** que validaste en local
 > ([`docs/01-local.md`](01-local.md)). Terraform copy-paste por módulos, estado remoto en S3, apply
 > incremental en olas con checkpoint, y un lifecycle de cuatro modos —STAND-UP, TEAR-DOWN, REBUILD,
 > DESTROY— para que la infra se apague cuando no la usás.
 >
 > La arquitectura, en un solo camino: el **entrenamiento** corre en **AWS Batch** (colas Spot +
-> On-Demand, `c6i.4xlarge`, escala a cero entre corridas); **MLflow** vive en **ECS Fargate** detrás
+> On-Demand, `c6i.2xlarge`, escala a cero entre corridas); **MLflow** vive en **ECS Fargate** detrás
 > de un ALB con **RDS Postgres** + S3 como backend
 > ([ADR-001](adr/ADR-001-mlflow-backend-postgres-s3.md)); la **API FastAPI** y la **UI Streamlit**
 > corren como servicios ECS en ese mismo cluster y ALB; los **reports** los sirve un nginx Fargate
@@ -27,15 +35,16 @@
 - **Parte 4** — [Apply incremental + smoke test](#parte-4--apply-incremental--smoke-test)
 - **Parte 5** — [Patch del trainer (emitir MAPE a CloudWatch)](#parte-5--patch-del-trainer-emitir-mape-a-cloudwatch)
 - **Parte 6** — [CI/CD con GitHub Actions](#parte-6--cicd-con-github-actions)
-- **Parte 7** — [Promotion gate](#parte-7--promotion-gate-extendido)
+- **Parte 7** — [Promotion gate](#parte-7--promotion-gate-aliases-de-mlflow)
 - **Parte 8** — [Runbook operativo](#parte-8--runbook-operativo-extendido)
 - **Parte 9** — [Costos detallados](#parte-9--costos-detallados)
+- **Parte 10** — [Aseguramiento MLOps y hardening mínimo](#parte-10--aseguramiento-mlops-y-hardening-mínimo)
 - **Parte 11** — [Troubleshooting](#parte-11--troubleshooting-catalogo)
 - **Parte 12** — [Apéndices](#parte-12--apendices)
 
-> **No hay Parte 10.** El salto de la 9 a la 11 es histórico y se conserva a propósito: la
-> numeración se referencia desde el código y desde otros documentos (`GUIA #3.10`, `#4.4`, `#12`), y
-> renumerar rompería esas referencias sin ganar nada.
+> La Parte 10 ocupa el hueco histórico sin renumerar ninguna referencia
+> existente. Reúne los controles que separan un laboratorio económico de una
+> plataforma MLOps realmente publicable.
 
 ---
 
@@ -66,13 +75,14 @@ ADR previo y reescribir las secciones afectadas — no un parche local.
 > archivos `.tf`, 11 módulos + `envs/prod`). Lo que **no** existe todavía es
 > `.github/workflows/{deploy,training,destroy}.yml`: los YAML de la Parte 6 son material **por
 > crear**, y el módulo `infra/modules/cicd/` viene con `enable_cicd = false` por defecto. Tampoco hay
-> `tests/` ([ADR-008](adr/ADR-008-ci-sin-tests-todavia.md)). Los ADR sí existen ahora, en
-> [`docs/adr/`](adr/) — antes eran links rotos.
+> una suite suficiente para liberar a producción; la Parte 10 define el mínimo
+> y el workflow de esta versión ya ejecuta `pytest`. Los ADR sí existen en
+> [`docs/adr/`](adr/).
 
 ---
 
 
-> El mismo binario que validaste en Tramo I se promueve aquí a AWS Batch +
+> El mismo contrato de imagen que validaste en Tramo I se publica en AWS Batch +
 > MLflow productivo. La infraestructura se levanta con Terraform por capas
 > (módulos), Task orquesta builds y lifecycle, y GitHub Actions automatiza
 > deploy/training/destroy via OIDC.
@@ -90,7 +100,7 @@ ADR previo y reescribir las secciones afectadas — no un parche local.
 3. **Parte 3** — construir los 12 módulos Terraform (incluye `api` + `ui`, Capa 4.5).
 4. **Parte 4** — orquestador Task + apply incremental + smoke en AWS.
 5. **Partes 5-7** — emitir métricas, CI/CD, promotion gate.
-6. **Partes 8-13** — runbook, costos, hardening, troubleshooting, customizaciones.
+6. **Partes 8-12** — runbook, costos, aseguramiento MLOps, troubleshooting y apéndices.
 
 ---
 
@@ -101,9 +111,9 @@ Cada uno responde a una pregunta concreta:
 
 | Modo | Pregunta que responde | Tiempo | Costo despues |
 |---|---|---|---|
-| **STAND-UP** | "Es la primera vez, parto de cero" | 2-3 horas | ~$75/mes (operando) |
-| **TEAR-DOWN** | "No voy a usar la infra por 1+ semana, quiero ahorrar" | 15-25 min | ~$1/mes (storage + backups; RDS y NAT liberados) |
-| **REBUILD** | "Volvi y quiero levantar otra vez sin perder modelos/data" | 25-40 min | ~$75/mes |
+| **STAND-UP** | "Es la primera vez, parto de cero" | 2-3 horas | ~$29/mes (operando) |
+| **TEAR-DOWN** | "Termine el jueves / no uso la infra por unos dias" | 15-25 min | ~$1/mes (storage + backups; RDS y NAT liberados) |
+| **REBUILD** | "Volvi y quiero levantar otra vez sin perder modelos/data" | 25-40 min | ~$29/mes |
 | **DESTROY** | "Termine el proyecto / migro a otra cuenta, borra TODO" | 30-45 min | $0/mes |
 
 TEAR-DOWN ↔ REBUILD es el par del **ciclo recurrente** (prender unos días,
@@ -114,7 +124,7 @@ Diagrama de transiciones:
 
 ```
                           stand-up
-            (vacio) ─────────────────► OPERATING (~$75/mes)
+            (vacio) ─────────────────► OPERATING (~$29/mes)
                                           │  ▲
                                           │  │
                                   tear-down  rebuild
@@ -178,7 +188,7 @@ Parte 6 (CI/CD GitHub Actions) — 30 min
 Parte 7 (promotion gate) — 20 min
        │
        ▼
-OPERATING (~$74/mes)
+OPERATING (~$29/mes según el escenario de referencia de la Parte 9)
 ```
 
 **Tiempo total realista**: 2-3 horas la primera vez, asumiendo que los
@@ -187,11 +197,13 @@ local (0.3.5).
 
 #### Lo que NO se hace en stand-up
 
-- Hardening (TLS, WAF, Multi-AZ, KMS-CMK, VPC endpoints, DR cross-region):
-  hardening, día 90+ (fuera del alcance de esta guía).
+- TLS y autenticación: obligatorios antes de exponer el ALB a Internet; Parte
+  10. Multi-AZ, WAF, KMS-CMK y DR cross-region siguen siendo decisiones según
+  criticidad y cumplimiento.
 - Workflows extras (cleanup, drift detection): hardening, futuro.
-- Promotion gate: la primera vez podes saltarte la Parte 7; los primeros
-  models entran a `Staging` y los promotes a mano via `mlflow ui`.
+- Promotion gate: no se salta en un release productivo. El primer modelo también
+  debe pasar el gate y recibir el alias `@champion`; el approval puede hacerlo
+  una sola persona en un entorno personal.
 
 ### 1.2 Otros modos (TEAR-DOWN / REBUILD / DESTROY)
 
@@ -1292,13 +1304,13 @@ solo aceptan trafico desde la anterior, formando una cadena de
 defense-in-depth):
 
 - `sg-alb`: Internet → :80.
-- `sg-mlflow`: sg-alb → :5000 (MLflow) y :80 (reports), **+ sg-api → :5000**
-  (la API consulta el Model Registry interno via service discovery, sin
-  pasar por el ALB). Compartido por MLflow y reports porque ambos viven
-  detras del mismo ALB.
-- `sg-batch`: solo egress (el trainer pulea de S3/ECR, escribe logs,
-  postea a MLflow ALB). No acepta ingress de ningun lado.
-- `sg-rds`: 5432 desde sg-mlflow + sg-batch **+ sg-api** (la API persiste
+- `sg-mlflow`: sg-alb → :5000 (MLflow) y :80 (reports), **+ sg-api y
+  sg-batch → :5000**. API y trainer consultan MLflow por service discovery,
+  sin pasar por el ALB público. Compartido por MLflow y reports porque ambos
+  viven detrás del mismo ALB.
+- `sg-batch`: solo egress (el trainer descarga de S3/ECR, escribe logs y
+  llama a MLflow interno). No acepta ingress.
+- `sg-rds`: 5432 desde sg-mlflow **+ sg-api** (la API persiste
   pronosticos en la base `forecasts`, que vive en el MISMO RDS de MLflow).
 - `sg-api` (App stack, Capa 4.5): :8000 desde sg-alb (`/api/*` y `/docs`)
   **+ desde sg-ui** (la UI llama a la API server-side por service discovery).
@@ -1312,11 +1324,12 @@ defense-in-depth):
 > | `aws_security_group.alb` | **VPC** | `VPC > Security groups > Create security group`. **Name**: `ml-training-sg-alb`. **VPC**: la tuya. **Inbound rules > Add rule**: Type=HTTP, Source=Anywhere-IPv4 (`0.0.0.0/0`). **Outbound rules**: All traffic → 0.0.0.0/0 (default). |
 > | `aws_security_group.mlflow` | **VPC** | Mismo wizard. **Inbound rules**: dos reglas → (1) Custom TCP :5000 con Source=`sg-alb` (escribis el ID, no un CIDR); (2) HTTP :80 con Source=`sg-alb`. |
 > | `aws_security_group.batch` | **VPC** | **Inbound rules**: **vacio** (nadie debe poder conectarse a los jobs). **Outbound**: All traffic. |
-> | `aws_security_group.rds` | **VPC** | **Inbound rules**: dos reglas → (1) PostgreSQL :5432 con Source=`sg-mlflow`; (2) PostgreSQL :5432 con Source=`sg-batch`. **Outbound**: vacio (RDS no necesita salir a nada). |
+> | `aws_security_group.rds` | **VPC** | **Inbound rules**: PostgreSQL :5432 desde `sg-mlflow` y `sg-api`. Batch no entra a Postgres: registra por la API HTTP de MLflow. **Outbound**: vacío. |
 >
 > **Conceptualmente — SGs son firewalls "stateful" a nivel recurso**:
 > - **Stateful**: si permitís el ingreso, la respuesta saliente se permite sola (a diferencia de los NACLs stateless).
-> - En `Source` podés poner **otro SG** en vez de un CIDR: `sg-rds` acepta a `sg-mlflow`/`sg-batch` aunque sus IPs cambien (Fargate las reasigna).
+> - En `Source` podés poner **otro SG** en vez de un CIDR: `sg-rds` acepta a
+>   `sg-mlflow`/`sg-api` aunque sus IPs cambien.
 > - **Cadena de defense-in-depth**: Internet → ALB → MLflow → RDS. Romper el ALB no da acceso directo a RDS — corta el lateral movement a nivel red.
 
 ```hcl
@@ -1364,6 +1377,13 @@ resource "aws_security_group" "mlflow" {
     protocol        = "tcp"
     security_groups = [aws_security_group.api.id]
   }
+  ingress {
+    description     = "MLflow desde AWS Batch (service discovery interno)"
+    from_port       = 5000
+    to_port         = 5000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.batch.id]
+  }
   egress {
     from_port   = 0
     to_port     = 0
@@ -1395,13 +1415,6 @@ resource "aws_security_group" "rds" {
     to_port         = 5432
     protocol        = "tcp"
     security_groups = [aws_security_group.mlflow.id]
-  }
-  ingress {
-    description     = "Postgres desde Batch (trainer logging directo)"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.batch.id]
   }
   ingress {
     description     = "Postgres desde la API (base forecasts en el mismo RDS)"
@@ -1493,8 +1506,8 @@ output "sg_ui_id" { value = aws_security_group.ui.id }
 > - VPC → Route Tables → 2 (public via IGW, private via NAT).
 > - EC2 → Security Groups → 6 con tag `Project=ml-training`:
 >   `sg-alb` (ingress 80 desde 0.0.0.0/0), `sg-mlflow` (ingress 80
->   desde sg-alb + 5000 desde sg-api), `sg-batch` (egress all),
->   `sg-rds` (ingress 5432 desde sg-mlflow + sg-batch + sg-api),
+>   desde sg-alb + 5000 desde sg-api y sg-batch), `sg-batch` (egress all),
+>   `sg-rds` (ingress 5432 desde sg-mlflow + sg-api),
 >   `sg-api` (ingress 8000 desde sg-alb + sg-ui), `sg-ui` (ingress
 >   8501 desde sg-alb).
 
@@ -1613,6 +1626,21 @@ resource "aws_s3_bucket_public_access_block" "data" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
+
+resource "aws_s3_bucket_policy" "data_tls_only" {
+  bucket = aws_s3_bucket.data.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+}
 ```
 
 ##### 3.4.2.c — S3 bucket `artifacts` (modelos + reportes + MLflow store) + lifecycle
@@ -1665,6 +1693,24 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "artifacts_tls_only" {
+  bucket = aws_s3_bucket.artifacts.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [
+        aws_s3_bucket.artifacts.arn,
+        "${aws_s3_bucket.artifacts.arn}/*"
+      ]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
@@ -2024,10 +2070,11 @@ en vez de inlinearlo en el modulo.
       },
       "Condition": {
         "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:${org}/${repo}:*"
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": [
+            "repo:${org}/${repo}:ref:refs/heads/main",
+            "repo:${org}/${repo}:environment:production"
+          ]
         }
       }
     }
@@ -2045,12 +2092,9 @@ Este modulo es el mas pesado: arma el backend de tracking (RDS Postgres),
 el server MLflow en Fargate y el ALB que expone todo. Aca lockean dos
 contratos criticos del codigo del trainer:
 
-- El argumento `--allowed-hosts '*'` (wildcard) evita el bug #11.2 de
-  V1 (403 "Invalid Host header"). Es **wildcard intencional** porque
-  el ALB DNS no se conoce en tiempo de `terraform plan`. Refinable
-  post-stand-up: una vez que tenes el ALB DNS, podrias pasar a lista
-  especifica `--allowed-hosts <alb-dns>,mlflow.ml-training.local,localhost` (ver
-  hardening, futuro).
+- `--allowed-hosts` enumera el DNS del ALB y el nombre interno de Cloud Map.
+  El DNS del ALB es un atributo conocido durante `apply`, igual que el origen
+  CORS; no hace falta abrir un wildcard.
 - El usuario Postgres se llama `mlflow` y la DB se llama `mlflow`
   (igual que en docker-compose local, para que el trainer no tenga que
   cambiar la connection string entre local y prod).
@@ -2060,8 +2104,8 @@ contratos criticos del codigo del trainer:
 Tres elecciones marcan el caracter de este modulo y vale la pena
 justificarlas antes de leer el HCL:
 
-**Fargate vs EC2 para el server MLflow.** El server MLflow es un
-proceso Python single-threaded con throughput modesto (decenas de
+**Fargate vs EC2 para el server MLflow.** El server MLflow es una
+aplicación Python con varios workers y throughput modesto (decenas de
 requests por minuto en nuestro uso: el trainer lo golpea unas pocas
 veces por run, y los humanos abren la UI esporadicamente). Fargate
 da: zero gestion de hosts, scale-to-zero para el scheduler, e
@@ -2147,7 +2191,7 @@ borrar los otros — Terraform los procesa igual.
 > # Vive en la RAIZ para SOBREVIVIR a `task ops:teardown`, que destruye
 > # module.mlflow (el RDS incluido). Si la password se destruyera con el modulo,
 > # el rebuild generaria una nueva y no coincidiria con la del snapshot
-> # restaurado -> el backup seria inservible. Ver #8.5.
+> # restaurado -> el rebuild fallaria hasta rotar la credencial. Ver #8.5.
 > resource "random_password" "rds" {
 >   length  = 32
 >   special = false # algunos chars rompen connection strings -> evitar
@@ -2189,8 +2233,11 @@ borrar los otros — Terraform los procesa igual.
 > (incluye el `data "aws_region" "current" {}` — en el repo real ese
 > data source vive aca, no en `main.tf`).
 
-`random_password` + Secrets Manager evita escribir el password en
-tfstate (queda solo en SM). **Ambos viven en la raiz**
+`random_password` + Secrets Manager evita hardcodear el password en HCL y evita
+mostrarlo en salidas normales, pero **no evita que exista en el state**:
+`random_password.result` y `secret_string` son atributos del estado. Por eso el
+bucket de tfstate es un activo sensible, cifrado, versionado y con acceso
+mínimo. **Ambos recursos viven en la raiz**
 (`infra/envs/prod/rds_secret.tf`), **no en este modulo**: `task teardown`
 destruye `module.mlflow` con el RDS dentro, y si la credencial se fuera con el,
 el `rebuild` generaria una password nueva incompatible con la del backup
@@ -2511,7 +2558,7 @@ healthcheck, secrets). El service mantiene N replicas corriendo
 > | Recurso Terraform | Servicio | Que harias click-a-click |
 > |---|---|---|
 > | `aws_cloudwatch_log_group.mlflow` | **CloudWatch** | `CloudWatch > Log groups > Create log group`. **Name**: `/ecs/ml-training/mlflow`. **Retention**: 30 days (var.log_retention_days). |
-> | `aws_ecs_task_definition.mlflow` | **ECS** | `ECS > Task definitions > Create new task definition (JSON)`. **Family**: `ml-training-mlflow`. **Launch type**: Fargate. **OS/Arch**: Linux/x86_64. **CPU/Memory**: 2 vCPU / 4 GB. **Task role**: el `mlflow_task` que creaste. **Task exec role**: el `mlflow_exec`. **Container**: name `mlflow`, image `<ecr-url>:v3.12.0`, port 5000, command `mlflow server ...`, env vars + secret `RDS_PASSWORD` desde Secrets Manager, log config awslogs, healthcheck `python urllib /health`. |
+> | `aws_ecs_task_definition.mlflow` | **ECS** | `ECS > Task definitions > Create new task definition (JSON)`. **Family**: `ml-training-mlflow`. **Launch type**: Fargate. **OS/Arch**: Linux/x86_64. **CPU/Memory**: 1 vCPU / 3 GB (rightsizing de #9.4.2; antes 2 vCPU / 4 GB). **Task role**: el `mlflow_task` que creaste. **Task exec role**: el `mlflow_exec`. **Container**: name `mlflow`, image `<ecr-url>:v3.12.0`, port 5000, command `mlflow server ...`, env vars + secret `RDS_PASSWORD` desde Secrets Manager, log config awslogs, healthcheck `python urllib /health`. |
 > | `aws_ecs_service.mlflow` | **ECS** | `Cluster > Create service`. **Launch type**: Fargate. **Task definition**: el de arriba (latest revision). **Service name**: `mlflow`. **Desired tasks**: 1. **Networking > VPC**: la tuya, **subnets**: private, **SG**: `sg-mlflow`, **Public IP**: Disabled. **Load balancing**: enable, target group: `ml-training-tg-mlflow`. **Service discovery**: enable, namespace `ml-training.local`, service `mlflow`. |
 >
 > **Conceptualmente — la trinidad ECS**:
@@ -2532,7 +2579,7 @@ resource "aws_ecs_task_definition" "mlflow" {
   family                   = "${var.project}-mlflow"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  # Rightsizing (#9.4.5): 2 vCPU/4 GB -> 1 vCPU/3 GB, ~-$3.10/mes. El server es
+  # Rightsizing (#9.4.2): 2 vCPU/4 GB -> 1 vCPU/3 GB, ~-$3.10/mes. El server es
   # IO-bound (Postgres + proxy a S3 con --serve-artifacts), no CPU-bound.
   #
   # Por que 3 GB y no 2: `mlflow server` levanta 4 workers gunicorn por defecto
@@ -2557,10 +2604,9 @@ resource "aws_ecs_task_definition" "mlflow" {
         join(" ", [
           "mlflow server",
           "--host 0.0.0.0 --port 5000",
-          # Allowed-hosts wildcard: MLflow 3.x rechaza con 403 si el
-          # Host: header no coincide. ALB DNS no se conoce en plan-time;
-          # wildcard es la opcion mas simple. Hardening en #10.
-          "--allowed-hosts '*'",
+          # MLflow 3.5+ valida Host. Admitimos únicamente los hosts usados por
+          # el ALB y por service discovery interno; nunca '*'.
+          "--allowed-hosts ${aws_lb.main.dns_name},${aws_lb.main.dns_name}:*,mlflow.${var.project}.local,mlflow.${var.project}.local:*",
           # CORS: check SEPARADO de allowed-hosts. MLflow 3.5+ valida el
           # header `Origin` del navegador y su default es solo `localhost:*`,
           # asi que TODO POST del UI servido via ALB (runs/search, etc.) cae
@@ -2573,7 +2619,10 @@ resource "aws_ecs_task_definition" "mlflow" {
           # mandando "<pid>RDS_PASSWORD" como password. Con un solo `$` el shell
           # expande la env var inyectada desde Secrets Manager. Ver #3.5.2.
           "--backend-store-uri postgresql://mlflow:$RDS_PASSWORD@${aws_db_instance.mlflow.address}:5432/mlflow",
-          "--default-artifact-root s3://${var.artifacts_bucket}/artifacts",
+          # Modo proxy coherente con local: nuevos runs reciben
+          # mlflow-artifacts:/... y los clientes no necesitan permisos S3 para
+          # artifacts de MLflow. No mezclar --default-artifact-root con proxy.
+          "--artifacts-destination s3://${var.artifacts_bucket}/artifacts",
           "--serve-artifacts"
         ])
       ]
@@ -2648,6 +2697,7 @@ resource "aws_ecs_service" "mlflow" {
 
 ```hcl
 output "tracking_uri" { value = "http://${aws_lb.main.dns_name}" }
+output "internal_tracking_uri" { value = "http://mlflow.${var.project}.local:5000" }
 output "alb_dns" { value = aws_lb.main.dns_name }
 output "alb_arn_suffix" { value = aws_lb.main.arn_suffix } # para CloudWatch dimensions
 output "alb_listener_arn" { value = aws_lb_listener.http.arn }
@@ -3467,7 +3517,7 @@ module "batch" {
   spot_max_vcpus       = var.spot_max_vcpus
   ondemand_max_vcpus   = var.ondemand_max_vcpus
   instance_type        = var.batch_instance_type
-  tracking_uri         = module.mlflow.tracking_uri
+  tracking_uri         = module.mlflow.internal_tracking_uri
   artifacts_bucket     = module.storage.artifacts_bucket
   artifacts_bucket_arn = module.storage.artifacts_bucket_arn
   data_bucket_arn      = module.storage.data_bucket_arn
@@ -3476,9 +3526,9 @@ module "batch" {
 ```
 
 > **Checkpoint**: batch depende de network (subnets/SG), storage (ECR
-> + buckets) y mlflow (`tracking_uri`). El `tracking_uri` se inyecta
-> como env var al job-def para que los containers de entrenamiento
-> sepan a donde loguear runs sin hardcodearlo.
+> + buckets) y MLflow (`internal_tracking_uri`). Batch llama a MLflow por
+> Cloud Map dentro de la VPC; no sale por NAT ni vuelve a entrar por el ALB
+> público.
 
 > **Gotcha #3.7**: módulo split en `main.tf + iam.tf`. Usar `name` (no `compute_environment_name` deprecado) — key para AWS provider v6.
 
@@ -4725,8 +4775,9 @@ module "scheduler" {
 ### 3.11 `modules/cicd/` — OIDC trust + GHA roles
 
 Dos roles: `gha-deploy` (terraform apply, push ECR) y `gha-train`
-(invoke Lambda dispatcher). Trust policy especifica `repo:org/repo:*`
-para evitar que cualquier repo pueda asumir.
+(invoke Lambda dispatcher). El trust acepta únicamente `main` y el GitHub
+Environment `production`; una PR o cualquier branch no protegida no puede
+obtener credenciales AWS.
 
 > **🔗 Orden OIDC end-to-end** (cuándo se crea qué):
 >
@@ -4739,8 +4790,8 @@ para evitar que cualquier repo pueda asumir.
 > 3. **#3.11.5** (`consumer-iam`) declara un rol cross-repo que asume el
 >    OIDC del repo consumer (`ml_serving`) — requiere que ese repo
 >    haya creado su propio provider, no éste.
-> 4. **#5.7** explica el flujo conceptual del token JWT y por qué el
->    `sub` del trust policy debe matchear `repo:<org>/<repo>:*`.
+> 4. El `sub` debe coincidir exactamente con `main` o con el environment
+>    `production`; no se usa el wildcard `repo:<org>/<repo>:*`.
 >
 > Si el repo en GitHub cambia de nombre/org, hay que **regenerar tanto**
 > el OIDC provider (#2.5) **como** los roles (este módulo): el `sub`
@@ -4761,17 +4812,18 @@ variable "oidc_provider_arn" { type = string }
 >
 > | Recurso Terraform | Servicio | Que harias click-a-click |
 > |---|---|---|
-> | `aws_iam_role.deploy` con trust OIDC | **IAM** | `IAM > Roles > Create role`. **Trusted entity type**: **Web identity** (NO "AWS service"). **Identity provider**: `token.actions.githubusercontent.com` (el OIDC creado en Parte 2.5). **Audience**: `sts.amazonaws.com`. **GitHub organization**: `<tu-org>`. **GitHub repository**: `<tu-repo>`. **GitHub branch**: deja vacio para `*`. La Console te genera el JSON con `StringLike` sobre `sub = repo:org/repo:*`. **Permissions**: inline policy con todo lo de Terraform apply + ECR push. **Name**: `ml-training-gha-deploy`. |
+> | `aws_iam_role.deploy` con trust OIDC | **IAM** | Crear rol Web identity para GitHub, audience `sts.amazonaws.com`, limitado a `main` y al environment `production`. Nunca dejar branch vacía ni usar `repo:*`. |
 > | `aws_iam_role.train` con mismo trust | **IAM** | Mismo wizard de Web identity. **Permissions**: SOLO `lambda:InvokeFunction` sobre el dispatcher + `batch:Describe/ListJobs` + `logs:GetLogEvents`. **Name**: `ml-training-gha-train`. |
 >
 > **Conceptualmente — el flujo OIDC paso a paso**:
 > 1. GHA arranca un workflow con `permissions: id-token: write`.
 > 2. GH genera un **JWT** firmado con claims `iss`, `aud=sts.amazonaws.com`, `sub=repo:org/ml_training:ref:refs/heads/main`, etc.
 > 3. `aws-actions/configure-aws-credentials@v4` manda el JWT a STS (`sts:AssumeRoleWithWebIdentity`, `RoleArn=ml-training-gha-deploy`).
-> 4. STS valida la firma (vía el discovery endpoint de GH) y los claims contra la **trust policy** del rol (`aud` y `sub LIKE "repo:org/ml_training:*"`).
+> 4. STS valida firma, `aud` y un `sub` exacto de `main` o `environment:production`.
 > 5. STS devuelve credenciales temporales (~1h) con los permisos del rol.
 > 6. **No hay secrets de larga duración en GitHub** — la gran ventaja vs `AWS_ACCESS_KEY_ID`/`SECRET` eternos como GH Secrets.
-> - **Trust `sub = repo:org/repo:*`**: limita a tu repo; con solo `aud` (shared a nivel cuenta) cualquier repo de GitHub podría asumir el rol.
+> - **Trust exacto**: limita repo y contexto. Restringir solo el repo todavía
+>   permitiría que una PR o branch no protegida intentara asumir el rol.
 > - **`gha-deploy` es PODEROSO** (`iam:*`, `ec2:*`, `rds:*`): branch protection (#6.6) + Environments con approval (#6.5) son las únicas barreras entre `git push` y `terraform destroy`.
 > - **`gha-train` es MÍNIMO**: solo invoca el dispatcher; lo peor sería submitear un job (gasto acotado por `dispatcher.py`).
 
@@ -4839,7 +4891,7 @@ resource "aws_iam_role_policy" "deploy" {
       #   - crear nuevos IAM roles (iam:*) y escalar a admin de la cuenta.
       #   - leer Secrets Manager (incluido el RDS password).
       # MITIGACIONES en uso:
-      #   - trust policy con `sub = "repo:org/repo:*"` (solo este repo).
+      #   - trust policy limitada a main + environment production.
       #   - branch protection en main (#6.6) + required reviewers.
       #   - GitHub Environment "production" con manual approval (#6.5).
       # Refinable en #10 (hardening): partir en deploy-plan-only + apply
@@ -5455,7 +5507,6 @@ WORKDIR /build
 
 # Toolchain mínimo para compilar wheels nativos (lightgbm/xgboost/asyncpg).
 RUN apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends build-essential libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -5486,7 +5537,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # libgomp1 = runtime de OpenMP (lightgbm/xgboost lo necesitan en inferencia).
 # tini propaga SIGTERM correctamente cuando ECS/compose detienen la task.
 RUN apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libgomp1 curl tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1001 appuser \
@@ -5768,7 +5818,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends curl tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1001 appuser \
@@ -6014,6 +6063,12 @@ tasks:
         -backend-config=use_lockfile=true
         -reconfigure
 
+  _init_validate:
+    internal: true
+    cmds:
+      # Validación sintáctica no necesita credenciales ni acceso al state.
+      - terraform -chdir={{.TF_DIR}} init -backend=false
+
   # ═══ Plan / Apply / Destroy ═════════════════════════════════════════════════
 
   plan:
@@ -6086,8 +6141,8 @@ tasks:
         EOF
 
   validate:
-    desc: "terraform fmt -check + validate (init + providers; usable cold antes del primer apply)"
-    deps: [_init]
+    desc: "terraform fmt -check + validate sin backend remoto ni credenciales AWS"
+    deps: [_init_validate]
     cmds:
       - terraform -chdir={{.TF_DIR}} fmt -check -recursive
       - terraform -chdir={{.TF_DIR}} validate
@@ -6650,10 +6705,10 @@ tasks:
         source tasks/lib/mlflow_uri.sh
         URI=$(mlflow_uri {{.TF_DIR}})
         curl -s "$URI/api/2.0/mlflow/registered-models/get?name={{.MODEL_NAME}}" \
-          | jq '.registered_model.latest_versions[] | {version, current_stage, run_id, creation_timestamp}'
+          | jq '.registered_model.latest_versions[] | {version, aliases, run_id, creation_timestamp}'
 
   promote:
-    desc: "Promover a Production con gate MAPE + A/B. Vars: MODEL_NAME (REQ), VERSION=N (REQ), MAX_MAPE=20"
+    desc: "Validar y reasignar alias @champion. Vars: MODEL_NAME (REQ), VERSION=N (REQ), MAX_MAPE=20"
     requires:
       vars: [MODEL_NAME, VERSION]
     cmds:
@@ -6665,7 +6720,10 @@ tasks:
 - `ops:up` es **idempotente**: pre-check `/health` y solo invoca `scheduler.start` si esta DOWN. Lo usan tanto el operador manual como el flujo CI auto-train (el `wake.sh` escribe el estado previo a `/tmp/wake-status` para que el workflow decida si tiene que apagar al final).
 - `ops:down` con `COOLDOWN=N` (default 0) cubre el "down ahora" manual y el "espera N seg y apaga" del CI post-train con una sola task.
 - `ops:teardown` preserva `module.network` (VPC/subnets/SGs) y `module.storage`, pero **libera el NAT** vía `terraform apply -target=module.network -var enable_nat=false` (el NAT cuesta ~$33/mes idle; el resto de network no cuesta encendido). `task rebuild`/`deploy` lo recrean (default `enable_nat=true`). Resultado: hibernado ~$1/mes (storage + backups del RDS), sin tener que destruir toda la red.
-- `ops:promote` delega en `scripts/promote_model.py` (Python con `MlflowClient`) — 3 gates: MAPE absoluto, A/B contra Production actual, transition con `archive_existing_versions=True`.
+- `ops:promote` delega en `scripts/promote_model.py` (Python con
+  `MlflowClient`) — valida calidad absoluta y comparación contra
+  `@champion`, luego usa `set_registered_model_alias`. En producción se invoca
+  desde el workflow protegido, no directamente desde una laptop.
 
 #### 4.1.7 Helpers `tasks/lib/*.sh`
 
@@ -7127,7 +7185,7 @@ El `default` de Tramo I sección 4.6 lista solo el pipeline local. En Tramo II s
             task wake / task sleep  encender / apagar stack (idempotente)
             task batch:train VARIETIES=POP             entrenamiento en AWS Batch
             task batch:eda   VARIETIES=POP             (opcional) EDA exploratorio on-demand
-            task ops:promote MODEL_NAME=... VERSION=N  promover a Production
+            task ops:promote MODEL_NAME=... VERSION=N  mover alias @champion
 
         ▸ AWS — Teardown / Recovery / Destroy
             task teardown           backup + destroy volatiles (preserva storage + network)
@@ -7935,7 +7993,9 @@ flowchart TD
 
 **Referencias:** paso 1 → 6.0 · paso 2 → 6.1 · paso 3 → 6.2 · paso 4 → 6.3 · paso 5 → 6.4 · paso 6 → 6.5 · paso 7 → 6.6.
 
-> **Gotcha Parte 6**: error `Could not assume role` en el primer run → el `sub` del trust policy no matchea `repo:<org>/<repo>:*`. Revisar #3.11.2: `var.github_org` y `var.github_repo` deben matchear EXACTO el repo en GitHub. Commit: `feat(ci): consolidar 3 workflows GHA (deploy + training + destroy) con OIDC`.
+> **Gotcha Parte 6**: `Could not assume role` → el `sub` no coincide con
+> `main` o `environment:production`. Revisar org/repo, branch y nombre exacto
+> del GitHub Environment.
 
 ### 6.0 Modelo de trust
 
@@ -7972,7 +8032,7 @@ Si rompe en CI → rompe en local con `task X`.
 | Disparar entreno bajo demanda | **GHA workflow_dispatch** | UI con dropdown, accesible sin AWS CLI |
 | Approval antes de deploy o promote | **GHA `environment: production`** | Solo GHA tiene approval gates |
 | Cron Mi+Ju 08-16 PET encender/apagar | **EventBridge + Lambda** (`scheduler.py`) | Serverless, sin runner |
-| Quality gate MAPE + A/B vs Production | **Task** (`task ops:promote`) llamado por GHA | Logica reutilizable local |
+| Quality gate + comparación vs `@champion` | **Task** (`task ops:promote`) llamado por GHA | Lógica reutilizable y auditable |
 | Apagar todo con confirmacion textual | **GHA workflow** (`destroy.yml`) + **Task** | Confirmacion + approval son features GHA; logica en Task |
 
 #### 6.1.2 Anti-patrones (cuando NO meter en Taskfile)
@@ -8026,7 +8086,7 @@ Trigger: push a `main`, PR a `main`, `workflow_dispatch`. Cinco jobs:
 | Job | Disparo | Que hace |
 |---|---|---|
 | `changes` | siempre | `dorny/paths-filter@v3` setea outputs `infra` (toco `infra/**`) y `trainer` (toco `src/**`, `main.py`, `Dockerfile`, `requirements.txt`). |
-| `lint` | siempre | `task lint && task infra:validate`. Sin `test` — ver [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). |
+| `lint` + `test` | siempre | `task lint`, validación Terraform y `pytest -q`. |
 | `build-and-push` | push main **AND** `trainer == 'true'` | Asume `gha-deploy`, `task ecr:build IMG=trainer`. |
 | `terraform-plan` | PR **AND** `infra == 'true'` | Asume `gha-deploy`, `task infra:plan` comentado en el PR via `github-script`. |
 | `infra-apply` | push main **AND** `infra == 'true'` **AND** lint OK | `environment: production` (approval). `task deploy` con `TF_VAR_trainer_image_tag=sha-<sha>`. |
@@ -8043,7 +8103,7 @@ name: Deploy
 
 # Estrategia thin: cada job autentica via OIDC y delega en `task X`.
 # Jobs y disparos:
-#   lint            -> SIEMPRE (push, PR, manual). Sin job test (ver ADR-008).
+#   lint + test     -> SIEMPRE (push, PR, manual).
 #   build-and-push  -> solo push a main (publica trainer en ECR con sha + latest)
 #   terraform-plan  -> solo PR a main con cambios en infra/** (comenta plan en PR)
 #   infra-apply     -> solo push a main (orquesta task deploy con approval)
@@ -8070,6 +8130,7 @@ jobs:
     outputs:
       infra:   ${{ steps.filter.outputs.infra }}
       trainer: ${{ steps.filter.outputs.trainer }}
+      release: ${{ steps.filter.outputs.release }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -8087,6 +8148,16 @@ jobs:
               - 'requirements.txt'
               - 'requirements-dev.txt'
               - 'pyproject.toml'
+            release:
+              - 'src/**'
+              - 'scripts/**'
+              - 'main.py'
+              - 'Dockerfile'
+              - 'api/**'
+              - 'ui/**'
+              - 'docker/**'
+              - 'requirements*.txt'
+              - 'pyproject.toml'
 
   lint:
     runs-on: ubuntu-latest
@@ -8095,7 +8166,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.13', cache: 'pip' }
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6 }
+        with: { terraform_version: 1.10.5 }
       - uses: arduino/setup-task@v2
         with: { version: 3.x, repo-token: "${{ secrets.GITHUB_TOKEN }}" }
       - name: Install Python deps
@@ -8107,9 +8178,22 @@ jobs:
       - run: task lint
       - run: task infra:validate
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13', cache: 'pip' }
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Unit and contract tests
+        run: pytest -q
+
   build-and-push:
-    needs: [lint, changes]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.trainer == 'true'
+    needs: [lint, test, changes]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -8119,63 +8203,57 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_GHA_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - run: task ecr:build IMG=trainer
+      - name: Build once and publish the five release images
+        run: |
+          SHA12=$(git rev-parse --short=12 HEAD)
+          for image in trainer mlflow reports api ui; do
+            task ecr:build IMG="$image" TAG="sha-$SHA12"
+          done
         env:
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
           PROJECT: ${{ vars.PROJECT }}
-      - run: echo "::notice title=Pushed::${{ vars.ECR_TRAINER }}:sha-$(git rev-parse --short=12 HEAD)"
+      - run: echo "::notice title=Pushed::release sha-$(git rev-parse --short=12 HEAD)"
 
   terraform-plan:
-    needs: [lint, changes]
+    needs: [lint, test, changes]
     if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_GHA_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6 }
+        with: { terraform_version: 1.10.5 }
       - uses: arduino/setup-task@v2
         with: { version: 3.x, repo-token: "${{ secrets.GITHUB_TOKEN }}" }
-      - name: task infra:plan (tee a tfplan.txt)
+      - name: Static Terraform validation (no AWS credentials on PRs)
         id: plan
-        env:
-          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-          PROJECT: ${{ vars.PROJECT }}
-          TF_VAR_alert_email:   ${{ vars.ALERT_EMAIL }}
-          TF_VAR_github_org:    ${{ github.repository_owner }}
-          TF_VAR_github_repo:   ${{ github.event.repository.name }}
-          TF_VAR_consumer_org:  ${{ vars.CONSUMER_ORG }}
-          TF_VAR_consumer_repo: ${{ vars.CONSUMER_REPO }}
-        run: |
-          set -o pipefail
-          task infra:plan 2>&1 | tee tfplan.txt
-        continue-on-error: true
+        run: task infra:validate
       - uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const planOutput = fs.readFileSync('tfplan.txt', 'utf8').slice(-60000);
-            const body = `### Terraform plan\n\n\`\`\`\n${planOutput}\n\`\`\`\n*exit code: ${{ steps.plan.outcome }}*`;
+            const body = [
+              "### Terraform validation",
+              "",
+              "Formato, inicialización sin backend y `terraform validate`: OK.",
+              "",
+              "El plan remoto se ejecuta únicamente con un rol `plan` de solo lectura;",
+              "nunca con el rol privilegiado de apply desde una PR."
+            ].join("\n");
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: body
             });
-      - if: steps.plan.outcome == 'failure'
-        run: exit 1
 
   infra-apply:
-    needs: [lint, changes, build-and-push]
+    needs: [lint, test, changes, build-and-push]
     if: |
       always() &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.lint.result == 'success' &&
+      needs.test.result == 'success' &&
       (needs.build-and-push.result == 'success' || needs.build-and-push.result == 'skipped') &&
-      needs.changes.outputs.infra == 'true'
+      (needs.changes.outputs.infra == 'true' || needs.changes.outputs.release == 'true')
     runs-on: ubuntu-latest
     environment: production
     concurrency:
@@ -8188,7 +8266,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_GHA_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6 }
+        with: { terraform_version: 1.10.5 }
       - uses: arduino/setup-task@v2
         with: { version: 3.x, repo-token: "${{ secrets.GITHUB_TOKEN }}" }
       - name: task deploy (oleadas A+B+C)
@@ -8200,8 +8278,16 @@ jobs:
           TF_VAR_github_repo:       ${{ github.event.repository.name }}
           TF_VAR_consumer_org:      ${{ vars.CONSUMER_ORG }}
           TF_VAR_consumer_repo:     ${{ vars.CONSUMER_REPO }}
-          TF_VAR_trainer_image_tag: sha-${{ github.sha }}
-        run: task deploy
+        run: |
+          SHA12=$(git rev-parse --short=12 HEAD)
+          if [ "${{ needs.changes.outputs.release }}" = "true" ]; then
+            export TF_VAR_trainer_image_tag="sha-$SHA12"
+            export TF_VAR_mlflow_image_tag="sha-$SHA12"
+            export TF_VAR_reports_image_tag="sha-$SHA12"
+            export TF_VAR_api_image_tag="sha-$SHA12"
+            export TF_VAR_ui_image_tag="sha-$SHA12"
+          fi
+          task deploy
       - id: out
         working-directory: infra/envs/prod
         run: |
@@ -8225,34 +8311,22 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 ```
 
-> **Extension App Stack (API + UI)** — al materializar este `deploy.yml`, sumar
-> el `api/` + `ui/` (ya soportado por `task ecr:build IMG=api|ui` y `ecr:build-all`,
-> que hoy construye **5 imagenes**). Cambios minimos sobre el YAML de arriba:
-> 1. **`changes` filter**: agregar `api: ['api/**', 'src/**']` (la imagen api COPIA
->    el `src/` raiz) y `ui: ['ui/**']`.
-> 2. **`build-and-push`**: agregar pasos condicionados — `task ecr:build IMG=api`
->    (si `changes.api`) y `task ecr:build IMG=ui` (si `changes.ui`).
-> 3. **`infra-apply`**: ampliar el gate a `(infra || trainer || api || ui)` y
->    exportar, junto a `TF_VAR_trainer_image_tag`, los tags del app stack con el
->    **mismo sha12** que usa `ecr:build` (evita el mismatch 40 vs 12 chars):
->    ```bash
->    SHA12=$(git rev-parse --short=12 HEAD)
->    export TF_VAR_trainer_image_tag="sha-$SHA12"
->    export TF_VAR_api_image_tag="sha-$SHA12"
->    export TF_VAR_ui_image_tag="sha-$SHA12"
->    task deploy   # Ola A storage -> Ola B build 5 imgs -> Ola C apply (mlflow/reports/api/ui/batch/...)
->    ```
-> 4. **Outputs del summary**: agregar `ui_url` y `api_docs_url` (nuevos outputs de
->    `infra/envs/prod/outputs.tf`). El rol `gha-deploy` ya tiene `ecr:*`, asi que
->    el push a los repos `*-api` y `*-ui` no requiere cambios IAM.
+> **App stack integrado.** El workflow canónico ya incluye trainer, MLflow,
+> reports, API y UI en un único release SHA. Si cambia cualquier parte del
+> código ejecutable, construye las cinco imágenes, publica `sha-<12>` y pasa
+> exactamente ese tag a Terraform. Así desaparece el mismatch anterior entre
+> tags de 40 y 12 caracteres y no queda una API nueva sirviendo un pipeline
+> viejo.
 
 > **Configuracion previa en GitHub** (UNA sola vez): Settings → Environments → New environment → `production` → Required reviewers → agregate. Sin esto, `infra-apply` arranca sin approval.
 
-> **Gotcha #6.3 (deploy)**: `infra-apply` con `AccessDenied for sts:AssumeRoleWithWebIdentity` → trust policy del rol `gha-deploy` no permite `repo:<org>/<repo>:*`. Test rápido: push trivial a `main` que no toque infra ni trainer (solo `lint` corre, resto skipped). Commit: `feat(ci): deploy workflow consolidado`.
+> **Gotcha #6.3 (deploy)**: `AccessDenied for
+> sts:AssumeRoleWithWebIdentity` → el job no corre desde `main` ni desde
+> `environment:production`, o el environment tiene otro nombre.
 
 ### 6.4 `training.yml` — train + auto-train + promote
 
-Trigger: `workflow_dispatch` (UI manual) **o** `workflow_run` cuando `Deploy` completa con success. Cinco jobs:
+Trigger: `workflow_dispatch` (UI manual) **o** `workflow_run` cuando `Deploy` completa con success. Seis jobs:
 
 | Job | Disparo | Que hace |
 |---|---|---|
@@ -8260,7 +8334,8 @@ Trigger: `workflow_dispatch` (UI manual) **o** `workflow_run` cuando `Deploy` co
 | `wake-services` | `mode == 'train'` | `task ops:up` (idempotente). Outputs `mlflow_was_up=true/false`. |
 | `train` | `mode == 'train'` | `task batch:train VARIETIES=... TUNING=... WAIT=true`. |
 | `cool-down-and-stop` | `mode == 'train'` **AND** `mlflow_was_up == 'false'` | `task ops:down COOLDOWN=600`. **Solo apaga si nosotros lo levantamos**. |
-| `promote` | `mode == 'promote'` | `environment: production` (approval). `task ops:promote MODEL_NAME=... VERSION=... MAX_MAPE=...`. |
+| `validate-promotion` | `mode == 'promote'` | Ejecuta gates automáticos sin mover aliases. |
+| `promote` | validación OK | Espera approval de `environment: production`, revalida y reasigna `@champion`. |
 
 > **Decisiones no obvias**:
 > - **`permissions: actions: read`**: el job `detect` corre `gh run list --workflow Deploy --status success` para encontrar el BASE_SHA correcto (cubre push de N commits y squash merges; `HEAD~1` fallaba).
@@ -8274,7 +8349,7 @@ name: Training
 
 # Workflow consolidado. Tres modos via input `action`:
 #   action=train    -> entrena variedades elegidas (con wake/cool-down si MLflow esta apagado)
-#   action=promote  -> promueve un modelo a Production (3 gates: MAPE absoluto + A/B + approval)
+#   action=promote  -> valida y reasigna @champion después del approval
 # Tambien auto-trigger:
 #   - workflow_run "Deploy" success -> auto-train si push toco trainer
 
@@ -8410,8 +8485,30 @@ jobs:
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
           PROJECT: ${{ vars.PROJECT }}
 
-  promote:
+  validate-promotion:
     needs: detect
+    if: needs.detect.outputs.mode == 'promote'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-task@v2
+        with: { version: 3.x, repo-token: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_GHA_TRAIN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Automated promotion gates
+        run: >-
+          python scripts/promote_model.py
+          "${{ inputs.model_name }}"
+          "${{ inputs.version }}"
+          --max-mape "${{ inputs.max_mape }}"
+          --validate-only
+        env:
+          MLFLOW_ALB_DNS: ${{ vars.MLFLOW_ALB_DNS }}
+
+  promote:
+    needs: [detect, validate-promotion]
     if: needs.detect.outputs.mode == 'promote'
     runs-on: ubuntu-latest
     environment: production
@@ -8423,7 +8520,12 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_GHA_TRAIN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - run: task ops:promote MODEL_NAME="${{ inputs.model_name }}" VERSION="${{ inputs.version }}" MAX_MAPE="${{ inputs.max_mape }}"
+      - name: Revalidate and move @champion
+        run: >-
+          task ops:promote
+          MODEL_NAME="${{ inputs.model_name }}"
+          VERSION="${{ inputs.version }}"
+          MAX_MAPE="${{ inputs.max_mape }}"
         env:
           MLFLOW_ALB_DNS: ${{ vars.MLFLOW_ALB_DNS }}
 ```
@@ -8512,7 +8614,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_GHA_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6 }
+        with: { terraform_version: 1.10.5 }
       - uses: arduino/setup-task@v2
         with: { version: 3.x, repo-token: "${{ secrets.GITHUB_TOKEN }}" }
 
@@ -8634,7 +8736,7 @@ gh api "repos/${GITHUB_OWNER}/ml_training/branches/main/protection" -X PUT --inp
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Deploy / lint"]
+    "contexts": ["Deploy / lint", "Deploy / test"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
@@ -8645,153 +8747,263 @@ gh api "repos/${GITHUB_OWNER}/ml_training/branches/main/protection" -X PUT --inp
 EOF
 ```
 
-El context `Deploy / lint` corresponde al par (`name: Deploy`, job id `lint`) del workflow consolidado. Cuando agregues `tests/`, actualizar a `["Deploy / lint", "Deploy / test"]` (ver ADR-008).
+Los contexts corresponden a los jobs `lint` y `test` del workflow consolidado.
+`pytest` debe recolectar al menos una prueba; cero pruebas es fallo, no éxito.
 
 ---
 
-## Parte 7 — Promotion gate (extendido)
+## Parte 7 — Promotion gate (aliases de MLflow)
 
 > [!IMPORTANT]
-> Esta es la **única vía oficial** de promover un modelo a `Production`.
-> No hay `mlflow.set_model_version_alias("Production")` manual permitido —
-> todo pasa por `task ops:promote` (que valida MAPE absoluto) y
-> opcionalmente por el workflow `training.yml action=promote` (que añade
-> A/B contra Production actual + approval humano via GitHub Environment).
-> Saltarse el gate rompe trazabilidad y el rollback automático.
-
-La Parte 6 sección 6.4 (`training.yml action=promote`) ya implementa el gate basico (MAPE umbral + A/B + approval).
-Esta Parte 7 documenta el ciclo completo del modelo y cuando se promueve.
+> Los Model Stages están deprecados desde MLflow 2.9. Este flujo usa tags de
+> validación y el alias `@champion`. La única vía normal de promoción es
+> `training.yml action=promote`; una reasignación manual queda reservada al
+> rollback de emergencia y debe registrarse como incidente.
 
 ### Mapa del camino — Parte 7
 
-Parte 7 define cuándo un modelo deja de ser experimental y entra a Production. No agregás infra ni código — usás el workflow que ya creaste en Parte 6, sección 6.4 con `action=promote`.
-
-**Prerrequisitos:**
-
-- `training.yml` operativo (Parte 6, sección 6.4): `gh workflow list` muestra "Training".
-- Al menos 1 run en MLflow Registry: `mlflow search registered-models --filter "name='rnd-forest-POP'"` lista ≥1 versión.
-- GitHub Environment "production" (Parte 6, sección 6.3): Settings → Environments → production con required reviewers.
-
 ```mermaid
 flowchart TD
-    PUSH([push a main])
-    DEPLOY["deploy.yml<br/>build :sha + apply"]
-    TRAIN["training.yml action=train<br/>→ run en MLflow stage=None"]
-    REVIEW{{"Review manual<br/>data scientist mira<br/>/reports/&lt;variety&gt;/"}}
-    STAGING["transition None → Staging<br/><i>UI MLflow o API</i>"]
-    PROMOTE["training.yml action=promote"]
-    G1{"Gate 1<br/>MAPE &lt; max_mape?"}
-    G2{"Gate 2<br/>mejora vs Production?"}
-    G3{"Gate 3<br/>approval Environment"}
-    PROD["transition Staging → Production<br/><i>auto-archive de versión vieja</i>"]
-    ABORT[abort]
-    ROLLBACK["ROLLBACK<br/>mlflow transition-stage<br/>--version &lt;vieja&gt;<br/>--stage Production"]
+    TRAIN["Batch entrena y registra versión<br/>validation_status=pending"]
+    AUTO{"Gates automáticos<br/>lineage + calidad + A/B"}
+    REVIEW["Review de residuos, drift,<br/>explicabilidad y costo"]
+    APPROVAL{"GitHub Environment<br/>approval"}
+    RECHECK{"Revalidación<br/>anti-TOCTOU"}
+    CHAMP["set_registered_model_alias<br/>alias=champion"]
+    FAIL["Rechazo<br/>tag validation_status=rejected"]
+    ROLLBACK["Rollback<br/>reasignar @champion<br/>a versión anterior"]
 
-    PUSH --> DEPLOY --> TRAIN --> REVIEW --> STAGING --> PROMOTE --> G1
-    G1 -->|sí| G2
-    G2 -->|sí| G3
-    G3 -->|aprobado| PROD
-    G1 -->|no| ABORT
-    G2 -->|no| ABORT
-    G3 -->|rechazado| ABORT
-    PROD -.problema en producción.-> ROLLBACK
-
-    style PROD fill:#d4edda,stroke:#155724
-    style ABORT fill:#f8d7da,stroke:#721c24
-    style ROLLBACK fill:#fff3cd,stroke:#856404
+    TRAIN --> AUTO
+    AUTO -->|pasa| REVIEW --> APPROVAL
+    APPROVAL -->|aprobado| RECHECK
+    RECHECK -->|pasa| CHAMP
+    AUTO -->|falla| FAIL
+    RECHECK -->|falla| FAIL
+    CHAMP -.incidente.-> ROLLBACK
 ```
 
-**Notas clave:**
+El workflow se divide en dos jobs:
 
-- Los 3 gates son AND, no OR. Cualquier gate que falle aborta el promote.
-- El `None → Staging` lo hace un humano mirando el dashboard. NO hay automatización ahí a propósito — el dashboard de residuos muestra bias que MAPE no captura.
-- El `Staging → Production` es semi-automático: gates 1-2 son código (`task ops:promote`); gate 3 (approval) es humano. Audit log queda en GHA.
-- Rollback NO requiere re-training. La versión vieja sigue en Registry (archived, no deleted). Una llamada `transition-stage --version <vieja>` la restaura.
+1. `validate-promotion`, sin environment protegido, ejecuta los gates y publica
+   un resumen sin secretos.
+2. `promote`, con `environment: production`, depende del anterior. Después del
+   approval vuelve a validar la misma versión y recién entonces reasigna
+   `@champion`. La segunda validación evita promover algo que cambió mientras
+   esperaba aprobación.
 
-**Referencias:** ciclo de vida → 7.1 · gates → 7.2 · approval humano → 7.3 · rollback → 7.4 · workflow `action=promote` → Parte 6, sección 6.4.
+### 7.1 Contrato de una versión candidata
 
-> **Gotcha Parte 7**: olvidar "transition a Staging" antes de `action=promote`. El gate filtra por `stage=Staging` — si el modelo está en `None`, el workflow dice "no candidate found".
+La versión debe tener:
 
-### 7.1 Ciclo de vida de un modelo
+- `validation_status=pending`;
+- run terminado en `FINISHED`;
+- `git_dirty=false`;
+- commit completo y digest de imagen;
+- `dataset_sha256`, key y VersionId de S3;
+- signature e input example;
+- métricas `mape_test`, `mape_oof`, `gap_oof_test` y una métrica robusta
+  adicional (`mae` o `wape`);
+- reporte asociado al mismo hash de dataset;
+- ausencia de NaN/inf en métricas y outputs.
 
-```
-[push a main]
-       │
-       ▼
-deploy.yml: lint + build + push :sha-abc123 a ECR + plan/apply Terraform
-       │
-       ▼
-[manual trigger training.yml (action=train) en GitHub UI]
-       │
-       ▼
-Lambda dispatcher -> Batch -> trainer corre con :sha-abc123
-       │
-       ▼
-trainer loguea run a MLflow + custom metric MAPE a CloudWatch
-       │
-       ▼
-trainer registra modelo en Registry stage "None"
-       │
-       ▼
-[review manual: mirar dashboard /reports/<variety>/]
-       │
-       ▼
-[transition a Staging via UI MLflow o API]
-       │
-       ▼
-[manual trigger training.yml (action=promote) en GitHub UI]
-       │
-       ├─> Gate 1: MAPE < max_mape?  [si NO -> abort]
-       ├─> Gate 2: mejora vs Production actual? [si NO -> abort]
-       ├─> Gate 3: approval humano (GitHub Environment)
-       │
-       ▼
-transition_model_version_stage(Production)
-       │
-       ▼
-[modelo en Production, archive_existing_versions = true automatico]
+### 7.2 Gates
+
+| Gate | Condición |
+|---|---|
+| Integridad | Lineage completo, run finalizado, artifact y signature legibles |
+| Calidad absoluta | MAPE y gap bajo umbral; MAE/WAPE dentro de política |
+| Comparación | No degrada frente a `models:/<name>@champion` más allá de la tolerancia |
+| Estabilidad | Resultados por ventana temporal y cobertura de intervalos aceptables |
+| Operación | Latencia, tamaño y memoria compatibles con la API |
+| Humano | Revisión de residuos, drift, explicabilidad y contexto de negocio |
+
+Cada gate escribe tags (`validation_status`, `validation_reason`,
+`validated_at`, `validated_by_workflow`) en la versión. Los umbrales viven en
+Git y se registran en el run; no se editan durante la promoción.
+
+### 7.3 Carga de modelos en serving
+
+La API carga siempre:
+
+```text
+models:/rnd-forest-<VARIETY>@champion
 ```
 
-### 7.2 Gates por nivel
+Debe registrar en logs y en `/api/health` el nombre, versión, run ID, digest de
+imagen y dataset hash actualmente cargados. Al cambiar el alias, la API invalida
+su cache de forma controlada o se fuerza un redeploy; un proceso que cachea el
+modelo indefinidamente no recibe la promoción.
 
-| Stage | Gate | Quien |
-|---|---|---|
-| `None` -> `Staging` | Visual review del dashboard `/reports/<variety>/` (residuos, feature importance, comparacion XGB vs LGB) | Data scientist |
-| `Staging` -> `Production` | Quality gate (MAPE < umbral) + A/B vs Production actual + approval | Workflow `training.yml` (action=promote) + revisor humano |
-| `Production` -> `Archived` | Auto al promover una nueva version (archive_existing_versions = true) | MLflow |
+### 7.4 Rollback
 
-### 7.3 Por que el approval humano (GitHub Environment)
-
-Aun con gates automaticos:
-- MAPE puede ser engañoso si la distribucion de los predichos cambio
-  (modelo "barato" que predice todo igual gana en MAPE pero falla en
-  recall extremo).
-- A/B en metric absoluta no captura compliance / domain expert
-  judgement.
-- El approval crea audit log en GitHub (quien aprobo + cuando).
-
-### 7.4 Rollback de un Production
-
-Si la version promovida tiene problemas:
+Rollback no reentrena: reasigna el alias a una versión conocida.
 
 ```bash
-# Listar versiones del modelo
-mlflow search registered-models --filter "name='rnd-forest-POP'"
+export MODEL_NAME="rnd-forest-POP"
+export ROLLBACK_VERSION="3"
 
-# Transition la version vieja de vuelta a Production
-mlflow models transition-stage 
-    --model-name "rnd-forest-POP" 
-    --version 3 
-    --stage Production 
-    --archive-existing
+python - <<'PY'
+import os
+from mlflow import MlflowClient
+
+client = MlflowClient()
+client.set_registered_model_alias(
+    os.environ["MODEL_NAME"],
+    "champion",
+    os.environ["ROLLBACK_VERSION"],
+)
+print(
+    f"OK {os.environ['MODEL_NAME']}@champion -> "
+    f"v{os.environ['ROLLBACK_VERSION']}"
+)
+PY
 ```
 
-O via UI: MLflow → Models → `rnd-forest-POP` → seleccionar version
-buena → "Transition to" → Production.
+Después del rollback:
+
+1. reiniciar o invalidar la cache de la API;
+2. verificar `/api/health`;
+3. ejecutar un prediction smoke conocido;
+4. etiquetar la versión retirada con `rollback_reason`;
+5. abrir incidente con la evidencia de la reasignación.
+
+### 7.5 `scripts/promote_model.py`
+
+El archivo faltaba en la versión anterior aunque `tasks/ops.yml` lo invocaba.
+Esta implementación mínima usa aliases y puede separar validación de mutación:
+
+```python
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import subprocess
+from datetime import datetime, timezone
+
+import mlflow
+from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
+
+
+def tracking_uri(tf_dir: str) -> str:
+    explicit = os.getenv("MLFLOW_TRACKING_URI")
+    if explicit:
+        return explicit.rstrip("/")
+    result = subprocess.run(
+        ["terraform", f"-chdir={tf_dir}", "output", "-raw", "tracking_uri"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip().rstrip("/")
+
+
+def metric(run, name: str) -> float:
+    value = run.data.metrics.get(name)
+    if value is None:
+        raise SystemExit(f"FAIL falta métrica obligatoria: {name}")
+    result = float(value)
+    if not math.isfinite(result):
+        raise SystemExit(f"FAIL métrica no finita: {name}={result}")
+    return result
+
+
+def required_tag(tags: dict[str, str], name: str) -> str:
+    value = tags.get(name)
+    if value in (None, "", "unknown", "missing"):
+        raise SystemExit(f"FAIL falta tag válido: {name}")
+    return value
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("model_name")
+    parser.add_argument("version")
+    parser.add_argument("--max-mape", type=float, default=20.0)
+    parser.add_argument("--max-gap", type=float, default=5.0)
+    parser.add_argument("--max-regression-pct", type=float, default=0.0)
+    parser.add_argument("--tf-dir", default="infra/envs/prod")
+    parser.add_argument("--validate-only", action="store_true")
+    args = parser.parse_args()
+
+    mlflow.set_tracking_uri(tracking_uri(args.tf_dir))
+    client = MlflowClient()
+    candidate = client.get_model_version(args.model_name, args.version)
+    run = client.get_run(candidate.run_id)
+
+    if run.info.status != "FINISHED":
+        raise SystemExit(f"FAIL run status={run.info.status}")
+
+    tags = {**run.data.tags, **candidate.tags}
+    required_tag(tags, "git_commit")
+    required_tag(tags, "image_digest")
+    required_tag(tags, "dataset_sha256")
+    required_tag(tags, "dataset_s3_key")
+    required_tag(tags, "dataset_s3_version_id")
+    if tags.get("git_dirty", "").lower() != "false":
+        raise SystemExit("FAIL git_dirty debe ser false")
+
+    candidate_mape = metric(run, "mape_test")
+    candidate_gap = abs(metric(run, "gap_oof_test"))
+    if candidate_mape > args.max_mape:
+        raise SystemExit(
+            f"FAIL mape_test={candidate_mape:.4f} > {args.max_mape:.4f}"
+        )
+    if candidate_gap > args.max_gap:
+        raise SystemExit(
+            f"FAIL gap_oof_test={candidate_gap:.4f} > {args.max_gap:.4f}"
+        )
+
+    try:
+        champion = client.get_model_version_by_alias(args.model_name, "champion")
+    except MlflowException:
+        champion = None
+
+    if champion and str(champion.version) != str(candidate.version):
+        champion_run = client.get_run(champion.run_id)
+        champion_mape = metric(champion_run, "mape_test")
+        allowed = champion_mape * (1 + args.max_regression_pct / 100)
+        if candidate_mape > allowed:
+            raise SystemExit(
+                f"FAIL candidate={candidate_mape:.4f} > "
+                f"champion_allowed={allowed:.4f}"
+            )
+
+    now = datetime.now(timezone.utc).isoformat()
+    client.set_model_version_tag(
+        args.model_name, args.version, "validation_status", "passed"
+    )
+    client.set_model_version_tag(
+        args.model_name, args.version, "validated_at", now
+    )
+
+    if args.validate_only:
+        print(f"OK validado {args.model_name} v{args.version}")
+        return
+
+    client.set_registered_model_alias(
+        args.model_name, "champion", args.version
+    )
+    client.set_model_version_tag(
+        args.model_name, args.version, "deployment_status", "champion"
+    )
+    print(f"OK {args.model_name}@champion -> v{args.version}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+> Este gate compara métricas ya registradas. Antes de usarlo, la suite debe
+> probar los casos “primer champion”, versión inexistente, métrica NaN, tags
+> ausentes, empate, regresión permitida y carrera entre validate/promote.
 
 ---
 
-> **Cierre Partes 5-7.** Sistema production-grade funcional: trainer parchado
+> **Cierre Partes 5-7.** Flujo MLOps funcional; la clasificación
+> production-grade depende además de completar el gate de la Parte 10: trainer
+> parchado
 > emitiendo MAPE por variedad a CloudWatch, 3 workflows GHA consolidados
 > (`deploy.yml` / `training.yml` / `destroy.yml` con OIDC + confirmación
 > textual), promotion ciclo A/B documentado. **Próximos pasos**: #8 (runbook)
@@ -9131,11 +9343,11 @@ aws ec2 describe-spot-instance-requests
 #### 8.3.2 MLflow 403 "Invalid Host header"
 
 **Por que pasa**: MLflow 3.x rechaza requests cuyo `Host:` header no
-esta en `--allowed-hosts`. El V2 ya pone `--allowed-hosts '*'` (3.5.2)
-pero si lo cambiaste a una lista, y el ALB DNS no esta — boom.
+esta en `--allowed-hosts`. La configuración enumera el DNS del ALB y Cloud Map;
+un dominio custom también debe agregarse explícitamente.
 
 **Fix**: editar `modules/mlflow/ecs.tf:container_definitions.command`
-para incluir el nuevo DNS, `terraform apply -target=module.mlflow`.
+para incluir el host y ejecutar `task infra:plan` + `task infra:apply`.
 
 #### 8.3.3 RDS "too many connections"
 
@@ -9183,7 +9395,8 @@ aws s3 cp "s3://${PROJECT}-tfstate-${ACCOUNT_SUFFIX}/envs/prod/terraform.tfstate
 
 # Si el ID corresponde a un proceso que ya murio (laptop crasheada),
 # forzar unlock:
-task infra:force-unlock LOCK_ID=<LOCK_ID>
+LOCK_ID="reemplazar-con-el-id-real"
+task infra:force-unlock LOCK_ID="$LOCK_ID"
 ```
 
 #### 8.3.6 S3 sync del trainer falla con 403
@@ -9196,7 +9409,8 @@ task infra:force-unlock LOCK_ID=<LOCK_ID>
 ```bash
 # Inline policy del job role
 aws iam list-role-policies --role-name ml-training-job-role
-aws iam get-role-policy --role-name ml-training-job-role --policy-name <name>
+POLICY_NAME="reemplazar-con-el-nombre-real"
+aws iam get-role-policy --role-name ml-training-job-role --policy-name "$POLICY_NAME"
 ```
 
 **Fix**: en Parte 3.7.2 el inline policy `job_s3` ya cubre PutObject
@@ -9378,7 +9592,8 @@ gestionado por Terraform. Pero **el `destroy` sí vacía los buckets de S3**, as
 que los artifacts no vuelven. Restaurar el RDS te devuelve el Registry apuntando
 a artifacts que ya no existen.
 (²) `nuke` corre `purge_secret` de la password master: el backup queda en la
-cuenta pero **sin credencial**, es decir irrestaurable en la práctica (ver #8.7).
+cuenta sin el secret original; puede restaurarse y luego rotarse el password
+master, pero ya no es un rebuild automático (ver #8.7).
 
 > **Conclusión operativa**: para el ciclo recurrente usá **`teardown` + `rebuild`**,
 > nunca `destroy`. Es el único par que devuelve el sistema completo — metadata y
@@ -9446,9 +9661,10 @@ cuenta pero **sin credencial**, es decir irrestaurable en la práctica (ver #8.7
 1. **La credencial master vive en la raíz**, `infra/envs/prod/rds_secret.tf`, no
    dentro de `module.mlflow`. Si viviera dentro, el teardown la destruiría junto
    con el módulo y el rebuild generaría una password NUEVA — que no coincide con
-   la del backup restaurado (AWS conserva la credencial del snapshot). MLflow y
-   la API no autenticarían y **el backup sería inservible**: existe, está íntegro
-   y no sirve. Ver [ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md).
+   la del backup restaurado. MLflow y la API no autenticarían hasta rotar el
+   password o recuperar el secret. Mantenerlo en la raíz evita esa interrupción
+   durante el ciclo normal; no convierte la contraseña en parte del backup. Ver
+   [ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md).
 2. **El RDS debe estar `available` para poder respaldarlo.** `ops:down` (que el
    teardown invoca primero) lo **para**, y AWS rechaza snapshotear una instancia
    detenida. `ensure_rds_available` (`tasks/lib/nuke.sh`) la re-arranca y espera.
@@ -9948,7 +10164,8 @@ de MLflow para mirar runs viejos.
 
 ```bash
 task rebuild                       # restaura desde el backup mas reciente (default)
-task rebuild SNAPSHOT=<id>         # restaura desde uno especifico (ver `task backups`)
+SNAPSHOT_ID="reemplazar-con-el-id-real"
+task rebuild SNAPSHOT="$SNAPSHOT_ID" # restaura uno específico (ver `task backups`)
 task rebuild SNAPSHOT=none         # arranca con un RDS VACIO (descarta el historico)
 # Pasos internos (tasks/ops.yml :: rebuild):
 #  1. resolve_restore_snapshot() decide que restaurar (ver #8.5). Es la MISMA
@@ -9999,13 +10216,11 @@ nuevo ALB.)
 > backups de la sub-sección siguiente (export Registry → JSON, snapshot
 > manual RDS, export tfstate) — sin ellos no hay forma de recuperar.
 >
-> **Ojo con los backups**: `task destroy` hace `purge_secret` del
-> `<project>-rds-password`. Los backups del RDS **sobreviven en la cuenta**,
-> pero su credencial master ya no está en Secrets Manager. Si pensás restaurar
-> alguno más adelante, **guardá el password aparte antes de destruir**:
-> `aws secretsmanager get-secret-value --secret-id <project>-rds-password --query SecretString --output text`.
-> (Este problema no aplica a `teardown`/`rebuild`: ahí el secret vive en la raíz
-> y no se toca — [ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md).)
+> **Ojo con la credencial**: nunca exportes el password a `/tmp` ni lo subas como
+> objeto S3. Para una migración, conserva el secret en un stack de custodia
+> independiente con KMS y permisos mínimos, o restaura el snapshot y rota el
+> password master con RDS antes de conectar aplicaciones. Un snapshot no queda
+> “inservible” por haber eliminado el secret; el password puede restablecerse.
 
 > [!IMPORTANT]
 > **`destroy` NO es "teardown pero más".** Es la diferencia entre pausar y
@@ -10021,8 +10236,9 @@ nuevo ALB.)
 > | Credencial master del RDS | ✅ se preserva | ❌ `purge_secret` |
 >
 > O sea: tras un `destroy`, `task deploy` **sí** te devuelve el Model Registry —
-> pero apuntando a `.joblib` y reports que ya no existen, y sin la credencial
-> para abrir el backup. Recuperación real = re-entrenar.
+> pero apuntando a `.joblib` y reports que ya no existen si no los archivaste.
+> La credencial se rota después del restore; los artifacts sí deben copiarse o
+> regenerarse.
 >
 > **Para el ciclo recurrente de prender/apagar usá `teardown` (#8.5), nunca
 > `destroy`.**
@@ -10052,14 +10268,19 @@ para empezar de cero.
 `task destroy` solo; lo demás no lo respalda nadie):
 
 ```bash
-# Pre-requisito: tener un bucket de archive FUERA del proyecto (otra cuenta
-# o, como minimo, otro nombre que NO sea destruido por este `task destroy`).
-# Crearlo a mano si no existe (este bucket vive aparte del state):
+# Pre-requisito: bucket de archivo FUERA del proyecto, idealmente en otra
+# cuenta. Este ejemplo aplica el mínimo: versioning, cifrado y bloqueo público.
 export ARCHIVE_BUCKET="${PROJECT}-archive-${ACCOUNT_SUFFIX}"
 if ! aws s3api head-bucket --bucket "${ARCHIVE_BUCKET}" 2>/dev/null; then
   aws s3api create-bucket --bucket "${ARCHIVE_BUCKET}" --region "${AWS_DEFAULT_REGION}"
   aws s3api put-bucket-versioning --bucket "${ARCHIVE_BUCKET}" \
     --versioning-configuration Status=Enabled
+  aws s3api put-bucket-encryption --bucket "${ARCHIVE_BUCKET}" \
+    --server-side-encryption-configuration \
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  aws s3api put-public-access-block --bucket "${ARCHIVE_BUCKET}" \
+    --public-access-block-configuration \
+    'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true'
 fi
 
 # (1) Export del Model Registry a JSON (corre con MLflow encendido)
@@ -10075,13 +10296,9 @@ aws rds create-db-snapshot \
   --db-instance-identifier ml-training-mlflow \
   --db-snapshot-identifier "ml-training-mlflow-final-$(date +%Y-%m-%d)"
 
-# (2-bis) LA CREDENCIAL DEL BACKUP. Sin esto el snapshot de (2) es inservible:
-#     `task destroy` purga el secret y AWS conserva la password VIEJA dentro del
-#     backup. Guardala fuera del proyecto ANTES de destruir.
-aws secretsmanager get-secret-value --secret-id ml-training-rds-password \
-  --query SecretString --output text > /tmp/rds-password-final.txt
-aws s3 cp /tmp/rds-password-final.txt \
-  "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/"
+# (2-bis) NO exportar la credencial. Si la restauración será posterior al nuke:
+#     a) conservar el secret en un stack externo de custodia; o
+#     b) restaurar el snapshot y rotar el master password con `modify-db-instance`.
 
 # (2-ter) Los ARTIFACTS. `task destroy` vacia los buckets del proyecto: si no
 #     los copias afuera, los modelos y reports no vuelven (el backup del RDS
@@ -10091,11 +10308,13 @@ aws s3 sync "s3://ml-training-artifacts-${ACCOUNT_SUFFIX}/" \
 aws s3 sync "s3://ml-training-data-${ACCOUNT_SUFFIX}/" \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/data/"
 
-# (3) Export del Terraform state como ultimo backup
+# (3) El state contiene secretos. Exportarlo solo si el bucket de archivo tiene
+#     acceso restringido y cifrado; nunca adjuntarlo a tickets ni commits.
 cd infra/envs/prod
 terraform state pull > /tmp/tfstate-final-backup.json
 aws s3 cp /tmp/tfstate-final-backup.json \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/"
+rm -f /tmp/tfstate-final-backup.json
 cd ../../..
 ```
 
@@ -10119,7 +10338,8 @@ task destroy
 #  4. purge_ecr de los 5 repos (ml-training, -mlflow, -reports, -api, -ui).
 #  5. infra:destroy -> terraform destroy total de envs/prod (incluye S3 + RDS),
 #     con rds_skip_final_snapshot=true porque el backup del paso 2 ya existe.
-#  6. purge_secret del rds-password -> el backup queda SIN credencial (ver aviso).
+#  6. purge_secret del rds-password. Para restaurar después, rotar el password
+#     del RDS restaurado o usar un secret de custodia externo.
 # NOTA: el bucket tfstate y el OIDC provider NO los borra `task destroy`;
 #       para eso esta `task nuke` (destroy + empty tfstate + delete_oidc).
 ```
@@ -10166,6 +10386,14 @@ Detalles verificados el **2026-07-20** ejecutando el ciclo completo:
 ---
 
 ## Parte 9 — Costos detallados
+
+> [!IMPORTANT]
+> Los importes son una estimación de referencia, no una cotización. Antes de
+> desplegar, recalcular en AWS Pricing Calculator para la región, fecha, moneda
+> y patrón reales. Incluir ALB LCU, NAT por hora y por GB, IPv4 pública,
+> almacenamiento y snapshots RDS, CloudWatch ingestion/retention, métricas
+> custom, ECR, transferencia inter-AZ e impuestos. Los tiempos de uso también
+> deben salir de Cost Explorer, no de una suposición permanente de 69 horas.
 
 > **Por qué esta parte**: AWS no muestra un total previsto antes de gastar; sin
 > entender el desglose te llevás sorpresa en la factura. Acá está el número
@@ -10244,7 +10472,7 @@ Asume además: 10 trainings/mes (1h cada uno), 5 GB de S3, ~3.5 GB de ECR (5 rep
 | RDS db.t4g.small (69h encendido; hostea MLflow + forecasts) | 69 × $0.032 | $2.21 |
 | RDS storage (20 GB gp3, solo mientras la instancia existe) | 20 × $0.115 × (139/720) | $0.44 |
 | RDS snapshots (retencion 6 = ~6 semanas, ~10 GB) | 10 × $0.095 | $0.60 |
-| Fargate MLflow (**1 vCPU, 3 GB** tras el rightsizing de #9.4.5, 69h) | 69 × ($0.04048 × 1 + $0.004445 × 3) | $3.71 |
+| Fargate MLflow (**1 vCPU, 3 GB** tras el rightsizing de #9.4.2, 69h) | 69 × ($0.04048 × 1 + $0.004445 × 3) | $3.71 |
 | Fargate Reports (0.5 vCPU, 1 GB, 69h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 69 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.70 |
 | Fargate API (1 vCPU, 2 GB, 69h) | 69 × ($0.04048 × 1 + $0.004445 × 2) | $3.41 |
 | Fargate UI (0.5 vCPU, 1 GB, 69h) — corre en **FARGATE_SPOT** (~70% más barato; el monto listado es el techo on-demand) | 69 × ($0.04048 × 0.5 + $0.004445 × 1) | $1.70 |
@@ -10289,7 +10517,7 @@ Asume además: 10 trainings/mes (1h cada uno), 5 GB de S3, ~3.5 GB de ECR (5 rep
 | Baseline anterior (L-V 08-12, ALB+NAT 24/7) | — | $75 |
 | **Teardown semanal**: ALB+NAT pasan de 720h a ~139h de existencia | **−$41** | $34 |
 | **Ventana 8h × 2 dias** (69h encendido, antes 80h) | −$2 | $32 |
-| **Rightsizing MLflow** 2 vCPU/4 GB → 1 vCPU/3 GB (#9.4.5) | −$3 | **$29** |
+| **Rightsizing MLflow** 2 vCPU/4 GB → 1 vCPU/3 GB (#9.4.2) | −$3 | **$29** |
 
 El 90% del ahorro vino del primer movimiento. ALB + NAT eran $48.60/mes —el 65%
 del total— porque facturaban 24/7 **aunque el scheduler apagara todo lo demas**:
@@ -10355,9 +10583,9 @@ documentados en secciones 8.5 a 8.7).
 > VPC/subnets/SGs; `task rebuild`/`deploy` lo recrean (default `true`).
 
 Si queres bajar mas el modo operando, ver sección 9.4. El orden de palancas
-cambio con el ciclo semanal: ahora manda **Fargate** (#9.4.5), no la red.
+cambio con el ciclo semanal: ahora manda **Fargate** (#9.4.2), no la red.
 
-### 9.4 Optimizaciones adicionales ((futuro))
+### 9.4 Optimizaciones adicionales (futuro)
 
 **Por que se llaman "futuras" en vez de aplicarlas dia 1**: cada una
 tiene un costo de ingenieria o un trade-off. Aplicarlas dia 1 te frena
@@ -10384,7 +10612,7 @@ ahorro que perseguian los endpoints; migrar ahora costaria ~100 lineas de
 Terraform para gastar ~$2 mas al mes, o ahorrar ~$2 resignando multi-AZ.
 No hacerlo.
 
-#### 9.4.5 Rightsizing de las tasks Fargate — ✅ APLICADO (MLflow)
+#### 9.4.2 Rightsizing de las tasks Fargate — ✅ APLICADO (MLflow)
 
 Fargate era el 49% de la factura. Estas opciones **no tocan la arquitectura**:
 son cambios de valor, sin mover subredes, ALB, capacity providers ni el ruteo
@@ -10414,24 +10642,24 @@ jornada util.
 
 > **Lo que NO se recomienda tocar** (romperia la arquitectura, no solo el costo):
 > mover las tasks a subredes publicas para eliminar el NAT, sacar el ALB, o
-> pasar MLflow a Spot (#9.4.4). Los tres ahorran entre $3 y $7 y a cambio
+> pasar MLflow a Spot (#9.4.5). Los tres ahorran entre $3 y $7 y a cambio
 > rompen, respectivamente, el aislamiento en subredes privadas, el ruteo por
 > path que convive con `/api/2.0/mlflow-artifacts/*` (invariante #6), y la
 > durabilidad de los runs largos de training.
 
-#### 9.4.2 S3 Intelligent-Tiering
+#### 9.4.3 S3 Intelligent-Tiering
 
 Auto-tier `artifacts/` despues de 90d a Standard-IA (-50% storage).
 **Por que no dia 1**: tu volumen S3 es ~5 GB. Ahorro real: <$0.5/mes.
 No vale la pena hasta que pases los 100 GB.
 
-#### 9.4.3 ECR scan policies
+#### 9.4.4 ECR scan policies
 
 Borrar imagenes con vulnerabilidades CVSS > 7. **Por que no dia 1**:
 genera ruido (la imagen base puede tener CVEs que upstream parchea
 en semanas). Aplicar despues de la primera vuelta.
 
-#### 9.4.4 Fargate Spot para MLflow
+#### 9.4.5 Fargate Spot para MLflow
 
 **Reports y UI YA corren en FARGATE_SPOT** (~70% más baratos; son stateless,
 una interrupción solo reinicia la task). El cluster expone capacity providers
@@ -10440,6 +10668,238 @@ MLflow es crítico durante runs largos de training — si Spot lo reclama mid-ru
 se pierde el run. 50-70% off Fargate, pero interrupcion = MLflow caido.
 **Por que no día 1 para MLflow**: es path-critical para CI/CD; downtime mid-day
 rompe tu workflow. Mover MLflow a Spot solo en envs/dev.
+
+---
+
+## Parte 10 — Aseguramiento MLOps y hardening mínimo
+
+Esta Parte no agrega otro orquestador ni sustituye el stack. Conserva Terraform,
+AWS Batch, ECS Fargate, MLflow, RDS, S3, CloudWatch, SNS, Lambda, Task y GitHub
+Actions. Su objetivo es convertir el camino económico en un sistema cuya
+calidad, seguridad y recuperación puedan demostrarse.
+
+### 10.1 Dos perfiles explícitos
+
+| Control | Laboratorio controlado | Producción expuesta |
+|---|---|---|
+| ALB | HTTP temporal, acceso restringido | HTTPS obligatorio; HTTP solo redirige |
+| Autenticación | Red privada o CIDR de operador | Auth para MLflow, API, UI y reportes |
+| Artifacts | Navegación local | Sin autoindex público; descarga autorizada |
+| RDS | single-AZ aceptado | Según SLO: Multi-AZ o RTO de restore probado |
+| Tests | smoke + unitarios mínimos | unitarios, contratos, integración y restore |
+| Imágenes | tags de desarrollo | SHA/digest inmutable + SBOM + scan |
+| Monitoreo | logs y fallo de jobs | SLO, servicio, data, modelo y costo |
+| Promoción | manual controlada | gates + approval + alias + rollback |
+
+Si falta un control de la columna productiva, el sistema sigue siendo útil, pero
+se documenta como laboratorio o preproducción.
+
+### 10.2 Seguridad mínima
+
+1. **TLS antes de Internet.** Crear certificado ACM y listener HTTPS; el
+   listener 80 solo devuelve redirect 301 a 443. Nunca enviar credenciales,
+   datos de predicción o cookies por HTTP.
+2. **Autenticar todos los paths.** Proteger MLflow, API, UI y reports. No basta
+   con `--allowed-hosts`: ese flag evita DNS rebinding, no autentica usuarios.
+3. **No publicar artifacts crudos.** Eliminar `/artifacts/*` del listener
+   público y el `autoindex` productivo. La API entrega descargas autorizadas o
+   URLs S3 prefirmadas de vida corta.
+4. **Separar identidades de base de datos.** El master de RDS se usa solo para
+   bootstrap/rotación. MLflow recibe un usuario limitado a la DB `mlflow`; la
+   API recibe otro limitado a `forecasts`. Cada credencial vive en un secret
+   distinto.
+5. **Tratar el state como secreto.** `random_password` y `secret_string`
+   aparecen en Terraform state aunque estén marcados sensibles. Restringir
+   lectura del bucket, cifrar, auditar con CloudTrail y no copiar el state a
+   logs, PRs o artifacts de CI.
+6. **OIDC sin wildcard.** Los roles aceptan solo `main` y
+   `environment:production`. Una PR no recibe el rol de apply. Si se desea un
+   plan remoto en PR, crear un tercer rol de solo lectura.
+7. **IAM por prefijo.** El trainer lee el dataset y escribe solo sus prefijos.
+   La API no recibe permisos S3 cuando descarga modelos mediante el proxy de
+   MLflow. Batch nunca entra directamente a RDS.
+8. **Secretos fuera de comandos y archivos temporales.** No exportar passwords
+   a `/tmp` ni S3. Para DR, conservarlos en custodia independiente o rotarlos
+   después de restaurar.
+
+**Gate de red verificable**
+
+```bash
+# RDS no es público
+aws rds describe-db-instances \
+  --db-instance-identifier "${PROJECT}-mlflow" \
+  --query 'DBInstances[0].PubliclyAccessible' --output text
+# False
+
+# Las tasks Fargate no reciben IP pública
+aws ecs describe-services \
+  --cluster "${PROJECT}-cluster" \
+  --services mlflow api ui reports \
+  --query 'services[].networkConfiguration.awsvpcConfiguration.assignPublicIp'
+# DISABLED para todos
+
+# Ningún listener productivo debe terminar en HTTP sin redirect
+aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+  --query 'Listeners[].{Port:Port,Protocol:Protocol,Actions:DefaultActions[].Type}'
+```
+
+### 10.3 Suite de pruebas por riesgo
+
+No se persigue cobertura por vanidad. Se prueban los contratos que pueden
+producir un modelo silenciosamente incorrecto:
+
+**Unitarias**
+
+- selector de campeón: empate, NaN, candidato sin métrica y violación de gap;
+- transformaciones: fit/transform estable, columnas y dtypes;
+- métrica MAPE con cero/casi cero y métrica robusta complementaria;
+- normalización del dispatcher y rechazo de payloads;
+- función de promoción: primer champion, regresión, alias y validate-only.
+
+**Anti-leakage**
+
+- cada fold usa solo timestamps anteriores;
+- lags y estadísticas se ajustan dentro del `Pipeline`;
+- imputadores, scalers y selección de features no se fitean globalmente;
+- el holdout final no participa en Optuna ni en selección de campeón.
+
+**Contratos**
+
+- schema del Excel por hoja;
+- columnas requeridas, rangos, nulos, unicidad y monotonía temporal;
+- signature MLflow contra el payload real de la API;
+- roundtrip `.joblib` dentro de la imagen;
+- compatibilidad trainer ↔ API con `models:/<name>@champion`.
+
+**Integración**
+
+- compose completo con Postgres + MLflow + API + UI;
+- artifact upload/download a través de `mlflow-artifacts:/`;
+- Batch smoke con IAM real y MLflow interno;
+- promoción seguida de invalidación de cache y prediction smoke;
+- restore de RDS + reconexión de artifacts S3.
+
+CI ejecuta `pytest -q` y falla si no recolecta pruebas. El smoke no reemplaza
+esta suite: prueba el camino feliz, no la corrección estadística.
+
+### 10.4 Lineage de datos e idempotencia
+
+El input canónico no debe ser solamente una key mutable. Al enviar un job:
+
+1. el dispatcher ejecuta `HeadObject`;
+2. captura `VersionId`, tamaño, ETag y checksum;
+3. pasa `S3_DATA_VERSION_ID` al job;
+4. el trainer descarga esa versión exacta;
+5. calcula SHA-256 completo después de descargar;
+6. registra key, VersionId, hash, filas y fecha máxima del dataset en MLflow.
+
+La identidad lógica del entrenamiento es:
+
+```text
+run_key = sha256(
+  git_commit + image_digest + dataset_sha256 + variety + tuning + seed
+)
+```
+
+`run_key` se usa como tag y clave de idempotencia. Si Batch reintenta por una
+interrupción Spot, el segundo intento no crea dos versiones candidatas sin
+relación: reanuda o marca explícitamente el intento anterior.
+
+El JSON de EDA incluye `dataset_sha256`. `task train` ignora cualquier EDA cuyo
+hash no coincide con el dataset actual y exige regenerarlo.
+
+### 10.5 Release y supply chain
+
+- Construir una sola vez en CI y promover el mismo SHA/digest.
+- Registrar `image_digest` en cada run y en `/api/health`.
+- No desplegar `latest` ni `stable` en producción.
+- Conservar `.terraform.lock.hcl` y hashes de dependencias Python.
+- Generar SBOM por imagen y guardar el resultado asociado al commit.
+- Bloquear HIGH/CRITICAL corregibles según una excepción con responsable y
+  fecha de expiración; `scan_on_push` por sí solo es informativo.
+- Fijar actions de terceros por commit SHA en un entorno regulado.
+- Actualizar base images y providers mediante PR con tests y rollback.
+
+### 10.6 Observabilidad MLOps
+
+CloudWatch + SNS ya existen; se amplían las señales, no la plataforma.
+
+**Servicio**
+
+- ALB 4xx/5xx, latencia p50/p95/p99 y targets unhealthy;
+- desired/running tasks de ECS y reinicios;
+- CPU/memoria de ECS, conexiones/CPU/storage de RDS;
+- jobs Batch por estado, tiempo RUNNABLE, duración y reintentos;
+- Lambda errors, throttles, duration y DLQ.
+
+**Datos**
+
+- freshness de la última observación;
+- filas por variedad, nulos, valores fuera de rango y cambios de schema;
+- hash/VersionId no observado anteriormente;
+- distribución por ventana temporal.
+
+**Modelo**
+
+- versión y alias cargados;
+- distribución de predicciones y features;
+- PSI/KS como señales, no como verdad universal;
+- error real cuando llega el label: MAPE + MAE/WAPE por variedad y ventana;
+- cobertura y ancho de intervalos;
+- staleness: días desde último entrenamiento aprobado.
+
+**Negocio**
+
+- volumen de predicciones;
+- porcentaje de requests rechazados por contrato;
+- sesgo sistemático por variedad;
+- costo por training aprobado, no solo costo mensual de infraestructura.
+
+Cada alarma tiene `owner`, severidad, umbral, ventana, acción y enlace a
+runbook. Una métrica sin respuesta operativa definida es telemetría, no control.
+
+### 10.7 SLO, RTO y RPO
+
+Definirlos antes de elegir Multi-AZ:
+
+| Objetivo | Perfil económico sugerido |
+|---|---|
+| Disponibilidad de UI/API en ventana | 99 % mensual durante Mi/Ju 08–16 PET |
+| Latencia API | p95 bajo el umbral acordado con negocio |
+| RPO metadata MLflow/forecasts | último snapshot verificado |
+| RPO artifacts/datasets | 0 para objetos versionados no eliminados |
+| RTO tras teardown | 40–60 min, medido con restore real |
+| RTO rollback de modelo | 10 min incluyendo cache + smoke |
+
+Estos valores son ejemplos; se reemplazan por compromisos reales. El punto
+experto es medirlos. Un snapshot que nunca se restauró no demuestra DR.
+
+**Ejercicio trimestral**
+
+1. restaurar el snapshot más reciente con otro identifier;
+2. rotar/inyectar la credencial sin exponerla;
+3. comprobar experiments, aliases y tabla `forecasts`;
+4. cargar un modelo desde S3 y ejecutar prediction smoke;
+5. medir RTO/RPO;
+6. destruir el entorno de prueba.
+
+### 10.8 Checklist para declarar release productivo
+
+```text
+[ ] HTTPS + autenticación en todos los paths públicos
+[ ] /artifacts y autoindex no son públicos
+[ ] roles DB separados; master fuera de aplicaciones
+[ ] OIDC restringido; PR sin rol de apply
+[ ] pytest, lint, Terraform validate y smoke verdes
+[ ] imagen por SHA/digest, SBOM y scan aceptado
+[ ] dataset key + VersionId + SHA completo registrados
+[ ] signature e input example verificados contra API
+[ ] gates automáticos + approval + @champion
+[ ] rollback ensayado e invalida cache de API
+[ ] alarmas de servicio, datos y modelo con owner
+[ ] restore de RDS probado y RTO/RPO medidos
+[ ] costo recalculado para región y fecha actuales
+```
 
 ---
 

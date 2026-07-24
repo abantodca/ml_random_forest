@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from src.config import (
     CHAMPION_MAX_GAP_REL,
     CHAMPION_MAX_MAPE,
+    CHAMPION_MIN_BASELINE_SKILL,
     CHAMPION_WARN_TEMPORAL_MAPE,
     CHAMPION_WARN_TEMPORAL_R2,
 )
@@ -117,6 +118,11 @@ def apply_quality_gate(
     # definiciones conviviendo confundian el log. Ahora ambos hablan gap_rel.
     mape_ok = champion.oof_mape <= CHAMPION_MAX_MAPE
     gap_ok = champion.gap_rel <= CHAMPION_MAX_GAP_REL
+    baseline_skill = champion.metrics.get("baseline_skill_mae")
+    baseline_ok = (
+        baseline_skill is None
+        or float(baseline_skill) >= CHAMPION_MIN_BASELINE_SKILL
+    )
 
     if not mape_ok:
         logger.warning(
@@ -126,6 +132,15 @@ def apply_quality_gate(
             f"(predice mal en datos OOF -> inutilizable en produccion). "
             f"El run SI esta en MLflow Experiments (run_id={champion.mlflow_run_id[:8]}...) "
             f"con todos sus artifacts para diagnostico."
+        )
+        return False
+
+    if not baseline_ok:
+        logger.warning(
+            f"[{variety}] CAMPEON RECHAZADO: no agrega valor suficiente frente "
+            f"al baseline jerárquico | skill_MAE={float(baseline_skill):.3f} "
+            f"< mínimo {CHAMPION_MIN_BASELINE_SKILL:.3f}. El modelo debe reducir "
+            "el MAE frente a medianas FUNDO+FORMATO aprendidas solo con train."
         )
         return False
 

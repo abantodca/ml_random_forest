@@ -58,10 +58,11 @@ from src.step_04_train.sample_weights import (  # noqa: E402
     compute_sample_weights,
 )
 from src.step_04_train.search_spaces import suggest_full_params  # noqa: E402
-from src.utils.sklearn_helpers import (  # noqa: E402
-    fit_with_optional_sample_weight,
-    index_or_none,
+from src.step_05_evaluate.baselines import (  # noqa: E402
+    HierarchicalMedianRegressor,
+    mae_skill_score,
 )
+from src.utils.sklearn_helpers import fit_with_optional_sample_weight  # noqa: E402
 
 # Logger inerte hasta que el caller configure handlers (idem data_loader).
 logger = logging.getLogger(__name__)
@@ -165,7 +166,8 @@ def _objective(
     preprocessor: Pipeline,
     inner_cv,
     model_type: str,
-    sample_weights_train: np.ndarray | None = None,
+    use_sample_weights: bool = True,
+    variety_cfg=None,
     strat_label_train: pd.Series | None = None,
     n_rows: int | None = None,
 ) -> float:
@@ -173,9 +175,8 @@ def _objective(
 
     Inner CV manual (no `cross_val_score`) porque sklearn no splitea
     sample_weight por fold y lo trataria como un kwarg estatico. Cuando
-    `sample_weights_train` es None se pasa sample_weight=None al fit
-    (degeneracion natural -> equivalente a `cross_val_score` sin pesos,
-    pero sin la rama paralela que duplicaria codigo).
+    Los pesos se recalculan con ``yt`` dentro de cada inner fold. Así ni los
+    bins del target ni la temporada derivada consultan el target de validación.
 
     `inner_cv` puede ser `KFold` o `StratifiedKFold`. Si es Stratified, hay
     que pasarle el `strat_label_train` (alineado con X_train por posicion).
@@ -203,7 +204,22 @@ def _objective(
         yv = y_train.iloc[te_i]
         pipe_local = _build_pipeline(preprocessor, model_type)
         pipe_local.set_params(**params)
-        sw_fold = index_or_none(sample_weights_train, tr_i)
+        # Fold-local: las frecuencias/bins de y son estadísticas aprendidas.
+        # Calcularlas con todo el outer-train filtraría la distribución del
+        # inner-validation hacia el fit.
+        sw_fold = _maybe_sample_weights(
+            yt,
+            use_sample_weights,
+            logger,
+            X=Xt,
+            high_season_months=getattr(
+                variety_cfg, "sample_weight_high_season_months", None
+            ),
+            high_season_toggle=getattr(
+                variety_cfg, "sample_weight_high_season", None
+            ),
+            emit_log=False,
+        )
         fit_with_optional_sample_weight(pipe_local, Xt, yt, sample_weight=sw_fold)
         val_mae = float(mean_absolute_error(yv, pipe_local.predict(Xv)))
         scores.append(val_mae)
@@ -290,9 +306,11 @@ class _OuterFoldResults:
     mae_train: list[float]
     gap: list[float]
     r2: list[float]
+    baseline_mae: list[float]
     best_params: list[dict[str, object]]
     oof_pred: np.ndarray
     oof_fold: np.ndarray
+    baseline_oof_pred: np.ndarray
 
 
 def _maybe_sample_weights(
@@ -302,6 +320,7 @@ def _maybe_sample_weights(
     X: pd.DataFrame | None = None,
     high_season_months: tuple | None = None,
     high_season_toggle: bool | None = None,
+    emit_log: bool = True,
 ) -> np.ndarray | None:
     """Computa sample_weights por decil del target o devuelve None.
 
@@ -363,11 +382,12 @@ def _maybe_sample_weights(
         extra_tags += (
             f" | high_season ON (meses={list(meses_pico)} x{SAMPLE_WEIGHT_HIGH_SEASON_BOOST})"
         )
-    logger.info(
-        f"Sample weights ON | n_bins={SAMPLE_WEIGHT_BINS} | "
-        f"cap={SAMPLE_WEIGHT_CAP}{extra_tags} | "
-        f"min={sw.min():.3f} max={sw.max():.3f} mean={sw.mean():.3f}"
-    )
+    if emit_log:
+        logger.info(
+            f"Sample weights ON | n_bins={SAMPLE_WEIGHT_BINS} | "
+            f"cap={SAMPLE_WEIGHT_CAP}{extra_tags} | "
+            f"min={sw.min():.3f} max={sw.max():.3f} mean={sw.mean():.3f}"
+        )
     return sw
 
 
@@ -380,7 +400,8 @@ def _run_outer_cv_loop(
     outer_cv,
     inner_cv,
     strat_label: pd.Series | None,
-    sample_weights: np.ndarray | None,
+    use_sample_weights: bool,
+    variety_cfg,
     n_trials: int,
     final_trials: int,
     skip_final_tuning: bool,
@@ -405,9 +426,11 @@ def _run_outer_cv_loop(
         mae_train=[],
         gap=[],
         r2=[],
+        baseline_mae=[],
         best_params=[],
         oof_pred=np.full(n, np.nan, dtype=float),
         oof_fold=np.full(n, -1, dtype=int),
+        baseline_oof_pred=np.full(n, np.nan, dtype=float),
     )
     for fold_idx, (train_idx, test_idx) in enumerate(
         outer_cv.split(X, strat_label),
@@ -418,7 +441,19 @@ def _run_outer_cv_loop(
 
         X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
         y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
-        sw_tr = index_or_none(sample_weights, train_idx)
+        sw_tr = _maybe_sample_weights(
+            y_tr,
+            use_sample_weights,
+            logger,
+            X=X_tr,
+            high_season_months=getattr(
+                variety_cfg, "sample_weight_high_season_months", None
+            ),
+            high_season_toggle=getattr(
+                variety_cfg, "sample_weight_high_season", None
+            ),
+            emit_log=False,
+        )
         # strat_label es pd.Series: requiere .iloc, no encaja en index_or_none.
         strat_tr = strat_label.iloc[train_idx] if strat_label is not None else None
 
@@ -433,7 +468,8 @@ def _run_outer_cv_loop(
                 preprocessor,
                 inner_cv,
                 model_type,
-                sample_weights_train=sw_tr,
+                use_sample_weights=use_sample_weights,
+                variety_cfg=variety_cfg,
                 strat_label_train=strat_tr,
                 # n_rows = n de la VARIEDAD (no del fold): la capacidad se acota
                 # por el tamano del dataset completo, estable entre folds.
@@ -459,13 +495,19 @@ def _run_outer_cv_loop(
         y_pred_tr = best_pipeline.predict(X_tr)
         mae_train = float(mean_absolute_error(y_tr, y_pred_tr))
 
+        baseline = HierarchicalMedianRegressor().fit(X_tr, y_tr)
+        baseline_pred = baseline.predict(X_te)
+        baseline_mae = float(mean_absolute_error(y_te, baseline_pred))
+
         res.mae_test.append(mae_test)
         res.mae_train.append(mae_train)
         res.gap.append(mae_test - mae_train)
         res.r2.append(r2_test)
+        res.baseline_mae.append(baseline_mae)
         res.best_params.append(dict(study.best_params))
         res.oof_pred[test_idx] = y_pred_te
         res.oof_fold[test_idx] = fold_idx
+        res.baseline_oof_pred[test_idx] = baseline_pred
 
         fold_dt = time.perf_counter() - fold_t0
         elapsed = time.perf_counter() - t0
@@ -475,6 +517,7 @@ def _run_outer_cv_loop(
         logger.info(
             f"Fold {fold_idx} | MAE_test={mae_test:.4f} | MAE_train={mae_train:.4f} | "
             f"gap={mae_test - mae_train:+.4f} | R2={r2_test:.4f} | "
+            f"baseline_MAE={baseline_mae:.4f} | "
             f"dt={_format_eta(fold_dt)} | eta_resto={_format_eta(eta)}"
         )
     return res
@@ -482,9 +525,11 @@ def _run_outer_cv_loop(
 
 def _aggregate_nested_metrics(res: _OuterFoldResults) -> dict[str, float]:
     """Agrega listas por-fold en el dict que consume el HTML / business audit."""
+    model_mae = float(np.mean(res.mae_test))
+    baseline_mae = float(np.mean(res.baseline_mae))
     return {
         # backward-compatible (lo que ya leia el HTML)
-        "nested_cv_mae_mean": float(np.mean(res.mae_test)),
+        "nested_cv_mae_mean": model_mae,
         "nested_cv_mae_std": float(np.std(res.mae_test)),
         "nested_cv_r2_mean": float(np.mean(res.r2)),
         "nested_cv_r2_std": float(np.std(res.r2)),
@@ -493,6 +538,9 @@ def _aggregate_nested_metrics(res: _OuterFoldResults) -> dict[str, float]:
         "nested_cv_mae_train_std": float(np.std(res.mae_train)),
         "nested_cv_gap_mean": float(np.mean(res.gap)),
         "nested_cv_gap_std": float(np.std(res.gap)),
+        "baseline_hierarchical_mae_mean": baseline_mae,
+        "baseline_hierarchical_mae_std": float(np.std(res.baseline_mae)),
+        "baseline_skill_mae": mae_skill_score(model_mae, baseline_mae),
     }
 
 
@@ -503,7 +551,8 @@ def _temporal_honesty_check(
     preprocessor: Pipeline,
     model_type: str,
     best_params: dict[str, object],
-    sample_weights: np.ndarray | None,
+    use_sample_weights: bool,
+    variety_cfg,
     logger,
 ) -> dict[str, float]:
     """Chequeo honesto temporal post-tuning (Fase A.2, reporte dual).
@@ -555,16 +604,36 @@ def _temporal_honesty_check(
         n = len(y)
         oof_pred = np.full(n, np.nan, dtype=float)
         mae_folds = []
+        baseline_mae_folds = []
         for train_idx, test_idx in splitter.split(X):
             X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
             y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
-            sw_tr = index_or_none(sample_weights, train_idx)
+            sw_tr = _maybe_sample_weights(
+                y_tr,
+                use_sample_weights,
+                logger,
+                X=X_tr,
+                high_season_months=getattr(
+                    variety_cfg, "sample_weight_high_season_months", None
+                ),
+                high_season_toggle=getattr(
+                    variety_cfg, "sample_weight_high_season", None
+                ),
+                emit_log=False,
+            )
             pipe = _build_pipeline(preprocessor, model_type)
             pipe.set_params(**best_params)
             fit_with_optional_sample_weight(pipe, X_tr, y_tr, sample_weight=sw_tr)
             y_pred = pipe.predict(X_te)
             oof_pred[test_idx] = y_pred
             mae_folds.append(float(mean_absolute_error(y_te, y_pred)))
+
+            # El diagnóstico temporal necesita su propio punto de referencia.
+            # Reutilizar el baseline del CV estratificado sería mezclar dos
+            # preguntas distintas y volvería optimista el skill de forecast.
+            baseline = HierarchicalMedianRegressor().fit(X_tr, y_tr)
+            baseline_pred = baseline.predict(X_te)
+            baseline_mae_folds.append(float(mean_absolute_error(y_te, baseline_pred)))
 
         y_arr = np.asarray(y, dtype=float)
         base_mask = np.isfinite(oof_pred) & np.isfinite(y_arr)
@@ -586,12 +655,18 @@ def _temporal_honesty_check(
                 f"denominador < {denom_floor:.4f} (artefactos casi-cero); "
                 "R2/MAE las conservan."
             )
+        temporal_model_mae = float(np.mean(mae_folds))
+        temporal_baseline_mae = float(np.mean(baseline_mae_folds))
         metrics = {
             "temporal_mape_oof": mape_safe(
                 y_arr[base_mask], oof_pred[base_mask], min_denom=denom_floor
             ),
             "temporal_r2_oof": float(r2_score(y_arr[base_mask], oof_pred[base_mask])),
-            "temporal_mae_test_mean": float(np.mean(mae_folds)),
+            "temporal_mae_test_mean": temporal_model_mae,
+            "temporal_baseline_mae_mean": temporal_baseline_mae,
+            "temporal_baseline_skill_mae": mae_skill_score(
+                temporal_model_mae, temporal_baseline_mae
+            ),
             "temporal_n_oof": float(base_mask.sum()),
             "temporal_n_folds": float(k_folds),
             "temporal_mape_n_excluded": float(n_mape_excl),
@@ -600,6 +675,7 @@ def _temporal_honesty_check(
             f"Chequeo honesto temporal | MAPE_oof={metrics['temporal_mape_oof']:.2f}% | "
             f"R2_oof={metrics['temporal_r2_oof']:.4f} | "
             f"MAE_test={metrics['temporal_mae_test_mean']:.4f} | "
+            f"skill_baseline={metrics['temporal_baseline_skill_mae']:.3f} | "
             f"n_oof={int(metrics['temporal_n_oof'])} "
             f"(forecast de anio no visto; el stratified mide interpolacion)"
         )
@@ -617,7 +693,8 @@ def _pick_final_params(
     preprocessor: Pipeline,
     inner_cv,
     model_type: str,
-    sample_weights: np.ndarray | None,
+    use_sample_weights: bool,
+    variety_cfg,
     strat_label: pd.Series | None,
     final_trials: int,
     skip_final_tuning: bool,
@@ -674,7 +751,8 @@ def _pick_final_params(
             preprocessor,
             inner_cv,
             model_type,
-            sample_weights_train=sample_weights,
+            use_sample_weights=use_sample_weights,
+            variety_cfg=variety_cfg,
             strat_label_train=strat_label,
             n_rows=len(y),
         ),
@@ -777,6 +855,12 @@ def perform_nested_cv(
         inner_folds,
         random_state,
     )
+    outer_folds = outer_cv.get_n_splits(X)
+    if outer_folds < 1:
+        raise ValueError(
+            "La historia no permite construir ningún outer fold temporal; "
+            "revisa fechas y TEMPORAL_CV_MIN_TRAIN_YEARS."
+        )
 
     total_trials = outer_folds * n_trials + (0 if skip_final_tuning else final_trials)
     logger.info(
@@ -785,7 +869,12 @@ def perform_nested_cv(
         f"final_trials={0 if skip_final_tuning else final_trials} | "
         f"trials_total={total_trials}"
     )
-    if strat_label is not None:
+    if strat_strategy.startswith("temporal_"):
+        logger.info(
+            f"CV temporal | outer={strat_strategy} | inner=purged_date | "
+            f"gap_periods configurado"
+        )
+    elif strat_label is not None:
         logger.info(
             f"CV stratified by {strat_strategy} | "
             f"n_estratos={strat_label.nunique()} | "
@@ -795,15 +884,6 @@ def perform_nested_cv(
         logger.info(
             "CV NO estratificado (variedad sin variabilidad util en FUNDO/FORMATO; KFold normal)"
         )
-
-    sample_weights = _maybe_sample_weights(
-        y,
-        use_sample_weights,
-        logger,
-        X=X,
-        high_season_months=getattr(variety_cfg, "sample_weight_high_season_months", None),
-        high_season_toggle=getattr(variety_cfg, "sample_weight_high_season", None),
-    )
 
     # Warm-start (2026-06-25): sembrar la RONDA FINAL con el campeon ya
     # registrado de esta variedad+backend para que los params de produccion
@@ -837,7 +917,8 @@ def perform_nested_cv(
         outer_cv=outer_cv,
         inner_cv=inner_cv,
         strat_label=strat_label,
-        sample_weights=sample_weights,
+        use_sample_weights=use_sample_weights,
+        variety_cfg=variety_cfg,
         n_trials=n_trials,
         final_trials=final_trials,
         skip_final_tuning=skip_final_tuning,
@@ -862,7 +943,8 @@ def perform_nested_cv(
         preprocessor=preprocessor,
         inner_cv=inner_cv,
         model_type=model_type,
-        sample_weights=sample_weights,
+        use_sample_weights=use_sample_weights,
+        variety_cfg=variety_cfg,
         strat_label=strat_label,
         final_trials=final_trials,
         skip_final_tuning=skip_final_tuning,
@@ -885,10 +967,26 @@ def perform_nested_cv(
                 preprocessor=preprocessor,
                 model_type=model_type,
                 best_params=best_params,
-                sample_weights=sample_weights,
+                use_sample_weights=use_sample_weights,
+                variety_cfg=variety_cfg,
                 logger=logger,
             )
         )
+
+    # El refit final sí usa todo el dataset: aquí es correcto aprender los
+    # pesos con todo y. La evaluación de folds ya usó pesos fold-local.
+    sample_weights = _maybe_sample_weights(
+        y,
+        use_sample_weights,
+        logger,
+        X=X,
+        high_season_months=getattr(
+            variety_cfg, "sample_weight_high_season_months", None
+        ),
+        high_season_toggle=getattr(
+            variety_cfg, "sample_weight_high_season", None
+        ),
+    )
 
     final_pipeline = _fit_final_ensemble(
         preprocessor=preprocessor,
@@ -905,5 +1003,6 @@ def perform_nested_cv(
         "y_true": np.asarray(y, dtype=float),
         "y_pred": fold_results.oof_pred,
         "fold_id": fold_results.oof_fold,
+        "baseline_y_pred": fold_results.baseline_oof_pred,
     }
     return final_pipeline, best_params, nested_metrics, oof

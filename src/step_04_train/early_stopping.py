@@ -14,8 +14,9 @@ Diseno:
     que es el riesgo clasico de subclasear LGBM/XGB con params nuevos).
   - El comportamiento se controla por constantes de `src.config`
     (EARLY_STOPPING_*), NO son hiperparametros tuneables por Optuna.
-  - El holdout es un split aleatorio reproducible (random_state del
-    estimador) del train del fold. Con menos de EARLY_STOPPING_MIN_ROWS
+  - El holdout usa el tramo final del train, cuyo orden canónico es temporal.
+    Así el número de árboles se decide contra observaciones posteriores, no
+    contra una mezcla aleatoria de pasado y futuro. Con menos de EARLY_STOPPING_MIN_ROWS
     filas se cae a un fit normal sin early stopping (folds smoke).
   - El wrapper vive DENTRO del TTR: el `y` recibido ya esta en espacio
     log1p+cap, asi que la metrica de corte (l1/mae) es consistente con la
@@ -36,11 +37,10 @@ from xgboost import XGBRegressor
 
 from src.config import (
     EARLY_STOPPING_MIN_ROWS,
-    EARLY_STOPPING_MIN_VAL,
     EARLY_STOPPING_ROUNDS,
-    EARLY_STOPPING_VAL_FRACTION,
     RANDOM_STATE,
 )
+from src.step_04_train.validation_split import temporal_tail_holdout_indices
 
 logger = logging.getLogger(__name__)
 
@@ -72,15 +72,12 @@ def _log_overfit(est, name: str, X_tr, y_tr, X_va, y_va) -> None:
 
 
 def _holdout_indices(n_rows: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
-    """Devuelve (idx_train, idx_valid) con un shuffle reproducible."""
-    rng = np.random.RandomState(seed)
-    idx = rng.permutation(n_rows)
-    # Holdout = fraccion, pero con piso absoluto (EARLY_STOPPING_MIN_VAL) para
-    # que en n chico el eval_set no sea degenerado, capado a n/3 para no vaciar
-    # el train. En n grande domina la fraccion (POP identico).
-    n_val = min(max(int(n_rows * EARLY_STOPPING_VAL_FRACTION), EARLY_STOPPING_MIN_VAL), n_rows // 3)
-    n_val = max(1, n_val)
-    return idx[n_val:], idx[:n_val]
+    """Devuelve ``(train, valid)`` con el tramo final como validación.
+
+    ``seed`` se conserva en la firma por compatibilidad con callers y pickles
+    anteriores; la partición temporal es determinista.
+    """
+    return temporal_tail_holdout_indices(n_rows)
 
 
 def _take(obj, idx: np.ndarray):

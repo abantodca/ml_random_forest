@@ -12,6 +12,13 @@ de diagramas que complementa, sin duplicar, las fuentes autoritativas:
 > Los diagramas son Mermaid: GitHub los renderiza nativo. En local, cualquier
 > previsualizador de Markdown con Mermaid (VS Code + extensión) los muestra.
 
+> [!IMPORTANT]
+> La topología se mantiene: AWS Batch entrena; ECS Fargate sirve MLflow, API,
+> UI y reports; RDS guarda metadata; S3 guarda datos y artifacts. El perfil
+> económico con ALB público por HTTP se considera laboratorio. Para producción
+> expuesta son obligatorios HTTPS, autenticación, pruebas y los controles de la
+> Parte 10 de [`02-produccion-aws.md`](02-produccion-aws.md).
+
 ---
 
 ## 1. Contexto del sistema (C4 · nivel 1)
@@ -39,8 +46,8 @@ graph TB
     negocio -->|navegador| ui
     ui -->|REST interno| api
     trainer -->|registra rnd-forest-&lt;variety&gt;| mlflow
-    api -->|carga modelos| mlflow
-    trainer & api & mlflow --> s3
+    api -->|carga models:/...@champion| mlflow
+    trainer & mlflow --> s3
     mlflow & api --> pg
 ```
 
@@ -80,7 +87,7 @@ graph TB
     trainer -->|log_model + sync| mlflowSrv
     trainer -->|HTML/Excel| nginx
     trainer --> s3
-    api -->|REST 8000| mlflowSrv
+    api -->|MLflow API + artifacts proxy| mlflowSrv
     api -->|forecasts| pg
     ui -->|service discovery<br/>api.ml-training.local:8000| api
     mlflowSrv --> pg
@@ -170,6 +177,7 @@ sequenceDiagram
     participant CH as select_champion (step_05)
     participant ML as MLflow (PG+S3)
     participant N as nginx reports
+    participant CI as GitHub Actions gate
 
     Op->>T: task train VARIETIES=POP TUNING=prod
     T->>T: load → clean → features (Pipeline)
@@ -180,9 +188,12 @@ sequenceDiagram
     end
     T->>CH: gate gap → OOF MAPE → wall time
     CH-->>T: campeón de la variedad
-    T->>ML: register rnd-forest-POP (si pasa gate)
+    T->>ML: register rnd-forest-POP + validation_status=pending
     T->>N: Winner_POP_*.html + index.html
     T->>ML: sync artifacts/ + reports/ a S3
+    CI->>ML: valida lineage + métricas vs @champion
+    CI->>CI: approval environment production
+    CI->>ML: set alias champion -> nueva versión
     T-->>Op: champion + reporte
 ```
 
@@ -201,7 +212,7 @@ sequenceDiagram
 
     U->>UI: elige variedad + inputs
     UI->>API: POST /api/forecasts (service discovery)
-    API->>ML: carga rnd-forest-<variety> (cache)
+    API->>ML: carga models:/rnd-forest-<variety>@champion
     API->>API: pipeline.predict + bandas conformes
     API->>PG: persiste forecast
     API-->>UI: punto + intervalo + drift
@@ -241,24 +252,46 @@ graph TB
     s3[("S3")]
     ecr["ECR ×5"]
     alb --> apis & uis & mlflows & reportss
-    ecs --> rds & s3
-    batch --> rds & s3
+    mlflows --> rds & s3
+    apis --> rds
+    batch -->|HTTP interno · Cloud Map| mlflows
+    batch --> s3
     ecr -.imágenes.-> ecs & batch
 ```
+
+**Fronteras de red**
+
+- ALB es la única entrada. En producción escucha HTTPS y autentica; 80 solo
+  redirige.
+- ECS, Batch y RDS viven en subnets privadas y no reciben IP pública.
+- API y Batch llaman a MLflow por Cloud Map; no hacen hairpin por el ALB.
+- Solo MLflow y API llegan a RDS, cada uno con usuario de base separado.
+- El artifact store de MLflow se consume por proxy. `/artifacts/*` no se
+  publica como directorio navegable.
 
 Módulos Terraform: `network · storage · mlflow · api · ui · reports · batch ·
 scheduler · lambdas · monitoring · cicd · _shared`. El módulo **`cicd` es
 opcional**: `enable_cicd=false` (default) levanta todo el stack **sin** depender
 del bootstrap OIDC (`task infra:bootstrap-oidc`); se activa después con
-`enable_cicd=true`. Detalle CI/CD en `[`02-produccion-aws.md` #3.10](02-produccion-aws.md#parte-3--modulos-terraform)`.
+`enable_cicd=true`. Detalle CI/CD en `[`02-produccion-aws.md` #3.11](02-produccion-aws.md#parte-3--modulos-terraform)`.
 
-**Modelo de costo (dos palancas, sin cambiar la topología):**
-- **`task wake/sleep`** — para pausas cortas: el scheduler escala Fargate a 0 y
-  para el RDS, pero **mantiene NAT + ALB** (wake instantáneo). Piso ~$50/mes.
-  Con `RELEASE_NET=true` (default) también libera ALB+NAT → piso ~$4/mes.
-- **`task teardown`** — para idle largo: destruye los módulos volátiles (**el
-  RDS incluido**, respaldándolo antes) y libera el NAT preservando VPC/storage.
-  Piso ~$1/mes. `task rebuild` lo recrea **restaurando el RDS del backup**.
+**Modelo de costo (sin cambiar la topología).** El stack opera **miércoles y
+jueves, 08:00-16:00 PET** (`workdays_cron = "WED,THU"`) y se destruye entre
+ventanas. Los importes de `02-produccion-aws.md` son una estimación fechada y
+deben recalcularse con Pricing Calculator + Cost Explorer. Las palancas, en
+orden de impacto:
+- **`task teardown` / `task rebuild`** — **el ciclo semanal**: `teardown` el
+  jueves destruye los módulos volátiles (**el RDS incluido**, respaldándolo
+  antes) y libera ALB + NAT preservando VPC/storage; `rebuild` el miércoles los
+  recrea **restaurando el RDS del backup**. Piso ~$1/mes mientras tanto. Acá
+  está el 90% del ahorro: ALB + NAT facturan mientras **existan**, aunque el
+  scheduler haya apagado todo lo demás.
+- **Scheduler (start/stop)** — dentro de esos dos días apaga Fargate + RDS fuera
+  de la ventana. Solo alcanza la noche del miércoles: ~$5/mes.
+- **`task wake/sleep`** — para pausas cortas de 1-2 noches, **no para el ciclo
+  semanal** (la pausa jueves→miércoles roza el auto-arranque del RDS a los 7
+  días). Libera ALB+NAT por default → piso ~$4/mes; con `RELEASE_NET=false`
+  mantiene la red para wake instantáneo → piso ~$50/mes.
 - **Fargate Spot** en `reports` + `ui` (stateless, ~70% más baratos); MLflow y
   API quedan on-demand a propósito (MLflow es crítico durante runs largos).
 - **RDS** `db.t4g.small` (no `micro`): hostea MLflow + `forecasts`, con
@@ -317,13 +350,16 @@ completo, en los [ADR](adr/).
 
 | # | Invariante | Por qué | ADR |
 |---|---|---|---|
-| 1 | `src/` única fuente de verdad; API la `COPY`a (no vendoring) | trainer y API comparten pipeline; vendoring → drift silencioso | [005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md) |
-| 2 | El sistema elige el campeón; sin flag para forzar backend | decisión auditable y reproducible | [002](adr/ADR-002-campeon-automatico.md) |
-| 4 | No renombrar `step_XX_verbo/` | paths horneados en `.joblib` serializados | [005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md) |
-| 6 | ALB por prefijos específicos, nunca `/api/*` | MLflow es dueño de `/api/2.0/mlflow-artifacts/*` | [006](adr/ADR-006-ruteo-alb-por-prefijos.md) |
-| 8 | Prefijo `rnd-forest-<variety>` es contrato trainer↔API | la API carga por ese nombre | — |
-| 9 | Lags **dentro** del Pipeline | evita leakage entre folds de CV | [007](adr/ADR-007-lags-dentro-del-pipeline.md) |
-| 1/3 | MLflow backend **siempre** PG+S3 | nunca `file://mlruns`, sqlite, LocalStack | [001](adr/ADR-001-mlflow-backend-postgres-s3.md) · [003](adr/ADR-003-s3-real-sin-localstack.md) |
+| 1 | `src/` única fuente de verdad; API la `COPY`a | evita drift trainer/API | [005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md) |
+| 2 | El sistema elige el candidato; el alias `@champion` solo cambia por el gate | decisión auditable y rollback simple | [002](adr/ADR-002-campeon-automatico.md) |
+| 3 | No renombrar `step_XX_verbo/` sin migración | paths horneados en `.joblib` | [005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md) |
+| 4 | ALB por prefijos específicos, nunca `/api/*` | MLflow posee `/api/2.0/mlflow-artifacts/*` | [006](adr/ADR-006-ruteo-alb-por-prefijos.md) |
+| 5 | `rnd-forest-<variety>` y alias `champion` son contrato trainer↔API | la API carga `models:/...@champion` | — |
+| 6 | Lags y preprocessing se ajustan dentro del Pipeline | evita leakage entre folds | [007](adr/ADR-007-lags-dentro-del-pipeline.md) |
+| 7 | MLflow backend siempre PG + artifacts proxy S3 | un solo camino local/prod; clientes sin acceso directo al store MLflow | [001](adr/ADR-001-mlflow-backend-postgres-s3.md) · [003](adr/ADR-003-s3-real-sin-localstack.md) |
+| 8 | Batch habla con MLflow por Cloud Map, nunca con Postgres | mantiene la frontera del tracking server y least privilege | — |
+| 9 | Todo run registra commit, digest, seed y dataset key/VersionId/SHA | reproducibilidad y lineage recuperable | — |
+| 10 | Serving registra la versión cargada e invalida cache al mover `@champion` | promoción efectiva y observable | — |
 
 ---
 
@@ -334,13 +370,13 @@ descarte con su **punto de cruce**: la condición concreta que lo volvería corr
 
 | No se usa | Qué costaría | Por qué no, hoy | Punto de cruce |
 |---|---|---|---|
-| **SageMaker** (training o endpoints) | ~2× el cómputo equivalente + lock-in del formato | Batch corre el **mismo contenedor** que probaste en local. SageMaker exige empaquetar a su manera y rompe la paridad local↔prod que sostiene todo el Tramo I | Cuando necesites autoscaling de inferencia real o multi-model endpoints |
+| **SageMaker** (training o endpoints) | servicio y modelo operativo adicional | Batch ejecuta el mismo contrato OCI y ya satisface la escala actual | Cuando el valor de endpoints administrados, Model Monitor o capacidades específicas supere el costo de migración |
 | **Step Functions** | ~$0 a este volumen | La orquestación cabe en Task + Lambda dispatcher. Una máquina de estados para "entrená N variedades" es infraestructura sin problema que resolver | Cuando el pipeline tenga ramas condicionales y reintentos por paso |
 | **Feature store** (SageMaker FS / Feast) | ~$50+/mes + un servicio más | Las features se generan **dentro** del Pipeline y se serializan con él ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)). Un feature store agrega la sincronización train/serving que hoy no existe porque no hace falta | Cuando haya features online, o varios equipos consumiendo las mismas |
 | **Kubernetes / EKS** | ~$73/mes solo el control plane | ECS Fargate cubre 4 servicios stateless sin plano de control que mantener | Cuando el equipo ya opere EKS para otra cosa |
 | **Multi-AZ en RDS** | ~2× el costo del RDS | El RPO real lo da el backup del ciclo teardown/rebuild ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)). Una caída de AZ cuesta un rebuild, no datos | Cuando la API pase a ser crítica de negocio en horario continuo |
-| **Airflow / MWAA** | ~$350/mes (MWAA) | No hay DAGs: hay un job de training disparado por cron o a mano | Cuando haya dependencias entre pipelines de varios equipos |
-| **Tests en CI** | — | Ver [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). **No es una decisión de arquitectura, es deuda asumida y fechada** | Ya. Es lo primero que agregaría |
+| **Airflow / MWAA** | otro plano de control | No hay DAGs: existe un job parametrizado con un único flujo | Cuando aparezcan dependencias, backfills y múltiples pipelines/equipos |
+| **Otro framework de testing** | complejidad adicional | `pytest` cubre unitarios, contratos e integración actuales | Cuando una necesidad concreta justifique otra herramienta |
 
 ## 9. Los gotchas que te van a morder
 
@@ -353,12 +389,17 @@ Cosas que ya fallaron o que fallan de forma que el mensaje de error no explica.
 | 3 | Mover el cómputo de lags al loader | el MAPE de CV **mejora** — y es mentira | Los lags van dentro del Pipeline ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)) |
 | 4 | Leer env flags en `transform()` | el `.joblib` produce columnas distintas en otra máquina | Hornear flags en `flags_` durante el `fit` ([ADR-007](adr/ADR-007-lags-dentro-del-pipeline.md)) |
 | 5 | Renombrar un `step_XX_verbo/` | los `.joblib` viejos dejan de deserializar | No se renombran ([ADR-005](adr/ADR-005-nombres-step-xx-contrato-serializacion.md)) |
-| 6 | `random_password` del RDS dentro de `module.mlflow` | el rebuild restaura el backup y **no autentica**: backup inservible | El secreto vive en `envs/prod/` ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)) |
+| 6 | `random_password` del RDS dentro de `module.mlflow` | el rebuild restaura el backup y no autentica hasta rotar | El secret del ciclo vive en `envs/prod/`; el state sigue siendo sensible ([ADR-009](adr/ADR-009-rds-secret-fuera-del-modulo.md)) |
 | 7 | `teardown` con el RDS parado | `InvalidDBInstanceState`: no se puede respaldar una instancia detenida | `ensure_rds_available` lo re-arranca antes de respaldar (`tasks/lib/nuke.sh`) |
 | 8 | `snapshot_identifier` sin `ignore_changes` | cualquier apply posterior **recrea el RDS** | Es `ForceNew`: el `ignore_changes` es obligatorio |
 | 9 | `destroy` usado para apagar y volver | respalda el RDS pero **vacía S3**: los artifacts no vuelven | Para el ciclo recurrente, `teardown` ([`02-produccion-aws.md` #8.2.0](02-produccion-aws.md)) |
 | 10 | Cambiar `MODEL_REGISTRY_PREFIX` de un lado solo | la API no encuentra los modelos que el trainer registró | Es un contrato: se cambia en los dos lados a la vez |
 | 11 | Correr `python main.py` en el host en vez del contenedor | resultados que no reproducen los de producción | Las dependencias pineadas viven en la imagen |
+| 12 | Batch con ingress a RDS | rompe la frontera MLflow y amplía permisos | Batch → MLflow:5000 por Cloud Map; solo MLflow/API → RDS |
+| 13 | `--default-artifact-root` junto con proxy | clientes reciben URI S3 y necesitan permisos inesperados | Proxy = `--artifacts-destination`; directo = `--default-artifact-root --no-serve-artifacts` |
+| 14 | Desplegar `latest` o reconstruir después del gate | no se sabe qué bits están corriendo | tag SHA/digest único y registrado en MLflow |
+| 15 | Mover `@champion` sin invalidar cache | API sigue sirviendo la versión anterior | cache versionada + redeploy/prediction smoke |
+| 16 | ALB HTTP público sin auth | tracking, reportes o datos quedan expuestos | completar Parte 10 antes de Internet |
 
 ---
 

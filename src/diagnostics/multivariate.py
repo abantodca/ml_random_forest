@@ -95,33 +95,58 @@ def compute_mutual_information(
     y: pd.Series,
     discrete_threshold: int = 10,
 ) -> list[MutualInfoResult]:
-    """Mutual information de cada feature numerica vs target.
+    """Información mutua de features numéricas, categóricas y temporales.
 
-    `discrete_threshold`: features con <= N unique values se tratan como
-    discretas (cardinalidad baja). El resto, continuas (knn-based MI).
+    Los NaN numéricos se imputan con la mediana de cada columna; no se eliminan
+    filas completas por el missing de otra variable. Las categóricas se
+    codifican como enteros discretos y las fechas como días desde epoch.
     """
     from sklearn.feature_selection import mutual_info_regression
 
-    df = pd.concat([X, y.rename("__target__")], axis=1).dropna()
-    if df.empty:
+    target = pd.to_numeric(y, errors="coerce")
+    valid_target = target.notna() & np.isfinite(target.to_numpy(dtype=float))
+    if not valid_target.any():
         return []
 
-    numeric = df.select_dtypes(include=[np.number]).drop(columns=["__target__"], errors="ignore")
-    if numeric.empty:
+    X_valid = X.loc[valid_target].reset_index(drop=True)
+    target_valid = target.loc[valid_target].reset_index(drop=True)
+    prepared = pd.DataFrame(index=X_valid.index)
+    discrete_mask: list[bool] = []
+
+    for column in X_valid.columns:
+        series = X_valid[column]
+        if pd.api.types.is_datetime64_any_dtype(series):
+            dates = pd.to_datetime(series, errors="coerce")
+            fill = dates.dropna().median() if dates.notna().any() else pd.Timestamp("1970-01-01")
+            prepared[column] = (
+                dates.fillna(fill).astype("int64") / 86_400_000_000_000
+            ).astype(float)
+            discrete_mask.append(False)
+        elif pd.api.types.is_numeric_dtype(series):
+            numeric = pd.to_numeric(series, errors="coerce")
+            fill = float(numeric.median()) if numeric.notna().any() else 0.0
+            prepared[column] = numeric.fillna(fill).astype(float)
+            discrete_mask.append(numeric.nunique(dropna=True) <= discrete_threshold)
+        else:
+            values = series.astype("string").fillna("__MISSING__")
+            codes, _ = pd.factorize(values, sort=True)
+            prepared[column] = codes.astype(float)
+            discrete_mask.append(True)
+
+    if prepared.empty:
         return []
 
-    discrete_mask = [numeric[c].nunique() <= discrete_threshold for c in numeric.columns]
     try:
         mi = mutual_info_regression(
-            numeric.values,
-            df["__target__"].values,
+            prepared.values,
+            target_valid.values,
             discrete_features=np.array(discrete_mask),
             random_state=42,
         )
     except Exception:
         return []
 
-    pairs = sorted(zip(numeric.columns, mi, strict=True), key=lambda t: t[1], reverse=True)
+    pairs = sorted(zip(prepared.columns, mi, strict=True), key=lambda t: t[1], reverse=True)
     return [MutualInfoResult(feature=c, mi=float(v), rank=i + 1) for i, (c, v) in enumerate(pairs)]
 
 

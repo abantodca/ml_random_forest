@@ -2,8 +2,9 @@
 
 > Tramo I del stack: levantar **todo el sistema en tu máquina** —trainer, API, UI, MLflow y
 > Postgres— con `docker compose`, y entrenar una variedad de punta a punta. Es el entorno donde se
-> valida **el mismo binario** que después se promueve a AWS Batch: si el smoke run pasa acá, pasa
-> allá.
+> valida el **mismo contrato de imagen** que después se publica en ECR y se ejecuta en AWS Batch.
+> El smoke local reduce el riesgo, pero no garantiza por sí solo que AWS pase: IAM, red, cuotas,
+> arquitectura de CPU y servicios administrados se validan otra vez en el smoke productivo.
 >
 > La regla que gobierna este tramo: **local y producción se diferencian por configuración, nunca por
 > código**. El backend de MLflow es Postgres + S3 en los dos lados
@@ -24,10 +25,10 @@ ocurre adentro, y un `python main.py` corrido en el host —sin las dependencias
 imagen— produce resultados que no son los que vas a ver en producción.
 
 **Qué NO cubre este tramo.** Nada de AWS más allá de los dos buckets sandbox: ni Terraform, ni Batch,
-ni ECS, ni CI/CD. Todo eso es [Tramo II](02-produccion-aws.md). Y no cubre tests: el repo **no tiene
-suite** desde el 2026-07-01, y el porqué —con lo que se perdió al retirarla— está en
-[ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). La validación acá es lint + smoke run + los gates de
-modelo.
+ni ECS, ni CI/CD. Todo eso es [Tramo II](02-produccion-aws.md). La suite automatizada todavía es
+deuda conocida; mientras no exista, este entorno es un baseline operativo, no una certificación de
+producción. Lint, smoke runs y gates estadísticos no reemplazan pruebas unitarias, de integración y
+de contratos. El mínimo exigible se define en [2.A](#2a-baseline-de-calidad-mlops).
 
 ## Convenciones de las dos guías
 
@@ -40,9 +41,10 @@ Valen igual para este documento y para [`02-produccion-aws.md`](02-produccion-aw
   Capítulo 4.
 - **Convención de comandos**: todos los bloques `bash` se ejecutan desde la raíz del repo. En
   Windows, exclusivamente desde **WSL Ubuntu** (no Git Bash, no PowerShell).
-- **Una sola imagen**: el `Dockerfile` que usa `task build` localmente es el **mismo binario** que
-  `task ecr:build IMG=trainer` empuja a ECR en producción. Es la propiedad de la que depende todo lo
-  demás.
+- **Una sola receta de imagen**: local y CI usan el mismo `Dockerfile`. Una reconstrucción no es
+  necesariamente el mismo binario byte a byte, porque tags base y repositorios pueden cambiar. En
+  producción se despliega la imagen construida por CI mediante tag SHA inmutable —idealmente por
+  digest— y ese digest se registra en MLflow.
 - **Convención de verificación**: cada bloque importante cierra con un comando o tabla que valida el
   estado. **Si falla, parar y resolver antes de seguir.**
 - **Re-ejecutabilidad**: toda sección que produce archivos o recursos AWS es idempotente (correr N
@@ -121,22 +123,24 @@ Container del trainer
   │ 4. log a MLflow (Postgres backend + S3 artifacts)
   │ 5. sync_to_s3(artifacts/, reports/) a S3_ARTIFACTS_BUCKET
   ▼
-MLflow Model Registry: nueva versión en stage "None"
+MLflow Model Registry: nueva versión con tag validation_status=pending
   │ workflow_dispatch training.yml (action=promote)
   ▼
-Quality gate (MAPE < umbral && A/B contra Production actual)
+Quality gate (calidad absoluta + comparación contra alias @champion)
   │ approval humano en GitHub Environments
   ▼
-MLflow Model Registry: versión transicionada a "Production"
+MLflow Model Registry: alias @champion reasignado de forma auditable
 ```
 
 > **Sobre el Model Registry en Tramo Local.** El diagrama es el flujo
 > **productivo** (Tramo II). En local, `task train` loggea runs al MLflow del
 > compose y sube el `.joblib` a S3 sandbox, **pero no registra el modelo en el
-> Registry** — deliberado: versiones/stages/transitions no aportan mientras
-> iterás código. El patch de Parte 5 inyecta `mlflow.register_model()` al
-> promover a Tramo II, y de ahí cada run aparece como versión nueva en stage
-> `None` para el quality gate de Parte 7. Para verlo en local sin esperar,
+> Registry** — deliberado: versionar cada iteración local solo agrega ruido.
+> En Tramo II el trainer registra el campeón y lo marca con
+> `validation_status=pending`; el quality gate de Parte 7 reasigna el alias
+> `@champion` cuando la versión pasa. Los stages `None`, `Staging` y
+> `Production` están deprecados en MLflow y no forman parte del flujo nuevo.
+> Para verlo en local sin esperar,
 > apuntar el trainer al MLflow productivo vía `docker-compose.override.yml.example`.
 
 ### 1.5 Contrato del run MLflow
@@ -150,10 +154,11 @@ puede auditar end-to-end sin inspeccionar el código del trainer:
 
 | Tag | Valor | Por qué importa |
 |---|---|---|
-| `git_commit` | SHA corto del `HEAD` al lanzar el run | Reproducibilidad del binario. |
+| `git_commit` | SHA completo del `HEAD` al lanzar el run | Une el modelo con una revisión inequívoca. |
 | `git_dirty` | `true` / `false` (`git diff --quiet HEAD`) | Si `true`, el run **no es promovible**: hay código sin commit. |
-| `dataset_sha256` | hash SHA-256 de `data/training/DB-HISTORICA.xlsx` | Distingue dos runs con mismo `git_commit` pero data distinta. |
+| `dataset_sha256` | SHA-256 completo (64 hex) de `data/training/DB-HISTORICA.xlsx` | Distingue dos runs con mismo `git_commit` pero data distinta. |
 | `dataset_n_rows` | filas totales agregadas sobre todas las hojas | Detecta truncamientos accidentales del Excel. |
+| `dataset_s3_version_id` | VersionId de S3 o `local` | Permite recuperar exactamente el objeto usado aunque se sobrescriba la key. |
 | `tuning` | `smoke` / `dev` / `prod` / `prod_xl` | Contexto de búsqueda (presupuesto de trials). |
 | `variety` | `POP` / `VENTURA` / … | Necesario porque el experimento es uno por variedad. |
 
@@ -172,7 +177,7 @@ puede auditar end-to-end sin inspeccionar el código del trainer:
 - `mape_test` (sobre el holdout final).
 - `gap_oof_test` (diferencia absoluta — detecta sobreajuste al CV).
 
-> **Verificación**: el #4.10 check #7 confirma que estos 8 tags están
+> **Verificación**: el #4.10 check #7 confirma que estos siete tags están
 > presentes después de `task train`. Si alguno falta, el run no
 > califica para `task ops:promote` (Parte 7) — el gate lo
 > rechazará.
@@ -182,11 +187,14 @@ puede auditar end-to-end sin inspeccionar el código del trainer:
 | Configuración | Costo mensual aproximado |
 |---|---|
 | **Tramo Local (laptop + 2 buckets sandbox)** | **~$0.05** (sólo storage S3) |
-| Tramo II — Scheduler L-V 08-12 PET (default, incluye API + UI) | ~$75 |
+| Tramo II — Ciclo Mi+Ju 08-16 PET + teardown semanal (default, incluye API + UI) | ~$29 |
+| Tramo II — Mismo scheduler pero SIN teardown (ALB+NAT 24/7) | ~$71 |
 | Tramo II — Sin scheduler (24/7) | ~$195 |
-| Tramo II — Hibernado (tear-down: NAT liberado en teardown vía `enable_nat=false`, solo storage) | ~$3 |
+| Tramo II — Hibernado (tear-down: NAT liberado en teardown vía `enable_nat=false`, solo storage) | ~$1 |
 
 Detalle en Parte 9 (costos por servicio y por modo de lifecycle).
+Son estimaciones de referencia: recalcular región, fecha, horas reales, IPv4,
+NAT/GB, ALB LCU, snapshots, logs y métricas antes de aprobar presupuesto.
 
 ---
 
@@ -201,21 +209,62 @@ alguna implica un ADR previo y reescritura de las secciones afectadas.
 | Compute training | Batch + EC2 c6i.2xlarge, queues Spot + On-Demand, `retry=2`. El dispatcher rutea `prod_xl` → On-Demand (sin interrupciones para jobs de ~4-6h) y el resto (`smoke`/`dev`/`prod`) → Spot. El default de `task batch:train` es `prod_xl` (converge con local) → On-Demand; usá `TUNING=prod` para Spot (−70% costo). | −70% costo con Spot; retry cubre interrupciones (~5-10% en c6i.2xlarge). | Fargate Spot, o `g5.xlarge` si pasás a DL. |
 | Compute serving | ECS Fargate | Sin gestión de host, autoscale, integración nativa con ALB. | EC2 con AMI custom para aceleración. |
 | Backend MLflow | Postgres + S3 (artifacts) | Estándar industria; soporta concurrencia. | Filesystem sólo en dev. |
-| RDS | Postgres 15, `db.t4g.small`, single-AZ | ~$23/mes 24/7 (mucho menos con scheduler); hostea MLflow + la base `forecasts` de la API. | Multi-AZ (hardening, futuro). |
-| Auto on/off de **servicios** | Scheduler EventBridge L-V 08-12 PET wake/sleep de RDS + Fargate (MLflow + Reports); chequeo de Batch RUNNING antes de apagar. | UI 4 h/día; training off-window despierta servicios on-demand. **Esto es scheduling de servicios, no de jobs de training** (ver fila "Trigger training"). | 24/7 si hay equipo distribuido. |
-| TLS / WAF / Multi-AZ | NO (ALB :80 HTTP, sin WAF, RDS single-AZ) | Default barato. MLflow con basic auth + SG restrictivo. | TLS/WAF/Multi-AZ antes de exponer a Internet (hardening, futuro). |
-| Egress privado | NAT GW single-AZ ($32/mes) | Setup simple si tráfico <10 GB/mes. | VPC endpoints (hardening, futuro). |
+| RDS | Postgres 15, `db.t4g.small`, single-AZ | ~$23/mes 24/7, ~$2.21 con el ciclo Mi+Ju (69h encendido); hostea MLflow + la base `forecasts` de la API. | Multi-AZ (hardening, futuro). |
+| Auto on/off de **servicios** | Scheduler EventBridge **Mi+Ju 08-16 PET** wake/sleep de RDS + Fargate (MLflow + Reports + API + UI); chequeo de Batch RUNNING antes de apagar. | UI 8 h/día, 2 días/semana. **Esto es scheduling de servicios, no de jobs de training** (ver fila "Trigger training"). El scheduler NO toca ALB ni NAT: esos los libera el `teardown` semanal, que es de donde sale el grueso del ahorro. | 24/7 si hay equipo distribuido. |
+| Ciclo de vida semanal | `task rebuild` el miércoles, `task teardown` el jueves. **Nunca `task destroy`** para esto: vacía los buckets S3 donde viven modelos y reports. | El stack solo existe ~36h/semana; ALB+NAT dejan de facturar el resto. Es el 90% del ahorro vs el modelo anterior. | Dejarlo levantado si el uso pasa a ser diario. |
+| TLS / acceso público | El perfil económico original usa ALB HTTP; se clasifica como **laboratorio controlado**, no producción expuesta. | Un SG abierto a Internet no autentica ni cifra. La implementación mostrada tampoco activa basic auth. | HTTPS + autenticación son obligatorios antes de exponer MLflow, API, UI, reports o artifacts a Internet. |
+| Egress privado | NAT GW single-AZ ($32/mes 24/7, ~$6.25 con el ciclo semanal) | Setup simple si tráfico <10 GB/mes. | VPC endpoints **solo por hardening, ya no por costo**: con el NAT a ~139h/mes los endpoints interface salen más caros (`02-produccion-aws.md` #9.4.1). |
 | Trigger training (de los **jobs**, no de los servicios) | (a) GHA `training.yml` workflow_dispatch (wake-train-sleep); (b) `aws lambda invoke ml-training-dispatcher`. **Sin cron de jobs**, sin S3 PutObject trigger — el scheduler de la fila anterior solo wake/sleep-ea servicios, nunca dispara entrenamientos. | Click desde GitHub UI eligiendo variedad. Training off-window wake-ea servicios y los apaga al terminar. | EventBridge cron diario de training / S3 trigger (Parte 7.5). |
 | Modelos entrenables | **XGBoost + LightGBM** sobre `KG/JR_H`, con `TransformedTargetRegressor` (`log1p` + cap-p99). Champion automático. | Lo que vive en `src/step_04_train/registry.py`. | Stacking (eliminado, no existe). |
 | Variedades válidas | **Dinámicas**: hojas del Excel `BD_HISTORICO_ACUMULADO.xlsx`. | Source of truth = el Excel. `list_varieties()` enumera `pd.ExcelFile(path).sheet_names`. La variable Terraform `varieties_allowed` es un allow-list defensivo del Lambda dispatcher, no la definición. | Agregar variedad = agregar hoja + `aws s3 cp` + opcional ampliar `varieties_allowed`. |
 | Auth CI/CD | OIDC (sin access keys de larga duración) | Auditable en CloudTrail, sin rotación manual, blast-radius limitado al repo. | Keys sólo en CI legacy. |
-| Promotion | Quality gate (MAPE < umbral) + A/B contra Production + approval en GitHub Environments | Defense in depth; un MAPE menor no garantiza modelo mejor sin baseline. | Auto-promote si MAPE absoluto <5% (no recomendado). |
-| Reproducibilidad | `SEED=42` propagado a `np.random`, `random.seed`, `xgb.random_state`, `lgb.seed`, `TimeSeriesSplit(random_state=...)` y `optuna.create_study(sampler=TPESampler(seed=...))`. Fijado en config (no se loggea como tag). | Sin seed, dos runs idénticos producen campeones distintos por orden de trials. El "smoke OK" deja de ser auditoría. | Bayesian sin sampler determinístico (no recomendado). |
-| Lineage del dataset | Tag MLflow `dataset_sha256=<sha>` + `dataset_n_rows=<N>` calculados sobre `data/training/DB-HISTORICA.xlsx` antes de cada run. | Permite responder "¿qué cambió entre el run que regresionó y el anterior?" cuando el código (`git_commit`) es idéntico. | DVC / lakeFS si el dataset crece a TB. |
+| Promotion | Quality gate + comparación contra `@champion` + approval en GitHub Environments. El alias se reasigna solo después del approval. | Un MAPE menor no garantiza una mejora estable ni suficiente para negocio. | Auto-promote únicamente con política, observabilidad y rollback ensayado. |
+| Reproducibilidad | `SEED=42` propagado a `np.random`, `random.seed`, `xgb.random_state`, `lgb.seed` y `TPESampler(seed=...)`. `TimeSeriesSplit` no acepta `random_state`: sus cortes son deterministas por orden temporal. El seed se registra como tag. | Reduce variación, pero no promete igualdad bit a bit entre CPU, librerías o paralelismo distintos. | Digest de imagen fijado + tolerancias numéricas documentadas. |
+| Lineage del dataset | Tags `dataset_sha256` completo, `dataset_n_rows`, `dataset_s3_key` y `dataset_s3_version_id`. | El hash detecta cambios; key + VersionId permiten recuperar el objeto exacto. | DVC / lakeFS cuando haya varios productores o datasets grandes. |
 | Contrato del run MLflow | Cada run loggea **tags obligatorios** (`git_commit`, `git_dirty`, `dataset_sha256`, `dataset_n_rows`, `tuning`, `variety`) **+ signature** (`infer_signature(X, y_pred)`) **+ input_example** (`X.head(5)`) **+ requirements snapshot** (`pip freeze`). Verificado en #4.10 check #7. | Sin signature, el Registry no valida payloads en serving; sin tags el quality gate de Parte 7 audita una caja negra. | Custom evaluators de MLflow (`mlflow.evaluate`) si pasás a regresión multi-target. |
-| Code-quality gates | `ruff check src/ main.py scripts/` (local, manual + CI). El job `lint` de `deploy.yml` lo invoca + `task infra:validate`. **No hay tests todavía**: el pipeline se valida con smoke runs (`task train TUNING=smoke`, ~1 min) y los gates de modelo (`CHAMPION_MAX_MAPE`, `CHAMPION_MAX_GAP`). Ver [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md). | Un job `test` con `pytest tests/` que "saltea si no hay tests" es código aspiracional que oculta cobertura cero. Mejor reflejar el estado real y agregar el job cuando exista `tests/`. | Agregar `mypy --strict src/` + `bandit -r src/` + `pytest --cov-fail-under=N` cuando exista `tests/`. Tests mínimos candidatos: champion selector con empate, shape contract del `prepare_data`, joblib roundtrip. |
+| Code-quality gates | `ruff`, validación de Terraform, tests unitarios de contratos ML, integración Docker y smoke Batch. Mientras `tests/` no exista, CI debe bloquear releases productivos o declarar el despliegue experimental. | Un smoke confirma el camino feliz; no cubre leakage, selector, schemas, serialización ni errores de infraestructura. | `mypy`, SAST y cobertura guiada por riesgo. |
 | CVE policy | `trivy image ml-training:local --severity HIGH,CRITICAL`. **Tramo Local**: warn-only. **Tramo II** (push a ECR): bloqueante. SBOM generado con `docker sbom` en cada `task ecr:build`. | Imagen base `python:3.13.1-slim-bookworm` tiene CVEs conocidos; para clientes regulados (HIPAA, SOC2, banca) el SBOM es requisito formal. | `cosign` para signing + admission controller en ECR. |
 | Drift gate (PSI) | `task eda` calcula `psi_train_test` por feature numérica y escribe `artifacts/eda_<variety>.json`. `task train` lee ese JSON: `psi > 0.25` en cualquier feature **warn-loud** en stdout y se tagea el run con `psi_warn=true`. Bloqueante a futuro si pasa a ser política. | Drift severo entre train/test indica que el split de validación no representa training — un campeón sobre data drifteada es modelo sobre ruido. | `psi > 0.10` como warn temprano + `psi > 0.25` como bloqueante. |
+
+---
+
+### 2.A Baseline de calidad MLOps
+
+Esta guía conserva AWS Batch, ECS Fargate, MLflow, Postgres, S3, Terraform,
+Task y GitHub Actions. Subir el nivel MLOps no requiere cambiar esas piezas;
+requiere definir contratos verificables y bloquear una promoción cuando no se
+cumplen.
+
+**Gate local mínimo antes del Tramo II**
+
+1. `ruff` termina sin errores.
+2. La suite de contratos existe y pasa; no se permite “0 tests collected”.
+3. El split temporal demuestra que ninguna fila futura entra al fit de un fold.
+4. El selector de campeón se prueba con empate, NaN, métricas faltantes y
+   candidato que viola el máximo de gap.
+5. El `.joblib` se recarga dentro de la misma imagen y predice contra un fixture
+   con el schema esperado.
+6. `docker compose config` y los health checks quedan verdes.
+7. El run registra commit completo, estado dirty, digest de imagen, seed, hash
+   completo del dataset, número de filas, key/VersionId de S3 y versiones de
+   XGBoost, LightGBM, scikit-learn y MLflow.
+8. El reporte estadístico corresponde al mismo `dataset_sha256`; un JSON EDA de
+   otro dataset se ignora y obliga a regenerarlo.
+
+**Métricas mínimas**
+
+MAPE puede mantenerse como métrica de negocio, pero no debe ser la única:
+
+- MAE o WAPE para evitar la inestabilidad de MAPE cuando el real se acerca a
+  cero;
+- `gap_oof_test` para generalización;
+- cobertura y ancho medio si se publican intervalos conformes;
+- latencia y tamaño del modelo para serving;
+- error por ventana temporal y por variedad, no solo agregado.
+
+Los umbrales se versionan como configuración y se registran como tags del run.
+Cambiar un umbral requiere PR y deja evidencia; no se modifica desde la UI
+durante una promoción.
 
 ---
 
@@ -286,18 +335,28 @@ Aunque el Tramo I es "local", el trainer sube artifacts a S3 y MLflow
 escribe sus runs a S3, así que necesitás credenciales válidas desde el
 primer `task build`.
 
-```bash
-aws configure --profile default
-# Access Key ID, Secret Access Key, region us-east-1, output json
+Preferí credenciales temporales mediante IAM Identity Center (AWS SSO):
 
+```bash
+aws configure sso --profile ml-training-dev
+aws sso login --profile ml-training-dev
+export AWS_PROFILE=ml-training-dev
 aws sts get-caller-identity
-# { "UserId": "...", "Account": "<12-digitos>", "Arn": "arn:aws:iam::...:user/..." }
 ```
 
-> **Warning** — Las credenciales viven **siempre** en `~/.aws/credentials`
-> del host. `docker-compose.yml` monta `~/.aws:/aws:ro` en los containers
-> y el SDK las lee de ahí. Nunca pongas `AWS_ACCESS_KEY_ID` ni
-> `AWS_SECRET_ACCESS_KEY` en `.env` ni en el `Dockerfile`.
+Si la cuenta todavía no usa SSO, un profile de desarrollo con claves es un
+fallback transitorio, no el default recomendado:
+
+```bash
+aws configure --profile ml-training-dev
+export AWS_PROFILE=ml-training-dev
+aws sts get-caller-identity
+```
+
+> **Warning** — Nunca pongas `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` ni un
+> token SSO en `.env`, el `Dockerfile` o el repositorio. Compose monta
+> `~/.aws:/aws:ro`; ese montaje solo se entrega a los contenedores que realmente
+> llaman AWS (`mlflow` y `trainer` en este diseño).
 
 ### 3.4 Service quotas (sólo para Tramo II)
 
@@ -643,7 +702,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -670,7 +728,7 @@ ARG VERSION=dev
 # created/timestamp NO va aqui: se inyecta como --label en `docker build` para
 # no invalidar la cache ni cambiar el digest de capas en cada rebuild del commit.
 LABEL org.opencontainers.image.title="ml-training" \
-      org.opencontainers.image.description="Random Forest training pipeline" \
+      org.opencontainers.image.description="XGBoost and LightGBM training pipeline" \
       org.opencontainers.image.source="https://github.com/abantodca/ml_training" \
       org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.version="${VERSION}"
@@ -682,7 +740,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_HOME=/app
 
 RUN apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libgomp1 ca-certificates tini git \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1001 mluser \
@@ -723,6 +780,11 @@ CMD ["--varieties", "POP", "--tuning", "smoke"]
 > run con el SHA del commit. Sin el binario todos los runs salen con
 > `git_commit=unknown` y perdés la trazabilidad **modelo → commit**, la primera
 > pregunta cuando un campeón regresione.
+
+> **Reproducibilidad del sistema operativo.** No se ejecuta `apt-get upgrade`
+> durante el build: haría que la misma revisión instalara paquetes distintos en
+> fechas distintas. Los parches entran al actualizar en un PR controlado el
+> digest de la imagen base y volver a ejecutar tests, SBOM y escaneo.
 
 > **Nota — el uid 1001 no es casualidad.** `USER mluser` (uid 1001) está
 > alineado con los bind-mount targets que crea `task _ensure_dirs` (#4.6.1) en
@@ -923,13 +985,8 @@ services:
       EXPERIMENT_PREFIX: ${MODEL_REGISTRY_PREFIX:-rnd-forest-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8501}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # boto3 (vía cliente MLflow) descarga los artifacts desde S3 real.
-      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
-      AWS_CONFIG_FILE: /aws/config
-      AWS_PROFILE: ${AWS_PROFILE:-default}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-    volumes:
-      - ~/.aws:/aws:ro
+      # La API descarga modelos por el proxy de artifacts de MLflow; no recibe
+      # credenciales AWS ni un mount de ~/.aws.
     ports:
       - "127.0.0.1:8000:8000"
     # Healthcheck explicito: el gate `service_healthy` del que cuelga `ui`.
@@ -1268,9 +1325,9 @@ tasks:
 >   aislado, sin mlflow/postgres — son scripts standalone.
 > - **`train` genera el HTML**: `variety_runner.py` regenera `reports/index.html`
 >   al final de cada variedad; no hace falta una task `reports:dashboard`.
-> - **No hay job `test` en CI** porque no hay `tests/` (ver
->   [ADR-008](adr/ADR-008-ci-sin-tests-todavia.md)): un task que pasa
->   trivialmente es deuda encubierta.
+> - **Los tests son un gate pendiente, no algo opcional**. Hasta crear
+>   `tests/`, el flujo puede usarse para desarrollo y smoke, pero no debe
+>   presentarse como release productivo certificado.
 
 | Variable | Default | Override por CLI |
 |---|---|---|
@@ -1281,7 +1338,7 @@ tasks:
 
 > **Vars auto-calculadas** (no se override, salen del entorno):
 > `GIT_SHA` (`git rev-parse HEAD`), `GIT_DIRTY` (`git diff --quiet`),
-> `DATA_SHA` (primeros 12 chars del `sha256sum` de
+> `DATA_SHA` (los 64 caracteres del `sha256sum` de
 > `data/training/DB-HISTORICA.xlsx`). Se inyectan como env-vars al
 > container y el trainer las loguea como tags MLflow — son el núcleo
 > del **contrato del run** (Cap 1.5). Si `data/training/DB-HISTORICA.xlsx`
@@ -1423,7 +1480,7 @@ case "${1:-}" in
     ;;
   data-sha)
     f=data/training/DB-HISTORICA.xlsx
-    [ -f "$f" ] && sha256sum "$f" | cut -d' ' -f1 | cut -c1-12 || echo missing
+    [ -f "$f" ] && sha256sum "$f" | cut -d' ' -f1 || echo missing
     ;;
   *)
     echo "Usage: $0 {git-sha|git-dirty|data-sha}" >&2
@@ -1760,7 +1817,7 @@ print(f"OK  joblib={path}  y[0]={y[0]:.3f}")
 '
 # OK  joblib=artifacts/final_pipeline_POP_<ts>.joblib  y[0]=<float>
 
-# 7) Contrato del run MLflow (Cap 1.5): los 8 tags obligatorios presentes
+# 7) Contrato del run MLflow (Cap 1.5): tags obligatorios presentes
 #    Si alguno falla, el run no es promovible al gate de Parte 7.
 docker compose exec postgres psql -U mlflow -d mlflow -tA -c "
 WITH last_run AS (
@@ -1770,7 +1827,7 @@ WITH last_run AS (
 ),
 need AS (
   SELECT unnest(ARRAY['git_commit','git_dirty','dataset_sha256','dataset_n_rows',
-                      'tuning','variety']) AS k
+                      'dataset_s3_version_id','seed','tuning','variety']) AS k
 ),
 have AS (SELECT key AS k FROM tags WHERE run_uuid IN (SELECT run_uuid FROM last_run))
 SELECT n.k AS missing FROM need n LEFT JOIN have h USING(k) WHERE h.k IS NULL;
@@ -1893,21 +1950,23 @@ rodea. La promoción se hace en cuatro pasos:
 > **Antes de empujar a ECR, audita CVEs HIGH/CRITICAL de la imagen
 > local con `trivy image ml-training:local --severity HIGH,CRITICAL
 > --ignore-unfixed`** (en local es warn-only — solo te muestra la
-> superficie). El mismo binario se promueve a AWS sin modificación,
-> así que las vulnerabilidades de hoy en tu laptop son las de mañana
-> en Batch. Conocerlas acá te evita el push fallido en Tramo II Parte
+> superficie). CI debe construir una sola imagen candidata, escanearla y
+> desplegar exactamente su tag SHA o digest; no debe reconstruirla después del
+> gate. Conocer las vulnerabilidades acá te evita el push fallido en Tramo II Parte
 > 4, donde el scan-on-push del ECR puede bloquear el deploy.
 
 Lo que **no cambia** entre tu laptop y AWS — la garantía central del
 diseño "una sola imagen":
 
-- El `Dockerfile` es bit-perfect idéntico. La imagen que corrió tu
-  smoke local es la misma que corre en Batch.
+- El `Dockerfile` y el contexto son los mismos. La igualdad del artefacto se
+  garantiza únicamente si se promueve el mismo digest; dos builds separados no
+  son necesariamente bit a bit iguales.
 - El código (`main.py`, `src/`) se configura enteramente por variables
   de entorno; sólo cambia el origen de esas variables (en local salen
   del `.env`, en Batch de la job definition).
-- El modelo final es reproducible: dada la misma data y los mismos
-  params, el joblib y el MAPE son los mismos en local y en producción.
+- El resultado debe ser reproducible dentro de tolerancias documentadas: misma
+  data versionada, digest de imagen, seed y recursos comparables. No se promete
+  un `.joblib` byte a byte idéntico entre hosts.
 
 Lo que **sí cambia**, y es el alcance entero del Tramo II:
 
@@ -1921,7 +1980,7 @@ Lo que **sí cambia**, y es el alcance entero del Tramo II:
 | Trigger del entrenamiento | `task train` manual | Lambda dispatcher o `workflow_dispatch` de GitHub Actions |
 
 > **Validar el contrato del hydrate antes de subir a Batch.** El
-> origen del dataset es la única ruta donde "mismo binario" se
+> origen del dataset es una ruta donde la paridad de configuración se
 > rompe sutilmente: en local lee un bind-mount, en Batch baja desde
 > S3. Si nunca probaste el path S3 en local, lo descubrís recién en
 > el primer `task batch:smoke`. Para validarlo sin AWS Batch son
@@ -1959,4 +2018,3 @@ Lo que **sí cambia**, y es el alcance entero del Tramo II:
 > `docker-compose.override.yml.example` — ver también el callout de #4.5.3.
 
 ---
-

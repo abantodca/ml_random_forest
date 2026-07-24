@@ -14,6 +14,7 @@ from src.step_02_clean.imputers import CustomKNNImputer
 from src.step_02_clean.missing_flags import MissingFlagger
 from src.step_02_clean.outlier_score import LOFOutlierScorer
 from src.step_02_clean.outliers import OutlierCapper
+from src.step_02_clean.rare_categories import RareCategoryGrouper
 from src.step_03_features.exante import ConcurrentFeatureDropper
 from src.step_03_features.feature_engineering import FeatureGenerator
 from src.step_03_features.lag_features import LagFeatureTransformer
@@ -23,7 +24,7 @@ from src.variety_config import VarietyConfig
 def create_preprocessing_pipeline(
     variety_cfg: VarietyConfig | None = None,
 ) -> Pipeline:
-    """Encadena: lags -> missing flags -> imputacion KNN -> capping -> LOF score -> ciclicas -> filtro varianza.
+    """Encadena categorías raras -> lags -> imputación -> capping -> features.
 
     Lag features (step 0): `LagFeatureTransformer` calcula rolling windows
     POR fold durante CV (sin leakage) y memoriza el historial para
@@ -85,6 +86,10 @@ def create_preprocessing_pipeline(
     middle_steps = [lof_step, capper_step] if ENABLE_LOF_BEFORE_CAPPER else [capper_step, lof_step]
     return Pipeline(
         steps=[
+            (
+                "rare_categories",
+                RareCategoryGrouper(min_count=cfg.rare_min_count),
+            ),
             ("lag_features", LagFeatureTransformer()),
             ("missing_flags", MissingFlagger()),
             ("imputer", CustomKNNImputer(**imputer_kwargs)),

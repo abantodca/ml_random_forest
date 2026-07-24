@@ -73,6 +73,12 @@ indent-style = "space"
 line-ending = "lf"
 skip-magic-trailing-comma = false
 
+[tool.pytest.ini_options]
+# Permite ejecutar tanto `pytest` como `python -m pytest` desde la raíz sin
+# instalar este monorepo virtual como paquete.
+pythonpath = ["."]
+testpaths = ["tests"]
+
 # ---------------------------------------------------------------------------
 # NOTA sobre dependencias: este repo NO es un paquete pip-instalable, es un
 # monorepo de 3 servicios que corren en Docker + PYTHONPATH (no `pip install .`).

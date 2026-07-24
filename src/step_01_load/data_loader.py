@@ -106,6 +106,16 @@ def _load_sheet_aligned(
     # del fold y envenena el fit). Se descarta aca, en el filtro CANONICO, para
     # no desalinear KG/JR/H-EF con (X, y). Validation solo AVISA; el drop va aca.
     target_num = pd.to_numeric(df[TARGET], errors="coerce")
+    invalid_numeric = target_num.isna()
+    n_invalid_numeric = int(invalid_numeric.sum())
+    if n_invalid_numeric:
+        logger.warning(
+            f"{n_invalid_numeric} fila(s) con target no numérico descartadas ({sheet_name})"
+        )
+        df = df.loc[~invalid_numeric].copy()
+        target_num = target_num.loc[~invalid_numeric]
+        df[TARGET] = target_num.to_numpy(dtype=float)
+
     impossible = target_num <= 0
     n_impossible = int(impossible.sum())
     if n_impossible:
@@ -127,6 +137,30 @@ def _load_sheet_aligned(
     n_dropped_dup = n_pre_dedup - len(df)
     if n_dropped_dup:
         logger.warning(f"{n_dropped_dup} duplicados estructurales descartados ({sheet_name})")
+
+    # Una fila sin fecha no puede ubicarse en validación temporal ni construir
+    # lags honestos. Se descarta en el helper compartido para conservar la
+    # alineación exacta entre features y columnas de negocio.
+    if DATE_COLUMN in df.columns:
+        parsed_dates = pd.to_datetime(df[DATE_COLUMN], errors="coerce")
+        invalid_dates = parsed_dates.isna()
+        if invalid_dates.any():
+            logger.warning(
+                f"{int(invalid_dates.sum())} fila(s) sin fecha válida descartadas "
+                f"({sheet_name})"
+            )
+            df = df.loc[~invalid_dates].copy()
+            parsed_dates = parsed_dates.loc[~invalid_dates]
+        df[DATE_COLUMN] = parsed_dates.to_numpy()
+
+    # Orden canónico estable. Los lags ordenan internamente, pero mantener el
+    # dataset cronológico también vuelve honesto el holdout de early stopping
+    # y garantiza que cualquier splitter posicional respete el tiempo.
+    if DATE_COLUMN in df.columns:
+        df = (
+            df.sort_values(DATE_COLUMN, kind="mergesort", na_position="last")
+            .reset_index(drop=True)
+        )
     return df, file_path, sheet_name
 
 
@@ -134,6 +168,7 @@ def load_data(
     path: str | Path | None = None,
     sheet: str | None = None,
     rare_min_count: int | None = None,
+    collapse_rare_categories: bool = True,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Carga el dataset y devuelve (X_raw, y).
 
@@ -188,25 +223,29 @@ def load_data(
     # aprender un dummy con tan poca muestra y solo introduce ruido.
     # Umbrales en config.py (RARE_MIN_COUNT, RARE_GROUP_COLS) salvo
     # override por variedad (parametro rare_min_count, P0.2).
-    if rare_min_count is not None:
-        min_count = rare_min_count  # override explicito de VarietyConfig
-    elif ADAPT_RARE_MIN_COUNT:
-        # Escala con n: n grande -> 50 (POP identico); n chico -> baja al piso
-        # para no colapsar todo FORMATO a 'OTROS'. Ver ADAPT_RARE_MIN_COUNT.
-        min_count = min(RARE_MIN_COUNT, max(RARE_MIN_COUNT_FLOOR, round(RARE_MIN_COUNT_FRAC * len(df))))
-    else:
-        min_count = RARE_MIN_COUNT
-    for col in RARE_GROUP_COLS:
-        if col not in df.columns:
-            continue
-        counts = df[col].value_counts()
-        rare = counts[counts < min_count].index.tolist()
-        if rare:
-            df[col] = df[col].where(~df[col].isin(rare), other="OTROS")
-            logger.info(
-                f"Agrupados en 'OTROS' por n<{min_count} en {col}: "
-                f"{rare} (filas afectadas={int(df[col].eq('OTROS').sum())})"
+    if collapse_rare_categories:
+        if rare_min_count is not None:
+            min_count = rare_min_count  # override explicito de VarietyConfig
+        elif ADAPT_RARE_MIN_COUNT:
+            # Escala con n: n grande -> 50 (POP identico); n chico -> baja al piso
+            # para no colapsar todo FORMATO a 'OTROS'. Ver ADAPT_RARE_MIN_COUNT.
+            min_count = min(
+                RARE_MIN_COUNT,
+                max(RARE_MIN_COUNT_FLOOR, round(RARE_MIN_COUNT_FRAC * len(df))),
             )
+        else:
+            min_count = RARE_MIN_COUNT
+        for col in RARE_GROUP_COLS:
+            if col not in df.columns:
+                continue
+            counts = df[col].value_counts()
+            rare = counts[counts < min_count].index.tolist()
+            if rare:
+                df[col] = df[col].where(~df[col].isin(rare), other="OTROS")
+                logger.info(
+                    f"Agrupados en 'OTROS' por n<{min_count} en {col}: "
+                    f"{rare} (filas afectadas={int(df[col].eq('OTROS').sum())})"
+                )
 
     for col in NUMERIC_FEATURES:
         df[col] = pd.to_numeric(df[col], errors="coerce")

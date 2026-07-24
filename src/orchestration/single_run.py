@@ -105,7 +105,13 @@ def train_model(
         )
 
     log.info(f"[1/6] Cargando datos | hoja={variety}")
-    X, y = load_data(sheet=variety, rare_min_count=variety_cfg.rare_min_count)
+    # Las categorías raras se aprenden dentro del pipeline para que cada fold
+    # use únicamente sus frecuencias de train.
+    X, y = load_data(
+        sheet=variety,
+        rare_min_count=variety_cfg.rare_min_count,
+        collapse_rare_categories=False,
+    )
     business_cols = load_business_columns(sheet=variety)  # KG/JR + H-EF alineadas con (X,y)
 
     log.info("[2/6] Construyendo preprocesador...")
@@ -161,6 +167,7 @@ def train_model(
                 y_pred_oof=oof["y_pred"],
                 fundo=X["FUNDO"],
                 formato=X["FORMATO"],
+                dates=X["FECHA"],
             )
             if final_pipeline.conformal_:
                 qbf = final_pipeline.conformal_["q_by_fundo"]

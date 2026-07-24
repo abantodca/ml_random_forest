@@ -263,6 +263,12 @@ CHAMPION_MAX_GAP: float = float(os.environ.get("CHAMPION_MAX_GAP", "18.0"))
 # de test". El absoluto queda como tag informativo. Para POP el campeon
 # actual da 0.30 -> pasa igual que antes (sin cambio de decision).
 CHAMPION_MAX_GAP_REL: float = float(os.environ.get("CHAMPION_MAX_GAP_REL", "0.40"))
+# Mejora mínima frente a la mediana jerárquica fold-safe. 0.05 exige reducir
+# el MAE al menos 5%; un sistema complejo que no lo logra no justifica su
+# costo ni incertidumbre operacional.
+CHAMPION_MIN_BASELINE_SKILL: float = float(
+    os.environ.get("CHAMPION_MIN_BASELINE_SKILL", "0.05")
+)
 
 # CHAMPION_WARN_TEMPORAL_MAPE: umbral de AVISO (no bloqueante) sobre el MAPE del
 # chequeo honesto temporal (forecast de anio no visto, _temporal_honesty_check).
@@ -676,9 +682,17 @@ TEMPORAL_MAPE_REL_FLOOR: float = float(os.environ.get("TEMPORAL_MAPE_REL_FLOOR",
 #     defecto del split temporal. Usarlo como chequeo de honestidad antes de
 #     deploy. Nota: filas de anios warmup quedan con OOF NaN;
 #     business_validation y residuals ya las enmascaran.
-# Inner CV siempre stratified (Optuna trial scope: equilibrio por estrato).
+# El default permanece stratified para conservar el contrato operativo y la
+# comparabilidad con los modelos registrados. DUAL_CV_REPORT=True añade SIEMPRE
+# el diagnóstico temporal honesto; para una promoción estrictamente ex-ante se
+# activa explícitamente CV_OUTER_STRATEGY=temporal_year. Así el cambio no altera
+# silenciosamente thresholds ni series históricas, pero tampoco oculta el drift.
 CV_OUTER_STRATEGY: str = os.environ.get("CV_OUTER_STRATEGY", "stratified")
 TEMPORAL_CV_MIN_TRAIN_YEARS: int = int(os.environ.get("TEMPORAL_CV_MIN_TRAIN_YEARS", "2"))
+# Gap en fechas distintas entre train y validación del inner CV. Evita que
+# observaciones inmediatamente contiguas —altamente autocorrelacionadas— hagan
+# optimista el tuning. Una misma fecha nunca se divide entre ambos lados.
+TEMPORAL_CV_GAP_PERIODS: int = int(os.environ.get("TEMPORAL_CV_GAP_PERIODS", "1"))
 
 # ---------------------------------------------------------------------------
 # MLflow

@@ -114,20 +114,33 @@ def suggest_preprocessor_params(trial: optuna.Trial) -> dict[str, object]:
     incorporacion de features nuevas (LOF + t_index + log1p/sqrt versions)
     se valida via A/B en Phase 8 antes de retunear el modelo.
     """
-    return {
+    method = trial.suggest_categorical(
+        "preprocessor__outliers__method", ["iqr", "percentile"]
+    )
+    params: dict[str, object] = {
         "preprocessor__imputer__n_neighbors": trial.suggest_int(
             "preprocessor__imputer__n_neighbors", 3, 40
         ),
-        "preprocessor__outliers__method": trial.suggest_categorical(
-            "preprocessor__outliers__method", ["iqr", "percentile"]
-        ),
-        "preprocessor__outliers__factor": trial.suggest_float(
-            "preprocessor__outliers__factor", 1.5, 5.0
-        ),
+        "preprocessor__outliers__method": method,
         "preprocessor__outlier_score__n_neighbors": trial.suggest_int(
             "preprocessor__outlier_score__n_neighbors", 5, 50
         ),
     }
+    if method == "iqr":
+        params["preprocessor__outliers__factor"] = trial.suggest_float(
+            "preprocessor__outliers__factor", 1.5, 5.0
+        )
+    else:
+        # Antes Optuna gastaba una dimensión tuneando ``factor`` aunque el
+        # método percentile la ignoraba. Ahora explora los cuantiles que sí
+        # cambian el capping.
+        params["preprocessor__outliers__lower_q"] = trial.suggest_float(
+            "preprocessor__outliers__lower_q", 0.001, 0.03, log=True
+        )
+        params["preprocessor__outliers__upper_q"] = trial.suggest_float(
+            "preprocessor__outliers__upper_q", 0.97, 0.999
+        )
+    return params
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from datetime import datetime
 import joblib
 import numpy as np
 
-from src.config import ARTIFACTS_DIR
+from src.config import ARTIFACTS_DIR, TEMPORAL_MAPE_REL_FLOOR
 from src.step_05_evaluate.metrics import calculate_regression_metrics
 from src.step_06_track.business_validation import BusinessValidation
 
@@ -55,9 +55,21 @@ def full_dataset_metrics(
 
     full_metrics_h: dict[str, float] = {}
     if pred_h_full is not None:
+        y_arr = np.asarray(y, dtype=float)
+        finite = np.isfinite(y_arr)
+        relative_floor = (
+            max(
+                1e-9,
+                TEMPORAL_MAPE_REL_FLOOR
+                * float(np.median(np.abs(y_arr[finite]))),
+            )
+            if finite.any()
+            else 1e-9
+        )
         full_metrics_h = calculate_regression_metrics(
-            np.asarray(y, dtype=float),
+            y_arr,
             pred_h_full,
+            min_denom=relative_floor,
         )
 
     # KG/JR (business): reusamos las metricas in-sample que ya calcula

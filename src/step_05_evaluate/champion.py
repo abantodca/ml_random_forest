@@ -190,22 +190,19 @@ def _gap_gate_failed(r: ModelResult) -> bool:
 
 
 def _decision_key(r: ModelResult) -> tuple:
-    """Llave lex-order para `min(...)`.
+    """Orden estricto auxiliar para reportes.
 
     Orden de prioridad:
       1. Gate de gap_rel (0 = pasa, 1 = falla). Restriccion, no objetivo.
-      2. Bucket de MAPE OOF (generalizacion honesta; empata si difiere
-         < OOF_MAPE_TIE_TOLERANCE).
+      2. MAPE OOF exacto.
       3. Tiempo de entrenamiento (eficiencia).
     """
-    # Bucketing por floor (`int`) en vez de `round`: dos valores que difieren
-    # en exactamente `tol` deben considerarse empate (intencion documentada).
-    # `round` los separaba en buckets adyacentes en la frontera; `int` (floor)
-    # los agrupa de forma consistente con "diferencia < tol => empate".
-    # oof_mape puede ser inf (sin metricas OOF): bucket centinela enorme para
-    # mandarlo al final sin OverflowError de int(inf).
-    mape_bucket = int(r.oof_mape / OOF_MAPE_TIE_TOLERANCE) if math.isfinite(r.oof_mape) else 10**9
-    return (int(_gap_gate_failed(r)), mape_bucket, r.elapsed_seconds)
+    return (
+        int(_gap_gate_failed(r)),
+        r.oof_mape if math.isfinite(r.oof_mape) else float("inf"),
+        r.elapsed_seconds,
+        r.model_type,
+    )
 
 
 def select_champion(results: list[ModelResult]) -> ModelResult:
@@ -215,7 +212,34 @@ def select_champion(results: list[ModelResult]) -> ModelResult:
     """
     if not results:
         raise ValueError("select_champion: lista de results vacia")
-    return min(results, key=_decision_key)
+
+    passing_gap = [result for result in results if not _gap_gate_failed(result)]
+    eligible = passing_gap or list(results)
+    best_mape = min(result.oof_mape for result in eligible)
+    if math.isfinite(best_mape):
+        # La tolerancia se aplica respecto del mejor valor observado. Esto sí
+        # garantiza que 14.49 y 14.51 empaten; el bucketing anterior podía
+        # separarlos por caer a ambos lados de una frontera arbitraria.
+        tied = [
+            result
+            for result in eligible
+            if result.oof_mape <= best_mape + OOF_MAPE_TIE_TOLERANCE
+        ]
+    else:
+        tied = eligible
+    return min(tied, key=lambda result: (result.elapsed_seconds, result.model_type))
+
+
+def _rank_results(results: list[ModelResult]) -> list[ModelResult]:
+    """Ranking estable aplicando la misma tolerancia en cada posición."""
+
+    remaining = list(results)
+    ordered: list[ModelResult] = []
+    while remaining:
+        selected = select_champion(remaining)
+        ordered.append(selected)
+        remaining.remove(selected)
+    return ordered
 
 
 def _justification(
@@ -274,7 +298,7 @@ def champion_summary(
     Incluye el ranking completo, las metricas relevantes por modelo y un
     bloque de justificacion textual auto-generado.
     """
-    ranking = sorted(results, key=_decision_key)
+    ranking = _rank_results(results)
     rivals = [r for r in ranking if r.model_type != champion.model_type]
     return {
         "champion_model": champion.model_type,
