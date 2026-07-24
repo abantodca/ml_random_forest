@@ -63,6 +63,7 @@ def build_cv_splitters(
     outer_folds: int,
     inner_folds: int,
     random_state: int,
+    outer_strategy: str | None = None,
 ):
     """Construye outer/inner CV. Outer puede ser stratified o temporal.
 
@@ -87,6 +88,7 @@ def build_cv_splitters(
         TEMPORAL_CV_MIN_TRAIN_YEARS,
     )
 
+    strategy = outer_strategy or CV_OUTER_STRATEGY
     strat_min_count = max(
         outer_folds,
         math.ceil(inner_folds * outer_folds / max(outer_folds - 1, 1)),
@@ -94,7 +96,7 @@ def build_cv_splitters(
     strat_label, strat_strategy = build_strat_label(X, min_count=strat_min_count)
 
     # Outer
-    if CV_OUTER_STRATEGY == "temporal_year":
+    if strategy == "temporal_year":
         from src.step_04_train.temporal_cv import PurgedDateSplit, TemporalYearSplit
 
         outer_cv = TemporalYearSplit(
@@ -110,10 +112,10 @@ def build_cv_splitters(
             )
             strat_strategy = "temporal_date_fallback"
     else:
-        if CV_OUTER_STRATEGY != "stratified":
+        if strategy != "stratified":
             raise ValueError(
                 "CV_OUTER_STRATEGY debe ser 'temporal_year' o 'stratified', "
-                f"recibido {CV_OUTER_STRATEGY!r}"
+                f"recibido {strategy!r}"
             )
         outer_splitter_cls = StratifiedKFold if strat_label is not None else KFold
         outer_cv = outer_splitter_cls(
@@ -122,7 +124,7 @@ def build_cv_splitters(
             random_state=random_state,
         )
 
-    if CV_OUTER_STRATEGY == "temporal_year":
+    if strategy == "temporal_year":
         from src.step_04_train.temporal_cv import PurgedDateSplit
 
         inner_cv = PurgedDateSplit(

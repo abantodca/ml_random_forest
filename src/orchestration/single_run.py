@@ -86,7 +86,10 @@ def train_model(
     # Config POR VARIEDAD (P0.2): overrides explicitos (meses de temporada,
     # umbral KNN, rare_min_count). Para variedades sin overrides es
     # passthrough de los defaults globales (POP queda identico).
-    variety_cfg = for_variety(variety)
+    variety_cfg = for_variety(
+        variety,
+        shadow_temporal=getattr(args, "shadow_temporal_window", False),
+    )
 
     # Presupuesto efectivo: override POR BACKEND (config.BACKEND_BUDGET_FRACTION).
     # Por defecto el dict esta vacio -> todos los backends corren al perfil

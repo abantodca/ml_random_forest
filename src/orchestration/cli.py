@@ -7,10 +7,12 @@ Vive aqui (separado de `main.py`) porque es la unica capa que:
 
 `main.py` queda thin: parse + delega en `orchestration.runners`.
 
-Nota: el pipeline SIEMPRE entrena todos los backends del registry
+Nota: el pipeline normal SIEMPRE entrena todos los backends del registry
 (`valid_backends()`) y delega la eleccion del campeon a
 `champion.select_champion`. No hay flag de usuario para forzar un modelo:
-ese es el contrato del proyecto (la maquina elige, no el operador).
+ese es el contrato del proyecto (la maquina elige, no el operador). La unica
+excepcion es un candidato de sombra previamente validado: el orquestador fija
+el backend que produjo esa evidencia y bloquea su registro.
 """
 
 from __future__ import annotations
@@ -63,6 +65,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--outer-folds", type=_positive_int, default=None)
     parser.add_argument("--inner-folds", type=_positive_int, default=None)
     parser.add_argument("--skip-final-tuning", action="store_true")
+    parser.add_argument(
+        "--shadow-temporal-window",
+        action="store_true",
+        help=(
+            "Entrena un candidato temporal window-365 validado por variedad, "
+            "sin registrarlo ni promoverlo. Actualmente solo BEAUTY."
+        ),
+    )
     parser.add_argument(
         "--experiment-prefix",
         default=MLFLOW_EXPERIMENT_PREFIX,

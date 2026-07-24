@@ -84,6 +84,20 @@ def apply_quality_gate(
     con 5 trials / 2 folds, no modelos tuneados. Antes un smoke podia
     registrar (y promover) una version casi sin tunear en el Registry.
     """
+    if getattr(args, "shadow_temporal_window", False):
+        from src.variety_config import for_variety
+
+        cfg = for_variety(variety, shadow_temporal=True)
+        threshold = cfg.shadow_temporal_max_mape
+        status = "APTO para observacion" if champion.oof_mape <= threshold else "RECHAZADO"
+        logger.warning(
+            f"[{variety}] SHADOW {status} | MAPE_temporal_oof="
+            f"{champion.oof_mape:.2f}% (max={threshold:.2f}%). "
+            "Registro y promocion BLOQUEADOS por diseño: primero deben "
+            "compararse predicciones contra etiquetas futuras reales."
+        )
+        return False
+
     if args.tuning == "smoke":
         logger.info(
             f"[{variety}] Registro OMITIDO: tuning=smoke es un sanity check "

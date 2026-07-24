@@ -39,6 +39,12 @@ def set_initial_run_tags(variety: str, model_type: str, version: int, args) -> N
             "model_type": model_type,
             "version": f"v{version}",
             "trained_at": datetime.now().isoformat(timespec="seconds"),
+            "shadow_temporal": str(
+                bool(getattr(args, "shadow_temporal_window", False))
+            ).lower(),
+            "promotion_blocked": str(
+                bool(getattr(args, "shadow_temporal_window", False))
+            ).lower(),
         }
     )
 
@@ -133,6 +139,9 @@ def log_run_metadata_and_params(
             "skip_final_tuning": settings["skip_final_tuning"],
             "n_rows": int(X.shape[0]),
             "n_features_input": int(X.shape[1]),
+            "shadow_temporal_window": bool(
+                getattr(args, "shadow_temporal_window", False)
+            ),
         }
     )
 

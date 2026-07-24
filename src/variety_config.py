@@ -56,6 +56,10 @@ class VarietyConfig:
       rare_min_count:
           colapso de categorias raras a 'OTROS' en data_loader
           (default: config.RARE_MIN_COUNT, hoy 50).
+      cv_outer_strategy / training_window_days / shadow_temporal_max_mape:
+          controles opt-in del candidato temporal. Permanecen None durante
+          todo entrenamiento normal y solo se resuelven desde
+          SHADOW_TEMPORAL_OVERRIDES.
     """
 
     variety: str
@@ -65,6 +69,9 @@ class VarietyConfig:
     sample_weight_high_season: bool | None = None
     imputer_knn_threshold: float | None = None
     rare_min_count: int | None = None
+    cv_outer_strategy: str | None = None
+    training_window_days: int | None = None
+    shadow_temporal_max_mape: float | None = None
 
 
 # Meses de temporada de POP (EDA 2026-05: ALTA=jun-oct, BAJA=dic-abr). UNICA
@@ -88,17 +95,49 @@ VARIETY_OVERRIDES: dict[str, dict[str, object]] = {
     },
 }
 
+# Candidatos que superaron el experimento temporal anidado y pueden ejecutarse
+# en SOMBRA. No se mezclan con VARIETY_OVERRIDES: el entrenamiento normal debe
+# seguir bit-identico hasta observar etiquetas futuras y aprobar la promocion.
+#
+# BEAUTY, LightGBM, 20 trials/fold (2026-07-23):
+#   MAE temporal full-history=2.1622 -> window365=1.7128 (-20.8%)
+#   MAPE temporal              32.33 -> 27.08 (-5.26 pp)
+#   gano 2/3 folds; el fold restante retrocedio 3.4% en MAE y <1 pp en MAPE.
+SHADOW_TEMPORAL_OVERRIDES: dict[str, dict[str, object]] = {
+    "BEAUTY": {
+        "cv_outer_strategy": "temporal_year",
+        "training_window_days": 365,
+        "shadow_temporal_max_mape": 35.0,
+    },
+}
+
 _VALID_FIELDS = {f.name for f in fields(VarietyConfig)} - {"variety"}
 
 
-def for_variety(variety: str) -> VarietyConfig:
+def shadow_temporal_varieties() -> frozenset[str]:
+    """Variedades autorizadas para el experimento temporal de sombra."""
+    return frozenset(SHADOW_TEMPORAL_OVERRIDES)
+
+
+def for_variety(
+    variety: str,
+    *,
+    shadow_temporal: bool = False,
+) -> VarietyConfig:
     """Config de la variedad: defaults globales + overrides declarados.
 
     Variedad sin entrada en VARIETY_OVERRIDES -> todos los campos None
     (defaults globales), que es el comportamiento correcto para una
     variedad nueva sin evidencia propia todavia.
     """
-    overrides = VARIETY_OVERRIDES.get(variety, {})
+    overrides = dict(VARIETY_OVERRIDES.get(variety, {}))
+    if shadow_temporal:
+        if variety not in SHADOW_TEMPORAL_OVERRIDES:
+            raise ValueError(
+                f"{variety!r} no esta aprobada para shadow temporal; "
+                f"aprobadas={sorted(shadow_temporal_varieties())}"
+            )
+        overrides.update(SHADOW_TEMPORAL_OVERRIDES[variety])
     desconocidos = set(overrides) - _VALID_FIELDS
     if desconocidos:
         raise ValueError(

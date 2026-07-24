@@ -37,6 +37,40 @@ from sklearn.model_selection._split import BaseCrossValidator
 from src.config import DATE_COLUMN
 
 
+def recent_training_window(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    *,
+    window_days: int | None,
+    reference_date,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """Recorta train a una ventana anterior a ``reference_date``.
+
+    Devuelve también la máscara booleana, alineada posicionalmente con el
+    train de entrada, para recortar labels auxiliares sin recalcular fechas.
+    ``None`` conserva todas las filas y mantiene el comportamiento histórico.
+    """
+    if window_days is None:
+        keep = pd.Series(True, index=X_train.index)
+        return X_train, y_train, keep
+    if window_days < 1:
+        raise ValueError("training_window_days debe ser >= 1")
+    if DATE_COLUMN not in X_train.columns:
+        raise ValueError(f"Ventana temporal requiere columna '{DATE_COLUMN}'")
+
+    dates = pd.to_datetime(X_train[DATE_COLUMN], errors="coerce")
+    if dates.isna().any():
+        raise ValueError("Ventana temporal no acepta fechas nulas o invalidas")
+    reference = pd.Timestamp(reference_date)
+    cutoff = reference - pd.Timedelta(days=window_days)
+    keep = dates >= cutoff
+    if not keep.any():
+        raise ValueError(
+            f"Ventana de {window_days} dias no deja filas antes de {reference.date()}"
+        )
+    return X_train.loc[keep], y_train.loc[keep], keep
+
+
 class TemporalYearSplit(BaseCrossValidator):
     """K folds tipo expanding-window por valor de columna ANIO.
 

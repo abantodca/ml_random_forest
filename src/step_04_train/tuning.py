@@ -58,6 +58,7 @@ from src.step_04_train.sample_weights import (  # noqa: E402
     compute_sample_weights,
 )
 from src.step_04_train.search_spaces import suggest_full_params  # noqa: E402
+from src.step_04_train.temporal_cv import recent_training_window  # noqa: E402
 from src.step_05_evaluate.baselines import (  # noqa: E402
     HierarchicalMedianRegressor,
     mae_skill_score,
@@ -441,6 +442,26 @@ def _run_outer_cv_loop(
 
         X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
         y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
+        strat_tr = strat_label.iloc[train_idx] if strat_label is not None else None
+        window_days = getattr(variety_cfg, "training_window_days", None)
+        if window_days is not None:
+            from src.config import DATE_COLUMN
+
+            reference_date = pd.to_datetime(X_te[DATE_COLUMN]).min()
+            rows_before = len(X_tr)
+            X_tr, y_tr, keep = recent_training_window(
+                X_tr,
+                y_tr,
+                window_days=window_days,
+                reference_date=reference_date,
+            )
+            if strat_tr is not None:
+                strat_tr = strat_tr.loc[keep]
+            logger.info(
+                f"Outer fold {fold_idx} | ventana={window_days}d | "
+                f"train_rows={rows_before}->{len(X_tr)} | "
+                f"cutoff_test={reference_date.date()}"
+            )
         sw_tr = _maybe_sample_weights(
             y_tr,
             use_sample_weights,
@@ -454,9 +475,6 @@ def _run_outer_cv_loop(
             ),
             emit_log=False,
         )
-        # strat_label es pd.Series: requiere .iloc, no encaja en index_or_none.
-        strat_tr = strat_label.iloc[train_idx] if strat_label is not None else None
-
         study = _make_study(random_state + fold_idx)
         study.optimize(
             # Binding por defaults: la lambda se consume dentro de esta
@@ -608,6 +626,16 @@ def _temporal_honesty_check(
         for train_idx, test_idx in splitter.split(X):
             X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
             y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
+            window_days = getattr(variety_cfg, "training_window_days", None)
+            if window_days is not None:
+                from src.config import DATE_COLUMN
+
+                X_tr, y_tr, _ = recent_training_window(
+                    X_tr,
+                    y_tr,
+                    window_days=window_days,
+                    reference_date=pd.to_datetime(X_te[DATE_COLUMN]).min(),
+                )
             sw_tr = _maybe_sample_weights(
                 y_tr,
                 use_sample_weights,
@@ -849,11 +877,13 @@ def perform_nested_cv(
             f"inner {_i0}->{inner_folds}"
         )
 
+    effective_outer_strategy = getattr(variety_cfg, "cv_outer_strategy", None)
     outer_cv, inner_cv, strat_label, strat_strategy = build_cv_splitters(
         X,
         outer_folds,
         inner_folds,
         random_state,
+        outer_strategy=effective_outer_strategy,
     )
     outer_folds = outer_cv.get_n_splits(X)
     if outer_folds < 1:
@@ -885,6 +915,29 @@ def perform_nested_cv(
             "CV NO estratificado (variedad sin variabilidad util en FUNDO/FORMATO; KFold normal)"
         )
 
+    # El candidato temporal se refitea con la misma ventana usada en cada
+    # outer fold. El dataset original se conserva para OOF y reportes.
+    from src.config import DATE_COLUMN
+
+    X_final, y_final = X, y
+    strat_final = strat_label
+    window_days = getattr(variety_cfg, "training_window_days", None)
+    if window_days is not None:
+        reference_date = pd.to_datetime(X[DATE_COLUMN]).max()
+        X_final, y_final, keep_final = recent_training_window(
+            X,
+            y,
+            window_days=window_days,
+            reference_date=reference_date,
+        )
+        if strat_label is not None:
+            strat_final = strat_label.loc[keep_final]
+        logger.info(
+            f"Refit temporal | ventana={window_days}d | "
+            f"train_rows={len(X)}->{len(X_final)} | "
+            f"reference={reference_date.date()}"
+        )
+
     # Warm-start (2026-06-25): sembrar la RONDA FINAL con el campeon ya
     # registrado de esta variedad+backend para que los params de produccion
     # arranquen desde la zona buena (no a ciegas) y solo mejoren. Los outer
@@ -904,7 +957,9 @@ def perform_nested_cv(
     final_study_name = None
     if OPTUNA_STORAGE_URL:
         variety = getattr(variety_cfg, "variety", None) or "novar"
-        final_study_name = f"final_{variety}_{model_type}_{_data_fingerprint(X)}"
+        final_study_name = (
+            f"final_{variety}_{model_type}_{_data_fingerprint(X_final)}"
+        )
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     t0 = time.perf_counter()
@@ -928,6 +983,9 @@ def perform_nested_cv(
         logger=logger,
     )
     nested_metrics = _aggregate_nested_metrics(fold_results)
+    if window_days is not None:
+        nested_metrics["training_window_days"] = float(window_days)
+        nested_metrics["training_window_rows"] = float(len(X_final))
     logger.info(
         f"Nested CV resultado | MAE_test={nested_metrics['nested_cv_mae_mean']:.4f} "
         f"+/- {nested_metrics['nested_cv_mae_std']:.4f} | "
@@ -938,14 +996,14 @@ def perform_nested_cv(
 
     best_params = _pick_final_params(
         fold_results=fold_results,
-        X=X,
-        y=y,
+        X=X_final,
+        y=y_final,
         preprocessor=preprocessor,
         inner_cv=inner_cv,
         model_type=model_type,
         use_sample_weights=use_sample_weights,
         variety_cfg=variety_cfg,
-        strat_label=strat_label,
+        strat_label=strat_final,
         final_trials=final_trials,
         skip_final_tuning=skip_final_tuning,
         random_state=random_state,
@@ -959,7 +1017,8 @@ def perform_nested_cv(
     # seria redundante.
     from src.config import CV_OUTER_STRATEGY, DUAL_CV_REPORT
 
-    if DUAL_CV_REPORT and CV_OUTER_STRATEGY != "temporal_year":
+    active_outer_strategy = effective_outer_strategy or CV_OUTER_STRATEGY
+    if DUAL_CV_REPORT and active_outer_strategy != "temporal_year":
         nested_metrics.update(
             _temporal_honesty_check(
                 X=X,
@@ -973,13 +1032,13 @@ def perform_nested_cv(
             )
         )
 
-    # El refit final sí usa todo el dataset: aquí es correcto aprender los
-    # pesos con todo y. La evaluación de folds ya usó pesos fold-local.
+    # El refit normal usa todo el dataset. Un candidato windowed usa solo su
+    # ventana final; en ambos casos los pesos se aprenden sin mirar el test.
     sample_weights = _maybe_sample_weights(
-        y,
+        y_final,
         use_sample_weights,
         logger,
-        X=X,
+        X=X_final,
         high_season_months=getattr(
             variety_cfg, "sample_weight_high_season_months", None
         ),
@@ -992,8 +1051,8 @@ def perform_nested_cv(
         preprocessor=preprocessor,
         model_type=model_type,
         best_params=best_params,
-        X=X,
-        y=y,
+        X=X_final,
+        y=y_final,
         sample_weights=sample_weights,
         random_state=random_state,
         t0=t0,

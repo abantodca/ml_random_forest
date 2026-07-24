@@ -212,9 +212,9 @@ def main(argv: list[str] | None = None) -> int:
     # resolve_varieties valida contra el catalogo y aborta con sys.exit(2)
     # ante variedades desconocidas (no lanza ValueError).
     varieties = resolve_varieties(args.varieties)
-    # El proyecto NO permite forzar un modelo: siempre entrena todos los
-    # backends del registry y `champion.select_champion` decide el ganador
-    # por variedad (lex-order: gap -> MAPE -> tiempo).
+    # El flujo normal NO permite forzar un modelo: entrena todos los backends
+    # y `champion.select_champion` decide. Más abajo, el modo shadow aplica la
+    # única excepción: backend validado, aislado y sin registro.
     models = list(valid_backends())
     if not varieties:
         logger.error("varieties vacio; revisa --varieties")
@@ -224,6 +224,34 @@ def main(argv: list[str] | None = None) -> int:
     # modelos; corre el analisis exploratorio por variedad y sincroniza a S3.
     if args.eda:
         return _run_eda_mode(varieties, logger)
+
+    if args.shadow_temporal_window:
+        from src.variety_config import shadow_temporal_varieties
+
+        approved = shadow_temporal_varieties()
+        unsupported = sorted(set(varieties) - approved)
+        if unsupported:
+            logger.error(
+                "Shadow temporal rechazado para variedades sin evidencia: "
+                f"{unsupported}. Aprobadas: {sorted(approved)}"
+            )
+            return 2
+        if args.tuning == "smoke":
+            logger.error(
+                "Shadow temporal requiere --tuning dev|prod|prod_xl; "
+                "smoke no aporta evidencia suficiente."
+            )
+            return 2
+        # La prueba que justificó el candidato fue con LightGBM. El modo
+        # normal conserva todos los backends; esta excepción explícita evita
+        # convertir un algoritmo no validado en candidato de sombra.
+        models = ["lgb"]
+        args.register_model = False
+        args.registry_stage = "None"
+        logger.warning(
+            "MODO SHADOW TEMPORAL | backend=lgb | ventana=365 dias | "
+            "registro/promocion bloqueados hasta recibir etiquetas futuras."
+        )
 
     if not models:
         logger.error("BACKEND_REGISTRY vacio; revisa src/step_04_train/registry.py")
