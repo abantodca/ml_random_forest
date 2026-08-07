@@ -1,7 +1,4 @@
 [project]
-# Tabla mínima para que uv gestione un venv + lock LOCAL (notebooks/dev).
-# NO publicamos este repo como paquete: `package = false` (abajo) evita que uv
-# intente `pip install .`. Ver la NOTA sobre dependencias más abajo.
 name = "ml-random-forest"
 version = "0.0.0"
 requires-python = ">=3.12"
@@ -20,7 +17,6 @@ dependencies = [
     "patsy==1.0.1",
     "plotly==6.3.0",
     "pre-commit==4.4.0",
-    "pytest==8.4.2",
     "ruff==0.15.13",
     "scikit-learn==1.6.1",
     "scipy==1.16.3",
@@ -30,12 +26,9 @@ dependencies = [
 ]
 
 [tool.uv]
-# Proyecto "virtual": uv mantiene venv + uv.lock pero NO construye/instala el
-# repo como paquete (es un monorepo Docker + PYTHONPATH, no `pip install .`).
 package = false
 
 [tool.ruff]
-# Alineado con .editorconfig: Python 3.12, 4 spaces, 100 col.
 line-length = 100
 target-version = "py312"
 extend-exclude = [
@@ -50,18 +43,11 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# E/W = pycodestyle, F = pyflakes, I = isort, B = flake8-bugbear,
-# UP = pyupgrade, SIM = flake8-simplify
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
-# E501 (line-too-long) lo maneja el formatter, no el linter
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# B008: `Query(...)`/`File(...)` en defaults es el idioma estándar de FastAPI
-# para declarar parámetros — no es el antipatrón que bugbear persigue.
 "api/**" = ["B008"]
-# E402: main.py configura warnings y logging ANTES de importar el resto de
-# módulos (intencional: los imports de app.* emiten logs).
 "api/app/main.py" = ["E402"]
 
 [tool.ruff.lint.isort]
@@ -73,38 +59,15 @@ indent-style = "space"
 line-ending = "lf"
 skip-magic-trailing-comma = false
 
-[tool.pytest.ini_options]
-# Permite ejecutar tanto `pytest` como `python -m pytest` desde la raíz sin
-# instalar este monorepo virtual como paquete.
-pythonpath = ["."]
-testpaths = ["tests"]
-
-# ---------------------------------------------------------------------------
-# NOTA sobre dependencias: este repo NO es un paquete pip-instalable, es un
-# monorepo de 3 servicios que corren en Docker + PYTHONPATH (no `pip install .`).
-# La FUENTE DE VERDAD de RUNTIME sigue siendo requirements.txt (trainer/ui) y
-# api/requirements.txt — esos son los locks que consumen los Dockerfiles; las de
-# DEV/notebooks, requirements-dev.txt. La tabla [project] de arriba existe SOLO
-# para tener un venv local manejado por uv (uv add / uv add -r ...); por eso va
-# con `[tool.uv] package = false` y sin [build-system]: nunca se construye.
-# Si pinneas algo nuevo para prod, espéjalo en el requirements.txt que toque.
-# ---------------------------------------------------------------------------
-
 [tool.mypy]
-# Typing GRADUAL y opt-in: arrancamos laxo para no bloquear, endurecemos por
-# módulo con overrides a medida que se anotan. NO es gate de CI todavía.
 python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true
-ignore_missing_imports = true        # libs ML sin stubs (lightgbm, xgboost…)
+ignore_missing_imports = true
 exclude = [
     "^(artifacts|logs|reports|data|mlruns|\\.terraform)/",
     "^notebooks/",
     "^scripts/experiments/",
 ]
 
-# A medida que un módulo quede limpio, subir su rigor aquí. Ejemplo:
-# [[tool.mypy.overrides]]
-# module = ["src.step_03_features.lag_features"]
-# disallow_untyped_defs = true
