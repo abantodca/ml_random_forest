@@ -13,6 +13,27 @@
 > incremental en olas con checkpoint, y un lifecycle de cuatro modos —STAND-UP, TEAR-DOWN, REBUILD,
 > DESTROY— para que la infra se apague cuando no la usás.
 >
+> **Prerrequisito de este tramo**: los namespaces `infra:`, `ecr:`, `batch:` y `ops:` que usan
+> todos los comandos de aquí en adelante viven en `tasks/`, que **no está versionado**. Se
+> materializa en #4.1.3-4.1.7 de este mismo documento (`tasks/local.yml` sale de
+> [`01-local.md` #4.6.2](01-local.md)). Sin esa capa ningún comando `task` carga, ni siquiera
+> `task --list`.
+
+> [!IMPORTANT]
+> **De dónde salen los valores de cada comando.** Ningún bloque de este documento vuelve a
+> calcular lo que un paso anterior ya dejó resuelto. Hay exactamente tres fuentes:
+>
+> | Fuente | Qué aporta | Cómo se obtiene |
+> |---|---|---|
+> | `scripts/prod.env` | `PROJECT`, `ACCOUNT_ID`, `ACCOUNT_SUFFIX`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_PROFILE` | `source scripts/prod.env` — **una vez por terminal nueva** ([`01-local.md` #3.5](01-local.md)) |
+> | `.env` | Buckets y URIs del stack local (`DATA_BUCKET`, `ARTIFACTS_BUCKET`, `MLFLOW_TRACKING_URI`) | Lo deriva `scripts/ensure-env.sh`; `task` lo carga solo vía `dotenv:` |
+> | `terraform output` | Todo lo creado por Terraform: `alb_dns`, `data_bucket`, `job_queue_spot`, `rds_instance_id`, `tracking_uri`, … | `task infra:output`, o `terraform -chdir="$TF_DIR" output -raw <nombre>` |
+>
+> Si un comando de validación falla con un nombre de recurso vacío —no con un error de
+> permisos—, la causa es casi siempre una terminal nueva sin `source scripts/prod.env`.
+> Los valores que Terraform expone **no se escriben a mano**: se leen del output, que es la
+> única fuente que no queda desfasada tras un `rebuild`.
+>
 > La arquitectura, en un solo camino: el **entrenamiento** corre en **AWS Batch** (colas Spot +
 > On-Demand, `c6i.2xlarge`, escala a cero entre corridas); **MLflow** vive en **ECS Fargate** detrás
 > de un ALB con **RDS Postgres** + S3 como backend
@@ -289,40 +310,16 @@ sobreescribir.
 
 ```bash
 #!/usr/bin/env bash
-# infra/bootstrap.sh — Bootstrap del backend Terraform.
-# UNA VEZ por cuenta + region. Idempotente: re-ejecutar es seguro.
-#
-# Crea:
-#   1) S3 bucket  ${PROJECT}-tfstate-${ACCOUNT_SUFFIX}  (state file Terraform)
-#   2) Service Linked Roles para Spot / ECS / Batch     (pre-creadas)
-#
-# Locking: usamos `use_lockfile=true` (locking nativo S3, Terraform >= 1.10).
-# El lock vive como objeto `<key>.tflock` en el mismo bucket de tfstate, asi
-# que NO necesitamos una tabla DynamoDB separada. Si vienes de un bootstrap
-# antiguo con `ml-training-tflock`, puedes borrarla con:
-#   aws dynamodb delete-table --table-name ${PROJECT}-tflock --region $REGION
-#
-# El bucket S3 se crea via scripts/ensure-s3-bucket.sh (mismo helper que
-# tasks/local.yml usa para data/artifacts). Asi el hardening
-# (versioning + AES256 + public-access-block) vive en UN solo lugar.
-#
-# El sufijo se calcula via scripts/aws-suffix.sh (fuente unica). Los buckets
-# de prod (data, artifacts, archive) usan el mismo sufijo de 7 digitos.
 
 set -euo pipefail
 
 PROJECT="${PROJECT:-ml-training}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-# Reusa ACCOUNT_SUFFIX de la sesion si ya esta exportado (Capitulo 3.5); sino
-# lo calcula con el mismo script que tasks/local.yml -> garantiza coherencia
-# entre buckets locales y de prod.
 ACCOUNT_SUFFIX="${ACCOUNT_SUFFIX:-$(bash scripts/aws-suffix.sh)}"
 TFSTATE_BUCKET="${PROJECT}-tfstate-${ACCOUNT_SUFFIX}"
 
-# 1) S3 bucket tfstate (delegado al helper compartido)
 bash scripts/ensure-s3-bucket.sh "$TFSTATE_BUCKET" "$REGION"
 
-# 2) Service Linked Roles (errores "ya existe" se ignoran)
 aws iam create-service-linked-role --aws-service-name spot.amazonaws.com   2>/dev/null || true
 aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com    2>/dev/null || true
 aws iam create-service-linked-role --aws-service-name batch.amazonaws.com  2>/dev/null || true
@@ -353,17 +350,12 @@ echo "    bucket=$TFSTATE_BUCKET  region=$REGION  (lock: nativo S3 via use_lockf
 > `terraform plan` ve toda la infra como "a crear" aunque ya exista.
 
 ```bash
-# Desde la raiz del repo (WSL Ubuntu o bash nativo Linux/Mac)
 cd /mnt/c/Users/CarlosAlexanderAbant/Documents/Proyectos/ml_random_forest/ml_training
 
-# Crear el directorio infra/ si no existe
 mkdir -p infra
 
-# Verificar que el script existe (lo creaste en #2.2)
 ls -la infra/bootstrap.sh
-# Si no existe -> volver a #2.2 y pegar el contenido en infra/bootstrap.sh
 
-# Dar permiso ejecutable + ejecutar
 chmod +x infra/bootstrap.sh
 bash infra/bootstrap.sh
 ```
@@ -389,26 +381,19 @@ fallan (estan filtrados con `2>/dev/null`).
 Despues de que el script termine, valida que TODO quedo bien:
 
 ```bash
-# Variables (recreadas para que esta seccion sea standalone)
 export PROJECT="ml-training"
 export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 export ACCOUNT_SUFFIX="${ACCOUNT_ID: -7}"
 TFSTATE_BUCKET="${PROJECT}-tfstate-${ACCOUNT_SUFFIX}"
 
-# Check 1: bucket existe y tiene versioning ON
 aws s3api get-bucket-versioning --bucket "$TFSTATE_BUCKET" --query Status --output text
-# Esperado: Enabled
 
-# Check 2: bucket tiene encryption AES256
 aws s3api get-bucket-encryption --bucket "$TFSTATE_BUCKET" \
     --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' \
     --output text
-# Esperado: AES256
 
-# Check 3: bucket bloquea acceso publico
 aws s3api get-public-access-block --bucket "$TFSTATE_BUCKET" \
     --query 'PublicAccessBlockConfiguration.BlockPublicAcls' --output text
-# Esperado: True
 ```
 
 Si los 3 dan los valores esperados, **el bootstrap esta OK**. Si alguno
@@ -445,7 +430,6 @@ Crear el archivo `infra/bootstrap-oidc.sh` con el contenido siguiente
 
 ```bash
 #!/usr/bin/env bash
-# infra/bootstrap-oidc.sh — OIDC provider de GitHub Actions. UNA VEZ por cuenta.
 set -euo pipefail
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
@@ -476,7 +460,6 @@ ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 aws iam get-open-id-connect-provider \
     --open-id-connect-provider-arn "arn:aws:iam::${ACCOUNT}:oidc-provider/token.actions.githubusercontent.com" \
     --query 'Url' --output text
-# Esperado: https://token.actions.githubusercontent.com
 ```
 
 > **Atencion**: el OIDC provider es **shared a nivel cuenta**. Si tu
@@ -493,12 +476,10 @@ El bootstrap es irreversible y no esta versionado en Terraform. Marcalo
 con un commit + tag para tener un punto de retorno claro:
 
 ```bash
-# Por ahora solo los scripts. terraform.tfvars (con valores sensibles)
-# se agrega al .gitignore en Parte 3.2.4 — no existe todavia.
 git add infra/bootstrap.sh infra/bootstrap-oidc.sh
 git commit -m "infra: bootstrap scripts para S3 tfstate (lock nativo) + OIDC provider"
 git tag -a "infra/bootstrap-done" -m "Bootstrap ejecutado en cuenta $ACCOUNT_ID region $AWS_DEFAULT_REGION"
-git push origin main --tags   # opcional pero recomendado
+git push origin main --tags
 ```
 
 A partir de este punto, **toda la infra es Terraform**. Los `.sh` del
@@ -571,7 +552,6 @@ ml_training/
 Crear el esqueleto vacio:
 
 ```bash
-# Desde la raiz del repo
 dirs=(
     "infra/envs/prod"
     "infra/modules/_shared"
@@ -592,7 +572,6 @@ dirs=(
 )
 for d in "${dirs[@]}"; do mkdir -p "$d"; done
 
-# Verificar
 find infra/ docker/reports -type d
 ```
 
@@ -660,8 +639,6 @@ provider "aws" {
 ```hcl
 terraform {
   backend "s3" {
-    # Valores se inyectan desde -backend-config en `terraform init`.
-    # Asi el bucket no queda hardcoded en el repo (depende del account suffix).
     encrypt = true
   }
 }
@@ -674,7 +651,6 @@ entender de dónde salen los 4 valores. En producción, el único comando
 manual es `task infra:apply` (Parte 4.3 en adelante).
 
 ```bash
-# Fuente: tasks/infra.yml :: _init (NO ejecutar copy-paste; lo hace la task)
 BUCKET="${PROJECT}-tfstate-${ACCOUNT_SUFFIX}"
 terraform init \
     -backend-config="bucket=${BUCKET}" \
@@ -835,9 +811,6 @@ variable "work_end_hour_local" {
   default     = 16
 }
 
-# Dias que el scheduler considera laborables. DEBE wirearse a module.scheduler
-# (#3.10.5): el modulo tiene su propio default y si no se pasa, el valor de aqui
-# se ignora en silencio. Tokens de EventBridge cron ("WED,THU" o "MON-FRI").
 variable "workdays_cron" {
   description = "Dias con ventana encendida (ciclo miercoles+jueves)."
   type        = string
@@ -854,7 +827,6 @@ variable "consumer_repo" {
   type        = string
 }
 
-# ── App stack: API (FastAPI) + UI (Streamlit) ──────────────────────────────
 variable "api_image_tag" {
   description = "Tag de la imagen de la API en ECR. CI/CD lo sobreescribe por commit SHA."
   type        = string
@@ -879,11 +851,6 @@ variable "api_preload_models" {
   default     = false
 }
 
-# --- Capacidad: dimensionar segun necesidad (ver analisis de costo en GUIA) ---
-# Combos Fargate validos: 1 vCPU (1024) admite 2-8 GB; 2 vCPU (2048) admite 4-16 GB.
-# Default API 1 vCPU / 2 GB cubre lazy-load de ~6 variedades. Subir memory a 4096
-# si se activa api_preload_models con muchas variedades, o cpu a 2048 para mas
-# concurrencia. Cambiar aqui en tfvars NO requiere tocar codigo.
 variable "api_cpu" {
   type    = number
   default = 1024
@@ -909,18 +876,6 @@ alert_email = "abantodca@gmail.com"
 github_org  = "abantodca"
 github_repo = "ml_training"
 
-# App stack (Capa 4.5: API + UI). Todas estas vars tienen default sano, asi que
-# este bloque es OPCIONAL — descomenta solo lo que quieras overridear.
-# rds_instance_class = "db.t4g.small"   # default ya es small (hostea MLflow + forecasts)
-# api_cpu            = 1024              # subir a 2048 si activas preload con muchas variedades
-# api_memory         = 2048             # subir a 4096 con api_preload_models = true
-# api_preload_models = false            # true = carga todos los modelos al boot (mas RAM)
-
-# Patch 13.5 — repo consumer EXTERNO que consume el Model Registry via OIDC.
-# OPCIONAL / LEGACY: la API+UI ahora viven en ESTE monorepo (Capa 4.5), no en un
-# repo aparte. Manten consumer_org/consumer_repo solo si todavia tenes un repo
-# serving externo (ej. ml_serving) que descarga modelos read-only. Si no, podes
-# quitar el `module "consumer_iam"` de main.tf (#3.11.5) y estas dos vars.
 consumer_org  = "abantodca"      # <- tu org GH
 consumer_repo = "ml_serving"     # <- nombre del repo consumer
 ```
@@ -930,7 +885,6 @@ Agregar a `.gitignore`:
 ```bash
 cat >> .gitignore <<'EOF'
 
-# Terraform
 **/terraform.tfvars
 **/.terraform/
 **/.terraform.lock.hcl
@@ -939,7 +893,6 @@ cat >> .gitignore <<'EOF'
 .terraformrc
 terraform.rc
 
-# Lambdas .zip (Terraform los crea desde Python source)
 infra/modules/lambdas/*.zip
 infra/modules/scheduler/*.zip
 EOF
@@ -980,14 +933,6 @@ EOF
 Pegar **solo** este contenido inicial:
 
 ```hcl
-# OIDC provider de GitHub (creado en Parte 2.5, NO creado por Terraform).
-# Gateado por `var.enable_cicd` (default false): con CI/CD apagado el `data`
-# tiene count=0 y NO se evalua → el stand-up completo (storage→network→mlflow
-# →batch→api/ui) corre SIN `bash infra/bootstrap-oidc.sh` y sin github_org/repo.
-# Solo si activas CI/CD (enable_cicd=true, tras #2.5) este `data` debe resolver.
-# Pre-check antes de `terraform plan` (solo con enable_cicd=true):
-#   aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[?contains(Arn,`token.actions.githubusercontent.com`)]'
-# Si devuelve [], correr `bash infra/bootstrap-oidc.sh` (#2.5).
 data "aws_iam_openid_connect_provider" "github" {
   count = var.enable_cicd ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
@@ -1101,7 +1046,6 @@ output "gha_train_role_arn" {
   value       = var.enable_cicd ? module.cicd[0].gha_train_role_arn : null
 }
 
-# Patch 13.5
 output "consumer_role_arn" {
   description = "Role que asume el repo consumer (ml_serving) via OIDC para descargar artifacts."
   value       = module.consumer_iam.consumer_role_arn
@@ -1156,7 +1100,6 @@ La VPC propia evita choques con default-VPC.
 data "aws_availability_zones" "available" { state = "available" }
 
 locals {
-  # Solo 2 AZs (la "AZ secundaria" se reserva por RDS multi-AZ futuro)
   azs = slice(data.aws_availability_zones.available.names, 0, 2)
 }
 
@@ -1190,7 +1133,7 @@ debugging cuando ves una IP en CloudTrail.
 resource "aws_subnet" "public" {
   count                   = 2
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index) # 10.20.0.0/24, 10.20.1.0/24
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
   availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = true
   tags                    = { Name = "${var.project}-public-${count.index}" }
@@ -1199,7 +1142,7 @@ resource "aws_subnet" "public" {
 resource "aws_subnet" "private" {
   count             = 2
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10) # 10.20.10.0/24, 10.20.11.0/24
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
   availability_zone = local.azs[count.index]
   tags              = { Name = "${var.project}-private-${count.index}" }
 }
@@ -1279,7 +1222,6 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  # Ruta default solo si enable_nat=true; con NAT liberado la RT queda sin 0.0.0.0/0.
   dynamic "route" {
     for_each = var.enable_nat ? [1] : []
     content {
@@ -1425,8 +1367,6 @@ resource "aws_security_group" "rds" {
   }
 }
 
-# ── SGs de la app stack (API + UI) ─────────────────────────────────────────
-# Dedicados (no se reusa sg-mlflow) para reglas explicitas y minimas.
 resource "aws_security_group" "api" {
   name        = "${var.project}-sg-api"
   description = "API FastAPI: 8000 desde ALB y desde la UI"
@@ -1519,9 +1459,6 @@ FINAL de `infra/envs/prod/main.tf` (a continuacion del bloque
 `data` de #3.2.5):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 1: Red (VPC + subnets + NAT + SGs)
-# -------------------------------------------------------------------------
 module "network" {
   source   = "../../modules/network"
   project  = var.project
@@ -1576,9 +1513,6 @@ era el bucket de este proyecto".
 data "aws_caller_identity" "current" {}
 
 locals {
-  # ${ACCOUNT: -7} en bash. substr(...,5,7) toma chars 5-11 (indices 0-based)
-  # = los ultimos 7 chars de un account_id estandar de 12 digitos.
-  # Coincide con scripts/aws-suffix.sh (POSIX `${acct#?????}`).
   account_suffix = substr(data.aws_caller_identity.current.account_id, 5, 7)
 }
 ```
@@ -1750,7 +1684,7 @@ ECR acumule decenas de GB de imagenes viejas.
 resource "aws_ecr_repository" "trainer" {
   name                 = var.project
   image_tag_mutability = "MUTABLE" # CI/CD reusa tag "latest" + sha
-  force_delete         = true      # destroy borra el repo aunque tenga imagenes
+  force_delete         = true
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
 }
@@ -1809,7 +1743,7 @@ last 10 tags + expira untagged). Los repos `api`/`ui` son parte del App stack
 resource "aws_ecr_repository" "mlflow" {
   name                 = "${var.project}-mlflow"
   image_tag_mutability = "IMMUTABLE" # v3.12.0 nunca cambia
-  force_delete         = true        # destroy borra el repo aunque tenga imagenes
+  force_delete         = true
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
 }
@@ -1817,7 +1751,7 @@ resource "aws_ecr_repository" "mlflow" {
 resource "aws_ecr_repository" "reports" {
   name                 = "${var.project}-reports"
   image_tag_mutability = "MUTABLE" # iteramos nginx.conf seguido
-  force_delete         = true      # destroy borra el repo aunque tenga imagenes
+  force_delete         = true
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
 }
@@ -1919,9 +1853,6 @@ Mismo patron: pegar AL FINAL de `infra/envs/prod/main.tf`
 (despues del bloque `module "network"` de #3.3.4):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 2: Storage (S3 buckets + ECR repos)
-# -------------------------------------------------------------------------
 module "storage" {
   source  = "../../modules/storage"
   project = var.project
@@ -2271,12 +2202,7 @@ antes** de empezar a destruir (#8.5).
 > - **`snapshot_identifier`** (restauración): vacío = instancia nueva y vacía; con valor, el RDS **se crea a partir de ese backup**. Lo inyectan `task deploy` y `task ops:rebuild` vía `resolve_restore_snapshot()`. Lleva `ignore_changes` **obligatorio** porque es *ForceNew*: sin él, un apply posterior sin el mismo `-var` recrearía la instancia y perdería lo restaurado. Ver #8.5.
 
 ```hcl
-# infra/modules/mlflow/rds.tf
 data "aws_region" "current" {}
-
-# La credencial master (random_password + secret) NO vive aca a proposito:
-# teardown destruye este modulo y la password debe sobrevivir para poder
-# restaurar los snapshots. Ver infra/envs/prod/rds_secret.tf.
 
 resource "aws_db_subnet_group" "mlflow" {
   name       = "${var.project}-rds-subnets"
@@ -2299,23 +2225,10 @@ resource "aws_db_instance" "mlflow" {
   publicly_accessible    = false
   apply_immediately      = true
 
-  # Proteccion de datos. Defaults protectivos para que un `terraform destroy`
-  # corrido a mano igual deje copia. Las tareas de destroy/teardown levantan
-  # deletion_protection via AWS CLI y pasan skip_final_snapshot=true: ya tomaron
-  # un backup verificado ANTES de destruir (ensure_backup, #8.5), y duplicarlo
-  # costaria ~8 min mas de espera.
   deletion_protection       = var.rds_deletion_protection
   skip_final_snapshot       = var.rds_skip_final_snapshot
   final_snapshot_identifier = var.rds_skip_final_snapshot ? null : (var.rds_final_snapshot_identifier != "" ? var.rds_final_snapshot_identifier : "${var.project}-mlflow-final")
 
-  # Restauracion: vacio (default) = instancia NUEVA y VACIA. Con valor, la
-  # instancia se crea a partir de ese backup. Lo inyectan `task deploy` y
-  # `task ops:rebuild` via resolve_restore_snapshot() (tasks/lib/snapshot.sh),
-  # cerrando el ciclo backup -> restauracion. Ver #8.5.
-  #
-  # Al restaurar, AWS conserva db_name/username/password DEL BACKUP y los
-  # argumentos de arriba se ignoran; por eso la credencial master vive en la
-  # raiz (infra/envs/prod/rds_secret.tf) y sigue siendo la correcta.
   snapshot_identifier = var.rds_snapshot_identifier != "" ? var.rds_snapshot_identifier : null
 
   backup_retention_period = 7
@@ -2324,12 +2237,6 @@ resource "aws_db_instance" "mlflow" {
 
   tags = { Name = "${var.project}-mlflow" }
 
-  # OBLIGATORIO, no cosmetico: snapshot_identifier es ForceNew. Sin este
-  # ignore_changes, cualquier apply posterior que no repita el mismo -var
-  # (p.ej. el `terraform apply` completo que hace `ops:up` cuando el ALB no
-  # existe, tasks/ops.yml) veria "" contra el valor en state y DESTRUIRIA Y
-  # RECREARIA el RDS, perdiendo todo lo restaurado. El snapshot solo debe
-  # influir en la creacion inicial de la instancia.
   lifecycle {
     ignore_changes = [snapshot_identifier]
   }
@@ -2359,7 +2266,6 @@ suficiente para ML training UI; subir si subis dashboards pesados.
 > - **Por qué un solo ALB**: ~$16/mes base; con reglas por path sirve varios services. Multi-ALB solo si necesitás aislamiento total.
 
 ```hcl
-# infra/modules/mlflow/alb.tf
 resource "aws_lb" "main" {
   name               = "${var.project}-alb"
   internal           = false
@@ -2369,8 +2275,6 @@ resource "aws_lb" "main" {
   idle_timeout       = 60
 }
 
-# Default target group (MLflow). Reports agrega su propio TG en modulo
-# reports y se asocia al listener via rule.
 resource "aws_lb_target_group" "mlflow" {
   name        = "${var.project}-tg-mlflow"
   port        = 5000
@@ -2431,7 +2335,6 @@ no tenga que conocer el ALB DNS.
 > - **Por qué no el ALB DNS directo**: clientes EXTERNOS (browser, GHA) → ALB; clientes INTERNOS (trainer en Batch) → Cloud Map, conexión task-to-task más barata y rápida (sin roundtrip por el ALB).
 
 ```hcl
-# infra/modules/mlflow/ecs.tf  (parte 1/2 — cluster + service discovery)
 resource "aws_ecs_cluster" "main" {
   name = "${var.project}-cluster"
   setting {
@@ -2440,7 +2343,6 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
-# Service discovery namespace para que reports/batch resuelvan "mlflow.local"
 resource "aws_service_discovery_private_dns_namespace" "main" {
   name        = "${var.project}.local"
   description = "Service discovery interno"
@@ -2458,8 +2360,6 @@ resource "aws_service_discovery_service" "mlflow" {
     }
     routing_policy = "MULTIVALUE"
   }
-  # AWS provider v6: `health_check_custom_config { failure_threshold = 1 }`
-  # quedó deprecated — AWS lo enforza siempre a 1 implicitamente.
 }
 ```
 
@@ -2488,7 +2388,6 @@ ECS Fargate distingue dos roles:
 > - **Trust policy `ecs-tasks.amazonaws.com`**: solo ECS Fargate puede asumir el rol (no usuarios ni otros services).
 
 ```hcl
-# infra/modules/mlflow/iam.tf
 resource "aws_iam_role" "mlflow_exec" {
   name               = "${var.project}-mlflow-exec"
   assume_role_policy = file("${path.module}/../_shared/assume-ecs-tasks.json")
@@ -2499,7 +2398,6 @@ resource "aws_iam_role_policy_attachment" "mlflow_exec" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Permitir leer el secret del RDS password
 resource "aws_iam_role_policy" "mlflow_exec_secret" {
   role = aws_iam_role.mlflow_exec.id
   policy = jsonencode({
@@ -2507,7 +2405,7 @@ resource "aws_iam_role_policy" "mlflow_exec_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = var.rds_password_secret_arn # el secret vive en la raiz
+      Resource = var.rds_password_secret_arn
     }]
   })
 }
@@ -2568,26 +2466,15 @@ healthcheck, secrets). El service mantiene N replicas corriendo
 > - **`ignore_changes = [desired_count]`**: clave — el scheduler (#3.10) baja a `0`/sube a `1`; sin esto, el próximo `terraform apply` lo re-encendería deshaciendo el scheduler.
 
 ```hcl
-# infra/modules/mlflow/ecs.tf  (parte 2/2 — log group + task def + service)
 resource "aws_cloudwatch_log_group" "mlflow" {
   name              = "/ecs/${var.project}/mlflow"
   retention_in_days = var.log_retention_days
 }
 
-# Task definition
 resource "aws_ecs_task_definition" "mlflow" {
   family                   = "${var.project}-mlflow"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  # Rightsizing (#9.4.2): 2 vCPU/4 GB -> 1 vCPU/3 GB, ~-$3.10/mes. El server es
-  # IO-bound (Postgres + proxy a S3 con --serve-artifacts), no CPU-bound.
-  #
-  # Por que 3 GB y no 2: `mlflow server` levanta 4 workers gunicorn por defecto
-  # (no pasamos --workers) y el trainer loguea 4 variedades en PARALELO. A
-  # ~300 MB de RSS por worker, 2 GB queda sin margen para el buffer de artifacts.
-  # Los 1 GB extra cuestan $0.30/mes — mas barato que un OOM a mitad de un run.
-  # Combos Fargate validos con cpu=1024: memoria 2048..8192 en pasos de 1024.
-  # Rollback: volver a "2048"/"4096" si ves OOMKilled en el log group de mlflow.
   cpu                      = "1024" # 1 vCPU
   memory                   = "3072" # 3 GB
   execution_role_arn       = aws_iam_role.mlflow_exec.arn
@@ -2604,31 +2491,16 @@ resource "aws_ecs_task_definition" "mlflow" {
         join(" ", [
           "mlflow server",
           "--host 0.0.0.0 --port 5000",
-          # MLflow 3.5+ valida Host. Admitimos únicamente los hosts usados por
-          # el ALB y por service discovery interno; nunca '*'.
           "--allowed-hosts ${aws_lb.main.dns_name},${aws_lb.main.dns_name}:*,mlflow.${var.project}.local,mlflow.${var.project}.local:*",
-          # CORS: check SEPARADO de allowed-hosts. MLflow 3.5+ valida el
-          # header `Origin` del navegador y su default es solo `localhost:*`,
-          # asi que TODO POST del UI servido via ALB (runs/search, etc.) cae
-          # en 403 "Cross-origin request blocked" -> la lista de runs sale
-          # vacia. El DNS del ALB SI es referenciable en apply-time, asi que
-          # lo pasamos explicito en vez de '*'. Ver #3.5.x.
           "--cors-allowed-origins http://${aws_lb.main.dns_name}",
-          # Single `$` a propósito: Terraform solo escapa `$${`→`${`; un `$$`
-          # suelto se pasa literal y `sh` lo interpreta como su PID ($$=PID),
-          # mandando "<pid>RDS_PASSWORD" como password. Con un solo `$` el shell
-          # expande la env var inyectada desde Secrets Manager. Ver #3.5.2.
           "--backend-store-uri postgresql://mlflow:$RDS_PASSWORD@${aws_db_instance.mlflow.address}:5432/mlflow",
-          # Modo proxy coherente con local: nuevos runs reciben
-          # mlflow-artifacts:/... y los clientes no necesitan permisos S3 para
-          # artifacts de MLflow. No mezclar --default-artifact-root con proxy.
           "--artifacts-destination s3://${var.artifacts_bucket}/artifacts",
           "--serve-artifacts"
         ])
       ]
       secrets = [{
         name      = "RDS_PASSWORD"
-        valueFrom = var.rds_password_secret_arn # el secret vive en la raiz
+        valueFrom = var.rds_password_secret_arn
       }]
       environment = [
         { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.region }
@@ -2676,7 +2548,6 @@ resource "aws_ecs_service" "mlflow" {
     registry_arn = aws_service_discovery_service.mlflow.arn
   }
 
-  # Ignore desired_count para que el scheduler lo pueda manejar sin drift
   lifecycle {
     ignore_changes = [desired_count]
   }
@@ -2706,7 +2577,6 @@ output "cluster_name" { value = aws_ecs_cluster.main.name }
 output "service_name" { value = aws_ecs_service.mlflow.name }
 output "rds_instance_id" { value = aws_db_instance.mlflow.id }
 
-# --- Wiring para los modulos api / ui (Capa 4.5) ---
 output "service_discovery_namespace_id" {
   description = "ID del namespace privado <project>.local para registrar la API."
   value       = aws_service_discovery_private_dns_namespace.main.id
@@ -2715,9 +2585,6 @@ output "rds_address" {
   description = "Host del RDS (la API monta su DATABASE_URL hacia la base forecasts)."
   value       = aws_db_instance.mlflow.address
 }
-# NOTA: el output `rds_password_secret_arn` se removio al mover el secret a la
-# raiz (envs/prod/rds_secret.tf). module.api ahora lo toma directamente de
-# aws_secretsmanager_secret.rds.arn, sin pasar por este modulo.
 ```
 
 > **En consola AWS veras**:
@@ -2745,9 +2612,6 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "storage"` de #3.4.4):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 3: MLflow (RDS + ECS Fargate + ALB)
-# -------------------------------------------------------------------------
 module "mlflow" {
   source = "../../modules/mlflow"
 
@@ -2828,7 +2692,6 @@ variable "log_retention_days" { type = number }
 ```hcl
 data "aws_region" "current" {}
 
-# Target group
 resource "aws_lb_target_group" "reports" {
   name        = "${var.project}-tg-reports"
   port        = 80
@@ -2846,7 +2709,6 @@ resource "aws_lb_target_group" "reports" {
   }
 }
 
-# Listener rules: /reports/* y /artifacts/* -> reports TG
 resource "aws_lb_listener_rule" "reports_path" {
   listener_arn = var.alb_listener_arn
   priority     = 100
@@ -2860,7 +2722,6 @@ resource "aws_lb_listener_rule" "reports_path" {
   }
 }
 
-# IAM (assume policy compartida en infra/modules/_shared/)
 resource "aws_iam_role" "reports_exec" {
   name               = "${var.project}-reports-exec"
   assume_role_policy = file("${path.module}/../_shared/assume-ecs-tasks.json")
@@ -2933,7 +2794,7 @@ resource "aws_ecs_service" "reports" {
 
   network_configuration {
     subnets          = var.private_subnet_ids
-    security_groups  = [var.sg_mlflow_id] # mismo SG que mlflow: ingress :80 desde sg-alb
+    security_groups  = [var.sg_mlflow_id]
     assign_public_ip = false
   }
 
@@ -2979,13 +2840,6 @@ Imagen custom: nginx + `aws s3 sync` cada 60s en background.
 > aws-cli.)
 
 ```dockerfile
-# Base Debian (glibc), NO alpine: el paquete `aws-cli` de Alpine venia con un
-# expat roto en la imagen (pyexpat/minidom: "XML_SetAllocTrackerActivationThreshold:
-# symbol not found"), lo que tumbaba CUALQUIER invocacion de `aws` con un
-# traceback de Python -> el `aws s3 sync` del entrypoint nunca corria y
-# /reports + /artifacts quedaban vacios aunque S3 tuviera los archivos.
-# AWS CLI v2 oficial es glibc, self-contained y soportado: no depende del
-# expat/prompt_toolkit del sistema.
 FROM nginx:1.27
 
 RUN apt-get update \
@@ -3000,7 +2854,6 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# config nginx que sirve /usr/share/nginx/html con autoindex
 COPY docker/reports/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/reports/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -3016,15 +2869,12 @@ server {
   listen 80 default_server;
   server_name _;
 
-  # Health check para ALB target group
   location = /healthz {
     access_log off;
     return 200 "ok\n";
     add_header Content-Type text/plain;
   }
 
-  # /reports/* -> /usr/share/nginx/html/reports/*
-  # /artifacts/* -> /usr/share/nginx/html/artifacts/*
   location / {
     root /usr/share/nginx/html;
     autoindex on;
@@ -3046,11 +2896,9 @@ set -e
 
 mkdir -p /usr/share/nginx/html/reports /usr/share/nginx/html/artifacts
 
-# Sync inicial (bloqueante: arrancamos nginx con data ya cargada)
 aws s3 sync "s3://${S3_BUCKET}/reports/"   /usr/share/nginx/html/reports/   --no-progress || true
 aws s3 sync "s3://${S3_BUCKET}/artifacts/" /usr/share/nginx/html/artifacts/ --no-progress || true
 
-# Sync loop en background (cada 60s)
 (
   while true; do
     sleep 60
@@ -3059,7 +2907,6 @@ aws s3 sync "s3://${S3_BUCKET}/artifacts/" /usr/share/nginx/html/artifacts/ --no
   done
 ) &
 
-# Foreground: nginx
 exec nginx -g 'daemon off;'
 ```
 
@@ -3069,9 +2916,6 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "mlflow"` de #3.5.4):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 4: Reports (Fargate nginx, mismo cluster + ALB que MLflow)
-# -------------------------------------------------------------------------
 module "reports" {
   source = "../../modules/reports"
 
@@ -3128,7 +2972,7 @@ variable "data_bucket_arn" { type = string }
 
 variable "job_attempt_seconds" {
   type    = number
-  default = 28800 # 8h hard ceiling (incluye prod_xl)
+  default = 28800
 }
 
 variable "log_retention_days" { type = number }
@@ -3156,11 +3000,6 @@ variable "log_retention_days" { type = number }
 > - **Por qué tanta separación**: **least privilege**. Comprometer el trainer (job role) no da destruir EC2s (batch_service), modificar el cluster (instance) ni leer secrets.
 
 ```hcl
-# infra/modules/batch/iam.tf
-# Trust policies viven como JSON estatico en infra/modules/_shared/
-# (assume-ec2.json, assume-ecs-tasks.json, assume-batch-service.json).
-
-# Role asumido por la EC2 que lanza Batch (instance profile)
 resource "aws_iam_role" "batch_instance" {
   name               = "${var.project}-batch-instance"
   assume_role_policy = file("${path.module}/../_shared/assume-ec2.json")
@@ -3176,16 +3015,11 @@ resource "aws_iam_instance_profile" "batch" {
   role = aws_iam_role.batch_instance.name
 }
 
-# Role asumido por el container (task) durante el job
 resource "aws_iam_role" "job" {
   name               = "${var.project}-job-role"
   assume_role_policy = file("${path.module}/../_shared/assume-ecs-tasks.json")
 }
 
-# S3: el trainer necesita:
-#  - GetObject en s3://data/ (hydrate del Excel acumulado)
-#  - PutObject en s3://artifacts/{artifacts,reports}/ (sync de outputs)
-#  - PutObject en s3://artifacts/artifacts/ (MLflow log_artifact)
 resource "aws_iam_role_policy" "job_s3" {
   role = aws_iam_role.job.id
   policy = jsonencode({
@@ -3207,7 +3041,6 @@ resource "aws_iam_role_policy" "job_s3" {
   })
 }
 
-# CloudWatch: para emitir custom metric MAPE desde el trainer (Parte 5)
 resource "aws_iam_role_policy" "job_cloudwatch" {
   role = aws_iam_role.job.id
   policy = jsonencode({
@@ -3220,7 +3053,6 @@ resource "aws_iam_role_policy" "job_cloudwatch" {
   })
 }
 
-# Execution role (pull image, write logs) — usado por Batch para arrancar
 resource "aws_iam_role" "exec" {
   name               = "${var.project}-job-exec"
   assume_role_policy = file("${path.module}/../_shared/assume-ecs-tasks.json")
@@ -3231,8 +3063,6 @@ resource "aws_iam_role_policy_attachment" "exec" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Service role de Batch (gestion de CE).
-# Antes era inline `jsonencode({...})`; ahora consume el JSON shared.
 resource "aws_iam_role" "batch_service" {
   name               = "${var.project}-batch-service"
   assume_role_policy = file("${path.module}/../_shared/assume-batch-service.json")
@@ -3256,7 +3086,6 @@ Logs de TODOS los Batch jobs en un solo group. Retencion configurable
 desde `envs/prod/terraform.tfvars` (default 14 dias).
 
 ```hcl
-# infra/modules/batch/main.tf  (parte 1/4 — data + log group)
 data "aws_region" "current" {}
 
 resource "aws_cloudwatch_log_group" "batch" {
@@ -3287,11 +3116,7 @@ drift cuando Batch scaling lo cambia entre apply y apply.
 > - **`ignore_changes = desired_vcpus`**: Batch lo ajusta según carga; Terraform no debe "arreglarlo" en cada apply.
 
 ```hcl
-# infra/modules/batch/main.tf  (parte 2/4 — compute environments)
 resource "aws_batch_compute_environment" "spot" {
-  # AWS provider v6+ usa `name`. El atributo `compute_environment_name`
-  # fue deprecado en v5 y eliminado en v6 -> con `aws ~> 6.0` lockeado
-  # en #3.2.1, `terraform validate` falla si se usa el nombre viejo.
   name         = "${var.project}-ce-spot"
   service_role = aws_iam_role.batch_service.arn
   type         = "MANAGED"
@@ -3361,7 +3186,6 @@ Una queue por CE. El Lambda dispatcher (#3.9.5) elige queue por
 > - **Por qué 2 queues y no una con 2 CEs**: una queue multi-CE haría spillover (si CE-A se llena, usa CE-B). Con 2 queues separadas el dispatcher elige explícito — `prod_xl` SIEMPRE OD, resto SIEMPRE Spot, sin riesgo de spillover.
 
 ```hcl
-# infra/modules/batch/main.tf  (parte 3/4 — job queues)
 resource "aws_batch_job_queue" "spot" {
   name     = "${var.project}-job-queue-spot"
   state    = "ENABLED"
@@ -3405,15 +3229,12 @@ solo reintenta cuando AWS Spot mata el host (no en error del trainer).
 > - **`timeout = 28800`** (8h): mata jobs colgados para no pagar EC2 de más.
 
 ```hcl
-# infra/modules/batch/main.tf  (parte 4/4 — job definition)
 resource "aws_batch_job_definition" "trainer" {
   name = "${var.project}-trainer"
   type = "container"
 
   retry_strategy {
     attempts = 2
-    # Auto-retry solo cuando Spot interrumpe el host (preserva exit codes
-    # del trainer; un error real no se reintenta)
     evaluate_on_exit {
       action           = "RETRY"
       on_status_reason = "Host EC2*"
@@ -3430,20 +3251,16 @@ resource "aws_batch_job_definition" "trainer" {
 
   container_properties = jsonencode({
     image            = "${var.ecr_trainer_url}:${var.trainer_image_tag}"
-    vcpus            = 8     # c6i.2xlarge tiene 8 vCPU
-    memory           = 14000 # de los 16 GB, dejamos ~2 GB para kernel + Batch agent
+    vcpus            = 8
+    memory           = 14000
     jobRoleArn       = aws_iam_role.job.arn
     executionRoleArn = aws_iam_role.exec.arn
-    # networkConfiguration (assignPublicIp) es solo Fargate; en EC2 la IP
-    # publica se define en la subnet/compute environment, no aqui.
-    # Sobreescrito por Lambda dispatcher (Sec 3.9.5) en cada submit.
     command = ["--varieties", "POP", "--tuning", "smoke"]
     environment = [
       { name = "MLFLOW_TRACKING_URI", value = var.tracking_uri },
       { name = "S3_ARTIFACTS_BUCKET", value = var.artifacts_bucket },
       { name = "S3_ARTIFACTS_PREFIX", value = "artifacts" },
       { name = "S3_REPORTS_PREFIX", value = "reports" },
-      # S3_DATA_BUCKET / S3_DATA_KEY se inyectan por job (varia por submit)
       { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.region },
       { name = "PYTHONUNBUFFERED", value = "1" }
     ]
@@ -3503,9 +3320,6 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "reports"` de #3.6.7):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 5: Batch (Spot + OD queues, job-def, IAM)
-# -------------------------------------------------------------------------
 module "batch" {
   source = "../../modules/batch"
 
@@ -3579,7 +3393,6 @@ variable "mape_alarm_threshold" { type = number }
 > - **`evaluation_periods = 2` en ALB 5xx**: exige 2 periodos consecutivos para no disparar por un spike transient. MAPE usa 1 (el trainer publica 1 valor por run).
 
 ```hcl
-# ----- SNS topic + suscripcion email ----------------------------------
 resource "aws_sns_topic" "alerts" {
   name = "${var.project}-alerts"
 }
@@ -3590,8 +3403,6 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alert_email
 }
 
-# ----- Alarma 1: Batch job FAILED -------------------------------------
-# CloudWatch publica metricas de Batch (FailedJobs por queue) cada 5 min.
 resource "aws_cloudwatch_metric_alarm" "batch_failed" {
   alarm_name          = "${var.project}-batch-job-failed"
   comparison_operator = "GreaterThanOrEqualToThreshold"
@@ -3610,9 +3421,6 @@ resource "aws_cloudwatch_metric_alarm" "batch_failed" {
   ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
-# ----- Alarma 2: MAPE alto, por variedad ------------------------------
-# Custom metric "MAPE" en namespace "${project}/Training", dimension
-# `variety`. Emitida por el trainer (Parte 5).
 resource "aws_cloudwatch_metric_alarm" "mape_high" {
   for_each = toset(var.varieties)
 
@@ -3621,7 +3429,7 @@ resource "aws_cloudwatch_metric_alarm" "mape_high" {
   evaluation_periods  = 1
   metric_name         = "MAPE"
   namespace           = "${var.project}/Training"
-  period              = 3600 # 1h (MAPE se publica al final del run)
+  period              = 3600
   statistic           = "Maximum"
   threshold           = var.mape_alarm_threshold
   alarm_description   = "MAPE de ${each.value} supero ${var.mape_alarm_threshold}%"
@@ -3632,7 +3440,6 @@ resource "aws_cloudwatch_metric_alarm" "mape_high" {
   alarm_actions = [aws_sns_topic.alerts.arn]
 }
 
-# ----- Alarma 3: ALB 5xx -----------------------------------------------
 resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   alarm_name          = "${var.project}-alb-5xx"
   comparison_operator = "GreaterThanThreshold"
@@ -3679,9 +3486,6 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "batch"` de #3.7.5):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 6: Monitoring (SNS + alarmas CloudWatch)
-# -------------------------------------------------------------------------
 module "monitoring" {
   source = "../../modules/monitoring"
 
@@ -3734,10 +3538,6 @@ Dos Lambdas:
 variable "project" { type = string }
 variable "job_queue_spot_arn" { type = string }
 variable "job_queue_ondemand_arn" { type = string }
-# *_name vars: el dispatcher.py / notifier.py usan los NAMES (no ARNs)
-# para `batch.submit_job` / `batch.describe_jobs`. Antes el .tf construia
-# `"${var.project}-job-queue-spot"` inline; ahora se reciben como input
-# del envs/prod (wireado desde module.batch.job_queue_spot/ondemand).
 variable "job_queue_spot_name" { type = string }
 variable "job_queue_ondemand_name" { type = string }
 variable "job_definition_name" { type = string }
@@ -3773,18 +3573,15 @@ variable "lambdas_src_dir" { type = string }
 > - **`source_code_hash`**: cuando cambia el .zip, Terraform lo detecta via hash y dispara redeploy. Sin esto, Terraform veria "el filename no cambio" y no haria nada (el zip se reconstruiria pero Lambda seguiria con la version vieja).
 
 ```hcl
-# infra/modules/lambdas/dispatcher.tf
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
-# Empaca el codigo Python en zip
 data "archive_file" "dispatcher" {
   type        = "zip"
   source_file = "${var.lambdas_src_dir}/dispatcher.py"
   output_path = "${path.module}/dispatcher.zip"
 }
 
-# IAM (trust policy compartida en infra/modules/_shared/assume-lambda.json)
 resource "aws_iam_role" "dispatcher" {
   name               = "${var.project}-dispatcher"
   assume_role_policy = file("${path.module}/../_shared/assume-lambda.json")
@@ -3797,13 +3594,10 @@ resource "aws_iam_role_policy" "dispatcher" {
     Statement = [
       {
         Effect = "Allow"
-        # TagResource: SubmitJob pasa tags={...}, lo cual requiere batch:TagResource
         Action = ["batch:SubmitJob", "batch:DescribeJobs", "batch:TagResource"]
         Resource = [
           var.job_queue_spot_arn,
           var.job_queue_ondemand_arn,
-          # SubmitJob por NAME autoriza contra el ARN SIN revision; SubmitJob
-          # por ARN con revision matchea el patron `:*`. Hacen falta ambos.
           "arn:aws:batch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:job-definition/${var.job_definition_name}",
           "arn:aws:batch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:job-definition/${var.job_definition_name}:*"
         ]
@@ -3835,10 +3629,6 @@ resource "aws_lambda_function" "dispatcher" {
   environment {
     variables = {
       PROJECT = var.project
-      # AWS Batch SubmitJob/ListJobs aceptan ARN o name; usamos NAME.
-      # Antes el .tf construia `"${var.project}-job-queue-spot"` inline;
-      # ahora se recibe como input (var.job_queue_spot_name) wireado
-      # desde module.batch.job_queue_spot — single source of truth.
       JOB_QUEUE_SPOT     = var.job_queue_spot_name
       JOB_QUEUE_ONDEMAND = var.job_queue_ondemand_name
       JOB_DEFINITION     = var.job_definition_name
@@ -3874,7 +3664,6 @@ resource "aws_lambda_function" "dispatcher" {
 > - **`aws_lambda_permission`**: Lambda no acepta invocaciones por default; cada source (EventBridge, S3, API GW) necesita una resource policy explícita. En Console es automático; en Terraform, recurso aparte.
 
 ```hcl
-# infra/modules/lambdas/notifier.tf
 data "archive_file" "notifier" {
   type        = "zip"
   source_file = "${var.lambdas_src_dir}/notifier.py"
@@ -3935,7 +3724,6 @@ resource "aws_lambda_function" "notifier" {
   depends_on = [aws_cloudwatch_log_group.notifier]
 }
 
-# EventBridge rule: Batch Job State Change FAILED -> notifier
 resource "aws_cloudwatch_event_rule" "batch_failed" {
   name        = "${var.project}-batch-failed"
   description = "Captura Batch jobs en estado FAILED"
@@ -4010,7 +3798,6 @@ VARIETIES_ALLOWED  = set(os.environ["VARIETIES_ALLOWED"].split(","))
 
 TUNINGS = {"smoke", "dev", "prod", "prod_xl"}
 
-
 def _normalize_varieties(raw: str) -> list[str]:
     if not raw:
         raise ValueError("varieties vacio")
@@ -4023,30 +3810,24 @@ def _normalize_varieties(raw: str) -> list[str]:
         raise ValueError(f"variedades no permitidas: {bad}. Validas: {sorted(VARIETIES_ALLOWED)}")
     return items
 
-
 def _validate_tuning(tuning: str) -> str:
     if tuning not in TUNINGS:
         raise ValueError(f"tuning invalido: {tuning}. Validos: {sorted(TUNINGS)}")
     return tuning
-
 
 def _validate_key(key: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9._/\-]+\.xlsx", key):
         raise ValueError(f"s3_data_key invalido: {key}")
     return key
 
-
 def _validate_mode(mode: str) -> str:
-    # train (default) entrena; eda corre el analisis exploratorio standalone.
     if mode not in ("train", "eda"):
         raise ValueError(f"mode invalido: {mode}. Validos: eda, train")
     return mode
 
-
 def handler(event, _context):
     log.info("event: %s", json.dumps(event)[:1000])
 
-    # EventBridge envuelve el payload en `detail`; manual invoke lo pasa raw.
     payload = event.get("detail", event) or {}
 
     try:
@@ -4060,10 +3841,8 @@ def handler(event, _context):
 
     queue = JOB_QUEUE_ONDEMAND if tuning == "prod_xl" else JOB_QUEUE_SPOT
     job_name = f"{PROJECT}-{'eda' if mode == 'eda' else tuning}-{'-'.join(varieties)[:50]}"
-    # sanitize: Batch acepta [a-zA-Z0-9_-], max 128
     job_name = re.sub(r"[^a-zA-Z0-9_-]", "-", job_name)[:128]
 
-    # EDA: standalone, no entrena -> ignora tuning/modelo. Training: como siempre.
     if mode == "eda":
         command = ["--eda", "--varieties", ",".join(varieties)]
     else:
@@ -4117,13 +3896,8 @@ sns   = boto3.client("sns")
 batch = boto3.client("batch")
 
 SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
-# AWS_REGION lo inyecta Lambda runtime automaticamente.
 AWS_REGION = os.environ["AWS_REGION"]
-# BATCH_LOG_GROUP es el name real (ej. "/aws/batch/ml-training"); el modulo
-# batch lo expone como output y se pasa via env var. Antes se construia con
-# f"/aws/batch/{PROJECT}" -> rompia silencioso si el log group cambiaba de patron.
 BATCH_LOG_GROUP = os.environ["BATCH_LOG_GROUP"]
-
 
 def _cw_url_encode(s: str) -> str:
     """CloudWatch UI hace doble URL-decode del log group/stream name.
@@ -4131,7 +3905,6 @@ def _cw_url_encode(s: str) -> str:
     "/" se vuelve "$252F" (% URL-encoded a %25, luego %25 + 2F = $252F).
     """
     return s.replace("/", "$252F")
-
 
 def handler(event, _context):
     log.info("event: %s", json.dumps(event)[:1500])
@@ -4178,9 +3951,6 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "monitoring"` de #3.8.4):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 7: Lambdas (dispatcher + notifier)
-# -------------------------------------------------------------------------
 module "lambdas" {
   source = "../../modules/lambdas"
 
@@ -4230,17 +4000,13 @@ variable "ecs_service_name_reports" { type = string }
 variable "ecs_service_name_api" { type = string }
 variable "ecs_service_name_ui" { type = string }
 variable "rds_instance_id" { type = string }
-# *_name vars: el scheduler.py llama batch.list_jobs(jobQueue=NAME)
-# para detectar jobs RUNNING antes de apagar RDS. Antes el .tf
-# construia los nombres inline; ahora se reciben como input desde
-# envs/prod (module.batch.job_queue_spot / job_queue_ondemand).
 variable "job_queue_spot_name" { type = string }
 variable "job_queue_ondemand_name" { type = string }
 variable "work_start_hour_local" { type = number }
 variable "work_end_hour_local" { type = number }
 variable "tz_offset_hours" {
   type    = number
-  default = -5 # PET (Peru)
+  default = -5
 }
 variable "workdays_cron" {
   type    = string
@@ -4280,18 +4046,8 @@ locals {
   start_hour_utc = (var.work_start_hour_local - var.tz_offset_hours + 24) % 24
   stop_hour_utc  = (var.work_end_hour_local - var.tz_offset_hours + 24) % 24
 
-  # Guarda para cortes nocturnos. Con el default actual (16:00 PET -> 21:00 UTC)
-  # NO se activa: el stop cae el mismo dia UTC y stop_days == workdays_cron.
-  #
-  # Se activa con cualquier corte >= 19:00 PET, que cruza medianoche en UTC
-  # (20:00 PET = 01:00 UTC del dia SIGUIENTE). Como EventBridge evalua en UTC,
-  # ahi los tokens de dia deben correrse uno: parar el miercoles 20:00 PET es
-  # `cron(0 1 ? * THU *)`. Sin este shift el stop se adelantaria un dia entero
-  # (apagaria el martes por la noche y dejaria el jueves encendido).
   stop_wraps_day = (var.work_end_hour_local - var.tz_offset_hours) >= 24
 
-  # Solo soporta listas por comas ("WED,THU"), no rangos ("MON-FRI"): con un
-  # rango habria que expandirlo antes. workdays_cron usa lista por convencion.
   next_day = {
     MON = "TUE", TUE = "WED", WED = "THU", THU = "FRI",
     FRI = "SAT", SAT = "SUN", SUN = "MON"
@@ -4307,7 +4063,6 @@ data "archive_file" "scheduler" {
   output_path = "${path.module}/scheduler.zip"
 }
 
-# Trust policy compartida en infra/modules/_shared/assume-lambda.json
 resource "aws_iam_role" "scheduler" {
   name               = "${var.project}-scheduler"
   assume_role_policy = file("${path.module}/../_shared/assume-lambda.json")
@@ -4356,7 +4111,7 @@ resource "aws_lambda_function" "scheduler" {
   handler          = "scheduler.handler"
   filename         = data.archive_file.scheduler.output_path
   source_code_hash = data.archive_file.scheduler.output_base64sha256
-  timeout          = 900 # Patch 13.3: 15 min (antes 300). Cubre RDS cold start (~5-8 min) + wait MLflow.
+  timeout          = 900
   memory_size      = 256
 
   environment {
@@ -4368,19 +4123,8 @@ resource "aws_lambda_function" "scheduler" {
       ECS_SVC_API     = var.ecs_service_name_api
       ECS_SVC_UI      = var.ecs_service_name_ui
       RDS_INSTANCE    = var.rds_instance_id
-      # Antes los names se construian inline (`"${var.project}-job-queue-spot"`);
-      # ahora vienen como input wireado desde module.batch en envs/prod.
       JOB_QUEUE_SPOT     = var.job_queue_spot_name
       JOB_QUEUE_ONDEMAND = var.job_queue_ondemand_name
-      # Propagar workdays + ventana al _keepstop (sino los dias sin ventana
-      # quedarian "dentro" y nunca re-pararia el RDS).
-      #
-      # La ventana viaja en hora LOCAL, no UTC. Con el default (08-16 PET =
-      # 13-21 UTC) daria igual, pero en cuanto el corte pasa de las 19:00 PET
-      # el rango UTC da la vuelta a medianoche (13..01) y rompe la comparacion
-      # `start <= h < end` (13 <= h < 1 es siempre falso -> el keepstop
-      # apagaria el RDS cada 6h en plena jornada). _keepstop convierte a local
-      # con TZ_OFFSET_HOURS y compara sin wrap, asi la ventana es movible.
       WORKDAYS_CRON    = var.workdays_cron
       WORK_START_LOCAL = tostring(var.work_start_hour_local)
       WORK_END_LOCAL   = tostring(var.work_end_hour_local)
@@ -4429,7 +4173,6 @@ resource "aws_cloudwatch_event_target" "start" {
   input     = jsonencode({ action = "start" })
 }
 
-# ----- EventBridge: cron STOP L-V <stop_hour_utc>:00 -----------------
 resource "aws_cloudwatch_event_rule" "stop" {
   name                = "${var.project}-stop"
   description         = "${var.workdays_cron} ${var.work_end_hour_local}:00 PET stop RDS+Fargate"
@@ -4443,8 +4186,6 @@ resource "aws_cloudwatch_event_target" "stop" {
   input     = jsonencode({ action = "stop" })
 }
 
-# ----- Cron extra: cada 6h chequea RDS y lo re-stop si quedo RUNNING --
-# (necesario porque RDS auto-arranca despues de 7 dias stopped)
 resource "aws_cloudwatch_event_rule" "rds_keepstop" {
   name                = "${var.project}-rds-keepstop"
   description         = "Cada 6h: re-stop RDS si quedo RUNNING fuera de ventana"
@@ -4509,8 +4250,6 @@ resource "aws_lambda_permission" "keepstop" {
 #### 3.10.3 `modules/scheduler/outputs.tf`
 
 ```hcl
-# scheduler no expone outputs: opera por side-effects (Lambda scheduler +
-# EventBridge start/stop rules). El parent (envs/prod) no consume nada de aqui.
 ```
 
 #### 3.10.4 `infra/lambdas/scheduler.py`
@@ -4556,17 +4295,13 @@ batch = boto3.client("batch")
 ECS_CLUSTER        = os.environ["ECS_CLUSTER"]
 ECS_SVC_MLFLOW     = os.environ["ECS_SVC_MLFLOW"]
 ECS_SVC_REPORTS    = os.environ["ECS_SVC_REPORTS"]
-# App stack (defaults tolerantes: los servicios se llaman literalmente api/ui).
 ECS_SVC_API        = os.environ.get("ECS_SVC_API", "api")
 ECS_SVC_UI         = os.environ.get("ECS_SVC_UI", "ui")
 RDS_INSTANCE       = os.environ["RDS_INSTANCE"]
 JOB_QUEUE_SPOT     = os.environ["JOB_QUEUE_SPOT"]
 JOB_QUEUE_ONDEMAND = os.environ["JOB_QUEUE_ONDEMAND"]
 
-# Patch 13.1: workdays + horas configurables via env (default = ciclo
-# WED,THU 08-16 PET). EventBridge cron usa los mismos tokens (WED,THU).
 _WEEKDAY_MAP = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
-
 
 def _parse_workdays(cron_token: str) -> set[int]:
     """Parsea 'MON,WED,FRI' o 'MON-FRI' a un set de tm_wday (0=lunes)."""
@@ -4577,7 +4312,6 @@ def _parse_workdays(cron_token: str) -> set[int]:
         return set(range(ia, ib + 1))
     return {_WEEKDAY_MAP[tok.strip()] for tok in cron_token.split(",") if tok.strip()}
 
-
 def _running_jobs() -> list[str]:
     """IDs de jobs en estado RUNNING o RUNNABLE en cualquiera de las queues."""
     ids: list[str] = []
@@ -4586,7 +4320,6 @@ def _running_jobs() -> list[str]:
             resp = batch.list_jobs(jobQueue=queue, jobStatus=status)
             ids.extend(j["jobId"] for j in resp.get("jobSummaryList", []))
     return ids
-
 
 def _set_desired(service: str, count: int) -> bool:
     """update_service tolerante a service inexistente o INACTIVE.
@@ -4604,7 +4337,6 @@ def _set_desired(service: str, count: int) -> bool:
         log.warning("ecs %s no existe o esta INACTIVE (stack hibernado?) -> skip", service)
         return False
 
-
 def _start():
     """Wake secuencial: RDS -> MLflow -> Reports (Patch 13.3).
 
@@ -4617,13 +4349,11 @@ def _start():
     """
     log.info("=== START (secuencial: RDS -> MLflow -> Reports) ===")
 
-    # Etapa 1: RDS
     db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]
     if db["DBInstanceStatus"] == "stopped":
         rds.start_db_instance(DBInstanceIdentifier=RDS_INSTANCE)
         log.info("rds start_db_instance ack")
 
-    # Esperar hasta available (max ~8 min)
     state = db["DBInstanceStatus"]
     for i in range(48):
         db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]
@@ -4637,9 +4367,7 @@ def _start():
 
     log.info("rds OK -> arrancando MLflow")
 
-    # Etapa 2: MLflow Fargate
     if _set_desired(ECS_SVC_MLFLOW, 1):
-        # Esperar hasta running (max ~5 min). Si no llega, igual arrancamos reports.
         for i in range(30):
             svc = ecs.describe_services(cluster=ECS_CLUSTER, services=[ECS_SVC_MLFLOW])["services"][0]
             running = svc.get("runningCount", 0)
@@ -4650,12 +4378,9 @@ def _start():
         else:
             log.warning("MLflow no esta running tras 5 min, arrancamos reports igual")
 
-    # Etapa 3: Reports + API + UI Fargate (no esperan, son no-bloqueantes).
-    # La API tolera que MLflow aun no este listo (lazy-load); RDS ya esta up.
     for svc in (ECS_SVC_REPORTS, ECS_SVC_API, ECS_SVC_UI):
         _set_desired(svc, 1)
     log.info("=== START OK ===")
-
 
 def _stop():
     log.info("=== STOP ===")
@@ -4667,11 +4392,9 @@ def _stop():
         )
         return
 
-    # ECS: desired_count = 0 (incluye app stack api + ui)
     for svc in (ECS_SVC_MLFLOW, ECS_SVC_REPORTS, ECS_SVC_API, ECS_SVC_UI):
         _set_desired(svc, 0)
 
-    # RDS: stop si esta RUNNING
     db = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE)["DBInstances"][0]
     state = db["DBInstanceStatus"]
     if state == "available":
@@ -4679,7 +4402,6 @@ def _stop():
         log.info("rds stop_db_instance ack")
     else:
         log.info("rds en estado %s (skip stop)", state)
-
 
 def _keepstop():
     """Defense: si RDS quedo RUNNING fuera de ventana, re-pararlo (Patch 13.1).
@@ -4699,7 +4421,7 @@ def _keepstop():
 
     now_local = time.gmtime(time.time() + offset * 3600)
     hour = now_local.tm_hour
-    weekday = now_local.tm_wday   # 0=lunes, ya en local
+    weekday = now_local.tm_wday
     in_window = (weekday in workdays) and (start_local <= hour < end_local)
     if in_window:
         log.info("dentro de ventana (local=%02d:00, weekday=%d, workdays=%s), skip",
@@ -4717,7 +4439,6 @@ def _keepstop():
         log.info("rds re-stopped por keepstop")
     else:
         log.info("rds en estado %s (skip)", state)
-
 
 def handler(event, _context):
     action = (event or {}).get("action", "stop")
@@ -4738,9 +4459,6 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues de
 `module "lambdas"` de #3.9.7):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 8: Scheduler (auto on/off RDS + Fargate)
-# -------------------------------------------------------------------------
 module "scheduler" {
   source = "../../modules/scheduler"
 
@@ -4755,8 +4473,6 @@ module "scheduler" {
   job_queue_ondemand_name  = module.batch.job_queue_ondemand
   work_start_hour_local    = var.work_start_hour_local
   work_end_hour_local      = var.work_end_hour_local
-  # Sin esta linea el modulo cae a su propio default y el valor de envs/prod
-  # se ignora en silencio (los crons quedarian en dias distintos al esperado).
   workdays_cron            = var.workdays_cron
   log_retention_days       = var.log_retention_days
   lambdas_src_dir          = "${path.module}/../../lambdas"
@@ -4832,10 +4548,6 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  # Trust policy GHA-OIDC compartido entre gha-deploy y gha-train.
-  # El template vive en infra/modules/_shared/assume-github-oidc.json.tftpl
-  # — provider_arn / org / repo se inyectan via templatefile().
-  # Mismo template usado por modules/consumer-iam (otro repo, mismo shape).
   gha_oidc_trust = templatefile("${path.module}/../_shared/assume-github-oidc.json.tftpl", {
     provider_arn = var.oidc_provider_arn
     org          = var.github_org
@@ -4843,7 +4555,6 @@ locals {
   })
 }
 
-# ----- Role 1: gha-deploy (CI workflows que aplican terraform + push ECR)
 resource "aws_iam_role" "deploy" {
   name               = "${var.project}-gha-deploy"
   assume_role_policy = local.gha_oidc_trust
@@ -4855,8 +4566,6 @@ resource "aws_iam_role_policy" "deploy" {
     Version = "2012-10-17"
     Statement = [
       # Terraform: state remoto + lock nativo S3 (use_lockfile en backend "s3").
-      # PutObject + DeleteObject cubren tanto el .tfstate como el .tfstate.tflock
-      # que Terraform escribe junto al state. NO requiere DynamoDB.
       {
         Effect = "Allow"
         Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
@@ -4865,7 +4574,6 @@ resource "aws_iam_role_policy" "deploy" {
           "arn:aws:s3:::${var.project}-tfstate-*/*"
         ]
       },
-      # ECR: push de las 5 imagenes (trainer + mlflow + reports + api + ui)
       {
         Effect = "Allow"
         Action = [
@@ -4881,21 +4589,6 @@ resource "aws_iam_role_policy" "deploy" {
         Resource = "*" # ECR scoping necesita el endpoint para auth, * es estandar
       },
       # Terraform: leer/escribir resources (scope intencionalmente amplio para que
-      # `terraform apply` funcione sobre TODOS los modulos. En produccion mas
-      # estricta, dividir en roles plan-only + apply-only).
-      #
-      # BLAST RADIUS de este statement: un atacante que comprometa el OIDC
-      # trust (ej. fork con write a `main`, o GitHub actions de un usuario
-      # con permisos en el repo) puede:
-      #   - destruir TODA la infra del proyecto (terraform destroy desde CI).
-      #   - crear nuevos IAM roles (iam:*) y escalar a admin de la cuenta.
-      #   - leer Secrets Manager (incluido el RDS password).
-      # MITIGACIONES en uso:
-      #   - trust policy limitada a main + environment production.
-      #   - branch protection en main (#6.6) + required reviewers.
-      #   - GitHub Environment "production" con manual approval (#6.5).
-      # Refinable en #10 (hardening): partir en deploy-plan-only + apply
-      # con CODEOWNERS, o restringir Resource por modulo via tags.
       {
         Effect = "Allow"
         Action = [
@@ -4913,7 +4606,6 @@ resource "aws_iam_role_policy" "deploy" {
   })
 }
 
-# ----- Role 2: gha-train (solo invocar Lambda dispatcher) -------------
 resource "aws_iam_role" "train" {
   name               = "${var.project}-gha-train"
   assume_role_policy = local.gha_oidc_trust
@@ -4927,8 +4619,6 @@ resource "aws_iam_role_policy" "train" {
       {
         Effect = "Allow"
         Action = ["lambda:InvokeFunction"]
-        # Patch 13.2: gha-train tambien invoca scheduler para wake/stop
-        # en el workflow auto-train-on-push.yml.
         Resource = [
           "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-dispatcher",
           "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-scheduler"
@@ -4940,13 +4630,11 @@ resource "aws_iam_role_policy" "train" {
         Resource = "*"
       },
       {
-        # Patch 13.2: chequear estado RDS antes de wake
         Effect   = "Allow"
         Action   = ["rds:DescribeDBInstances"]
         Resource = "*"
       },
       {
-        # Patch 13.2: chequear estado de los services Fargate
         Effect   = "Allow"
         Action   = ["ecs:DescribeServices"]
         Resource = "*"
@@ -4991,9 +4679,6 @@ Ultimo bloque. Pegar AL FINAL de `infra/envs/prod/main.tf` (despues
 de `module "scheduler"` de #3.10.5):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 9: CI/CD (GHA IAM roles confiando en OIDC)
-# -------------------------------------------------------------------------
 module "cicd" {
   source = "../../modules/cicd"
   count  = var.enable_cicd ? 1 : 0
@@ -5056,9 +4741,6 @@ variable "consumer_repo" { type = string }
 #### 3.11.5.2 `modules/consumer-iam/main.tf`
 
 ```hcl
-# Patch 13.5: rol que el repo consumer (FastAPI/Streamlit) asume via OIDC
-# para descargar artifacts (modelos) desde S3 read-only.
-
 resource "aws_iam_role" "consumer" {
   name = "${var.project}-consumer"
   assume_role_policy = templatefile("${path.module}/../_shared/assume-github-oidc.json.tftpl", {
@@ -5095,16 +4777,11 @@ Pegar AL FINAL de `infra/envs/prod/main.tf` (despues del `module "cicd"`
 de #3.11.4):
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 10: Consumer IAM (Patch 13.5 — repo ml_serving consume artifacts read-only)
-# -------------------------------------------------------------------------
 module "consumer_iam" {
   source = "../../modules/consumer-iam"
 
   project              = var.project
   artifacts_bucket_arn = module.storage.artifacts_bucket_arn
-  # Reusa el `data` del OIDC provider de GitHub (gateado por enable_cicd):
-  # este modulo OPCIONAL requiere enable_cicd=true (+ bootstrap-oidc en #2.5).
   consumer_oidc_arn    = data.aws_iam_openid_connect_provider.github[0].arn
   consumer_org         = var.consumer_org
   consumer_repo        = var.consumer_repo
@@ -5173,7 +4850,6 @@ variable "api_image" {
   type        = string
 }
 
-# --- MLflow / modelos ---
 variable "mlflow_tracking_uri" {
   description = "URI interna del MLflow (service discovery): http://mlflow.<project>.local:5000."
   type        = string
@@ -5189,32 +4865,25 @@ variable "mlflow_preload_models" {
   default     = false
 }
 
-# --- Base de datos (reusa el RDS de MLflow, base `forecasts`) ---
 variable "rds_address" { type = string }
 variable "rds_password_secret_arn" { type = string }
 
-# --- S3 artifacts (boto3 vía cliente MLflow) ---
 variable "artifacts_bucket" { type = string }
 variable "artifacts_bucket_arn" { type = string }
 
-# --- CORS (origen del ALB para Swagger / llamadas browser) ---
 variable "cors_origins" {
   description = "Origenes CORS permitidos (coma-separados)."
   type        = string
   default     = "http://localhost:8501"
 }
 
-# --- Capacidad / costo (ver analisis en GUIA) ---
-# Combos validos Fargate: 1 vCPU admite 2-8 GB. La API carga modelos en RAM;
-# con lazy-load (preload=false) y ~6 variedades, 1 vCPU / 2 GB sobra. Subir
-# memory a 4096 si se activa preload de muchas variedades.
 variable "cpu" {
   type    = number
-  default = 1024 # 1 vCPU
+  default = 1024
 }
 variable "memory" {
   type    = number
-  default = 2048 # 2 GB
+  default = 2048
 }
 variable "desired_count" {
   description = "Replicas. El scheduler lo maneja (0 fuera de horario)."
@@ -5254,13 +4923,6 @@ password al componer `DATABASE_URL` en runtime, sin persistirlo en la imagen).
 > `$$` rompe la auth (mismo gotcha que MLflow).
 
 ```hcl
-# ============================================================================
-# Modulo api — FastAPI en ECS Fargate (mismo cluster + ALB que MLflow).
-#
-# Sirve los modelos rnd-forest-* registrados en MLflow y persiste pronosticos
-# en la base `forecasts` del RDS de MLflow (la API la auto-crea al boot).
-# Patron espejo del modulo reports + service discovery + secret RDS.
-# ============================================================================
 data "aws_region" "current" {}
 
 resource "aws_cloudwatch_log_group" "api" {
@@ -5268,7 +4930,6 @@ resource "aws_cloudwatch_log_group" "api" {
   retention_in_days = var.log_retention_days
 }
 
-# ── IAM ────────────────────────────────────────────────────────────────────
 resource "aws_iam_role" "api_exec" {
   name               = "${var.project}-api-exec"
   assume_role_policy = file("${path.module}/../_shared/assume-ecs-tasks.json")
@@ -5279,7 +4940,6 @@ resource "aws_iam_role_policy_attachment" "api_exec" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# El exec role inyecta el secret del RDS password al arrancar la task.
 resource "aws_iam_role_policy" "api_exec_secret" {
   role = aws_iam_role.api_exec.id
   policy = jsonencode({
@@ -5297,7 +4957,6 @@ resource "aws_iam_role" "api_task" {
   assume_role_policy = file("${path.module}/../_shared/assume-ecs-tasks.json")
 }
 
-# Task role: leer artifacts de S3 (boto3 vía cliente MLflow al cargar modelos).
 resource "aws_iam_role_policy" "api_task_s3" {
   role = aws_iam_role.api_task.id
   policy = jsonencode({
@@ -5310,7 +4969,6 @@ resource "aws_iam_role_policy" "api_task_s3" {
   })
 }
 
-# ── Service discovery (la UI llama a api.<project>.local:8000) ───────────────
 resource "aws_service_discovery_service" "api" {
   name = "api"
   dns_config {
@@ -5323,7 +4981,6 @@ resource "aws_service_discovery_service" "api" {
   }
 }
 
-# ── ALB target group + reglas ────────────────────────────────────────────────
 resource "aws_lb_target_group" "api" {
   name        = "${var.project}-tg-api"
   port        = 8000
@@ -5342,10 +4999,6 @@ resource "aws_lb_target_group" "api" {
   deregistration_delay = 30
 }
 
-# Ruteo por PREFIJOS ESPECIFICOS (no `/api/*` a secas): MLflow es el default del
-# ALB y con --serve-artifacts expone /api/2.0/mlflow-artifacts/*. Un `/api/*`
-# generico robaria esa ruta y rompe el preview de artifacts del MLflow UI.
-# Listamos solo los prefijos reales del FastAPI.
 resource "aws_lb_listener_rule" "api_functional" {
   listener_arn = var.alb_listener_arn
   priority     = 88
@@ -5361,7 +5014,6 @@ resource "aws_lb_listener_rule" "api_functional" {
   }
 }
 
-# Swagger / OpenAPI publico (showcase). Mantiene la doc accesible en /docs.
 resource "aws_lb_listener_rule" "api_docs" {
   listener_arn = var.alb_listener_arn
   priority     = 89
@@ -5375,7 +5027,6 @@ resource "aws_lb_listener_rule" "api_docs" {
   }
 }
 
-# ── ECS task definition + service ────────────────────────────────────────────
 resource "aws_ecs_task_definition" "api" {
   family                   = "${var.project}-api"
   network_mode             = "awsvpc"
@@ -5391,10 +5042,6 @@ resource "aws_ecs_task_definition" "api" {
       image        = var.api_image
       essential    = true
       portMappings = [{ containerPort = 8000, protocol = "tcp" }]
-      # Componemos DATABASE_URL en runtime para inyectar el password del RDS
-      # (secret) sin persistirlo. Single `$` a proposito (igual que MLflow):
-      # Terraform solo escapa `$${`; `$RDS_PASSWORD` queda literal y lo expande
-      # el shell con la env var inyectada desde Secrets Manager.
       command = [
         "sh", "-c",
         "export DATABASE_URL=postgresql://mlflow:$RDS_PASSWORD@${var.rds_address}:5432/forecasts; exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -5453,7 +5100,6 @@ resource "aws_ecs_service" "api" {
     registry_arn = aws_service_discovery_service.api.arn
   }
 
-  # El scheduler maneja desired_count (0 fuera de horario) -> ignore drift.
   lifecycle {
     ignore_changes = [desired_count]
   }
@@ -5483,20 +5129,6 @@ build es la raiz** (`-f api/Dockerfile .`), no `api/`. Si ya hiciste el Tramo I
 local, este archivo ya existe; se incluye aca para que la guia AWS sea standalone.
 
 ```dockerfile
-# syntax=docker/dockerfile:1.7
-# ============================================================================
-# Imagen de la API (FastAPI) — servicio `api` del monorepo ml_training.
-#
-# IMPORTANTE: el contexto de build es la RAÍZ del repo (no api/), porque la
-# imagen necesita el paquete `src/` raíz para des-picklear los modelos de
-# MLflow (LagFeatureTransformer, FeatureGenerator, target_transform, ...).
-# Una única fuente de verdad: el mismo `src/` que entrena el trainer.
-#   docker build -f api/Dockerfile -t ml-training-api .
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# Stage 1 — builder: instala dependencias en un venv aislado
-# ---------------------------------------------------------------------------
 FROM python:3.13-slim AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
@@ -5505,7 +5137,6 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /build
 
-# Toolchain mínimo para compilar wheels nativos (lightgbm/xgboost/asyncpg).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libgomp1 \
     && rm -rf /var/lib/apt/lists/*
@@ -5517,9 +5148,6 @@ COPY api/requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-# ---------------------------------------------------------------------------
-# Stage 2 — runtime: imagen final mínima
-# ---------------------------------------------------------------------------
 FROM python:3.13-slim AS runtime
 
 ARG GIT_SHA=unknown
@@ -5534,8 +5162,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
-# libgomp1 = runtime de OpenMP (lightgbm/xgboost lo necesitan en inferencia).
-# tini propaga SIGTERM correctamente cuando ECS/compose detienen la task.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 curl tini \
     && rm -rf /var/lib/apt/lists/* \
@@ -5546,8 +5172,6 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 
-# Código de la API + `src/` raíz (única fuente de verdad para unpickle).
-# Orden de COPY: de mejor cache (cambia poco) a peor cache (cambia más).
 COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser api/app ./app
 
@@ -5590,14 +5214,13 @@ variable "base_url_path" {
   default     = "app"
 }
 
-# --- Capacidad / costo: Streamlit es liviano ---
 variable "cpu" {
   type    = number
-  default = 512 # 0.5 vCPU
+  default = 512
 }
 variable "memory" {
   type    = number
-  default = 1024 # 1 GB
+  default = 1024
 }
 variable "desired_count" {
   type    = number
@@ -5631,11 +5254,6 @@ service discovery). El sub-path `/app` se setea via env nativa de Streamlit
 > la task unhealthy para siempre y ECS la reciclaria en loop.
 
 ```hcl
-# ============================================================================
-# Modulo ui — Streamlit en ECS Fargate (mismo cluster + ALB que MLflow).
-# Sirve detras del ALB en /app/* (STREAMLIT_SERVER_BASE_URL_PATH=app) y consume
-# la API por service discovery interno. Patron espejo del modulo reports.
-# ============================================================================
 data "aws_region" "current" {}
 
 resource "aws_cloudwatch_log_group" "ui" {
@@ -5652,9 +5270,7 @@ resource "aws_iam_role_policy_attachment" "ui_exec" {
   role       = aws_iam_role.ui_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
-# Sin task role: la UI no accede a AWS (solo HTTP a la API).
 
-# ── ALB target group + regla /app/* ─────────────────────────────────────────
 resource "aws_lb_target_group" "ui" {
   name        = "${var.project}-tg-ui"
   port        = 8501
@@ -5663,7 +5279,6 @@ resource "aws_lb_target_group" "ui" {
   vpc_id      = var.vpc_id
 
   health_check {
-    # Con base-path, Streamlit expone el health bajo el prefijo.
     path                = "/${var.base_url_path}/_stcore/health"
     interval            = 30
     timeout             = 5
@@ -5687,7 +5302,6 @@ resource "aws_lb_listener_rule" "ui" {
   }
 }
 
-# ── ECS task definition + service ────────────────────────────────────────────
 resource "aws_ecs_task_definition" "ui" {
   family                   = "${var.project}-ui"
   network_mode             = "awsvpc"
@@ -5773,19 +5387,6 @@ contexto de build es la carpeta `ui/` (`-f ui/Dockerfile ui`). Si ya hiciste el
 Tramo I local, este archivo ya existe.
 
 ```dockerfile
-# syntax=docker/dockerfile:1.7
-# ============================================================================
-# Imagen de la UI (Streamlit) — servicio `ui` del monorepo ml_training.
-# Contexto de build = carpeta ui/.  docker build -f ui/Dockerfile -t ml-training-ui ui
-#
-# Ruteo: en local sirve en la raíz (:8501). En prod, detrás del ALB en /app/*,
-# se setea STREAMLIT_SERVER_BASE_URL_PATH=app (env nativa de Streamlit) en la
-# task de ECS — no requiere rebuild.
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# Stage 1 — builder
-# ---------------------------------------------------------------------------
 FROM python:3.12-slim AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
@@ -5799,9 +5400,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# ---------------------------------------------------------------------------
-# Stage 2 — runtime
-# ---------------------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
 ARG GIT_SHA=unknown
@@ -5832,7 +5430,6 @@ STOPSIGNAL SIGTERM
 
 EXPOSE 8501
 
-# Healthcheck sensible al base-path: /_stcore/health en local, /app/_stcore/health en prod.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
     CMD curl -fsS "http://localhost:8501/${STREAMLIT_SERVER_BASE_URL_PATH:+${STREAMLIT_SERVER_BASE_URL_PATH}/}_stcore/health" || exit 1
 
@@ -5851,11 +5448,6 @@ entre reports y batch); como el orden textual no afecta a Terraform, podes
 pegarlo al final y queda igual de valido.
 
 ```hcl
-# -------------------------------------------------------------------------
-# Capa 4.5: App stack — API (FastAPI) + UI (Streamlit)
-# Mismo cluster + ALB que MLflow. La API reusa el RDS de MLflow (base
-# `forecasts`, auto-creada al boot) y carga modelos rnd-forest-* via S3.
-# -------------------------------------------------------------------------
 module "api" {
   source = "../../modules/api"
 
@@ -5867,7 +5459,6 @@ module "api" {
   alb_listener_arn               = module.mlflow.alb_listener_arn
   service_discovery_namespace_id = module.mlflow.service_discovery_namespace_id
   api_image                      = "${module.storage.ecr_api_url}:${var.api_image_tag}"
-  # MLflow interno via service discovery (no pasa por el ALB).
   mlflow_tracking_uri     = "http://mlflow.${var.project}.local:5000"
   model_registry_prefix   = var.model_registry_prefix
   mlflow_preload_models   = var.api_preload_models
@@ -5958,17 +5549,14 @@ los hash de `sources:` evitan re-buildear imagenes ya construidas).
 
 ```bash
 task --version
-# Esperado: 3.34+ (necesario para `prompt:` en tasks destructivos)
 ```
 
 Si falta (ya cubierto en Capítulo 3.1; recordatorio aqui):
 
 ```bash
-# Windows (WSL Ubuntu) y Linux: mismo instalador
 sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/bin
 export PATH="$HOME/bin:$PATH"   # agregar a ~/.bashrc para persistir
 
-# macOS
 brew install go-task
 ```
 
@@ -6006,37 +5594,11 @@ tasks/
 #### 4.1.3 `tasks/infra.yml` — Terraform wrapper + bootstrap
 
 ```yaml
-# =============================================================================
-# tasks/infra.yml  -  Terraform wrapper + bootstrap del backend
-# =============================================================================
-# Incluido por Taskfile.yml raiz con namespace "infra:".
-#
-# USO TIPICO:
-#   task infra:bootstrap                              UNA VEZ por cuenta+region
-#   task infra:bootstrap-oidc                         UNA VEZ (rol GHA)
-#   task infra:plan [TARGET=module.X]                 ver cambios
-#   task infra:apply [TARGET=module.X]                aplicar (parcial o full)
-#   task infra:output                                 outputs (alb_dns, ecr_urls, ...)
-#   task infra:validate                               fmt -check + validate (pre-commit)
-#   task infra:destroy                                DESTRUCTIVO: todo
-#   task infra:destroy-target TARGET=module.X         DESTRUCTIVO: parcial
-#   task infra:reset-state                            borra tfstate remoto + .terraform (fresh start; no toca AWS)
-# =============================================================================
-
 version: "3"
 
 vars:
-  # TF_DIR y RDS_ID se inyectan desde el Taskfile raiz (fuente unica, compartida
-  # con ops:). Ver `includes:` en Taskfile.yml.
-  # Ultimos 7 chars del account ID (sufijo de buckets para evitar colisiones).
-  # Misma fuente que tasks/local.yml -> coherencia local/prod en nombres de bucket.
-  # Resuelto una vez por invocacion del include.
-  SUFFIX:
-    sh: bash scripts/aws-suffix.sh
 
 tasks:
-
-  # ═══ Bootstrap (one-shot, idempotente) ══════════════════════════════════════
 
   bootstrap:
     desc: "Backend Terraform (S3 tfstate + SLRs; lock nativo S3). UNA VEZ por cuenta+region"
@@ -6048,28 +5610,17 @@ tasks:
     cmds:
       - bash infra/bootstrap-oidc.sh
 
-  # ═══ Init (interno, dep de plan/apply/destroy) ══════════════════════════════
-
   _init:
     internal: true
     cmds:
-      # use_lockfile=true => locking nativo S3 (reemplaza el deprecado
-      # `dynamodb_table`). El lock vive como `<key>.tflock` en el mismo bucket
-      # de tfstate. Requiere Terraform >= 1.10.
-      - terraform -chdir={{.TF_DIR}} init
-        -backend-config=bucket={{.PROJECT}}-tfstate-{{.SUFFIX}}
-        -backend-config=key=envs/prod/terraform.tfstate
-        -backend-config=region={{.REGION}}
-        -backend-config=use_lockfile=true
-        -reconfigure
-
-  _init_validate:
-    internal: true
-    cmds:
-      # Validación sintáctica no necesita credenciales ni acceso al state.
-      - terraform -chdir={{.TF_DIR}} init -backend=false
-
-  # ═══ Plan / Apply / Destroy ═════════════════════════════════════════════════
+      - |
+        SUFFIX="$(bash scripts/aws-suffix.sh)"
+        terraform -chdir={{.TF_DIR}} init \
+          -backend-config=bucket={{.PROJECT}}-tfstate-${SUFFIX} \
+          -backend-config=key=envs/prod/terraform.tfstate \
+          -backend-config=region={{.REGION}} \
+          -backend-config=use_lockfile=true \
+          -reconfigure >&2
 
   plan:
     desc: "terraform plan. Var opcional: TARGET=module.X"
@@ -6083,12 +5634,108 @@ tasks:
     cmds:
       - terraform -chdir={{.TF_DIR}} apply {{if .TARGET}}-target={{.TARGET}}{{end}} -auto-approve
 
+  verify-clean:
+    desc: "Auditar que NO quede nada del proyecto en AWS tras un destroy/nuke. Var: PURGE=true borra los residuos borrables"
+    silent: true
+    vars:
+      PURGE: '{{.PURGE | default "false"}}'
+    cmds:
+      - |
+        set -uo pipefail
+        P='{{.PROJECT}}'
+        fail=0
+        chk() {
+          if [ "$2" = "0" ] || [ -z "$2" ] || [ "$2" = "None" ]; then
+            printf "  OK    %-32s 0\n" "$1"
+          else
+            printf "  QUEDA %-32s %s\n" "$1" "$2"; fail=$((fail+1))
+          fi
+        }
+        echo ">>> Auditoria post-destroy de '$P':"
+        chk "buckets S3"        "$(aws s3 ls 2>/dev/null | grep -c "$P"; true)"
+        chk "repos ECR"         "$(aws ecr describe-repositories --query "length(repositories[?starts_with(repositoryName,'$P')])" --output text 2>/dev/null)"
+        chk "RDS instances"     "$(aws rds describe-db-instances --query "length(DBInstances[?starts_with(DBInstanceIdentifier,'$P')])" --output text 2>/dev/null)"
+        chk "RDS subnet groups" "$(aws rds describe-db-subnet-groups --query "length(DBSubnetGroups[?starts_with(DBSubnetGroupName,'$P')])" --output text 2>/dev/null)"
+        chk "ECS clusters"      "$(aws ecs list-clusters --query "length(clusterArns[?contains(@,'$P')])" --output text 2>/dev/null)"
+        chk "ECS taskdefs INACTIVE" "$(aws ecs list-task-definitions --status INACTIVE --query "length(taskDefinitionArns[?contains(@,'$P')])" --output text 2>/dev/null)"
+        chk "ALBs"              "$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?starts_with(LoadBalancerName,'$P')])" --output text 2>/dev/null)"
+        chk "target groups"     "$(aws elbv2 describe-target-groups --query "length(TargetGroups[?starts_with(TargetGroupName,'$P')])" --output text 2>/dev/null)"
+        chk "VPCs"              "$(aws ec2 describe-vpcs --query "length(Vpcs[?Tags[?Value=='$P-vpc']])" --output text 2>/dev/null)"
+        chk "NAT gateways"      "$(aws ec2 describe-nat-gateways --filter Name=state,Values=available,pending --query 'length(NatGateways)' --output text 2>/dev/null)"
+        chk "security groups"   "$(aws ec2 describe-security-groups --query "length(SecurityGroups[?starts_with(GroupName,'$P')])" --output text 2>/dev/null)"
+        chk "lambdas"           "$(aws lambda list-functions --query "length(Functions[?starts_with(FunctionName,'$P')])" --output text 2>/dev/null)"
+        chk "batch job queues"  "$(aws batch describe-job-queues --query "length(jobQueues[?starts_with(jobQueueName,'$P')])" --output text 2>/dev/null)"
+        chk "IAM roles"         "$(aws iam list-roles --query "length(Roles[?starts_with(RoleName,'$P')])" --output text 2>/dev/null)"
+        chk "log groups"        "$(aws logs describe-log-groups --query "length(logGroups[?contains(logGroupName,'$P')])" --output text 2>/dev/null)"
+        chk "EventBridge rules" "$(aws events list-rules --query "length(Rules[?starts_with(Name,'$P')])" --output text 2>/dev/null)"
+        chk "SNS topics"        "$(aws sns list-topics --query "length(Topics[?contains(TopicArn,'$P')])" --output text 2>/dev/null)"
+        chk "CW alarms"         "$(aws cloudwatch describe-alarms --alarm-name-prefix "$P" --query 'length(MetricAlarms)' --output text 2>/dev/null)"
+        chk "secrets"           "$(aws secretsmanager list-secrets --include-planned-deletion --filter Key=name,Values="$P" --query 'length(SecretList)' --output text 2>/dev/null)"
+        chk "snapshots RDS"     "$(aws rds describe-db-snapshots --snapshot-type manual --query "length(DBSnapshots[?starts_with(DBSnapshotIdentifier,'$P')])" --output text 2>/dev/null)"
+        echo ""
+        if [ "$fail" -eq 0 ]; then
+          echo "OK cuenta limpia: no queda nada de '$P'."
+          exit 0
+        fi
+        echo "AVISO $fail categoria(s) con residuos."
+        if [ '{{.PURGE}}' != "true" ]; then
+          echo "      Reintentar con PURGE=true para borrar los residuos borrables"
+          echo "      (task definitions INACTIVE, snapshots, target groups y subnet groups sueltos)."
+          exit 1
+        fi
+        echo ">>> PURGE=true -> borrando residuos..."
+        while :; do
+          arns=$(aws ecs list-task-definitions --status INACTIVE --query "taskDefinitionArns[?contains(@,'$P')]" --output text 2>/dev/null | tr '\t' '\n' | grep . | head -10)
+          [ -z "$arns" ] && break
+          aws ecs delete-task-definitions --task-definitions $arns >/dev/null 2>&1 || break
+          echo "  purgadas 10 task definitions INACTIVE"
+        done
+        for tg in $(aws elbv2 describe-target-groups --query "TargetGroups[?starts_with(TargetGroupName,'$P') && length(LoadBalancerArns)==\`0\`].TargetGroupArn" --output text 2>/dev/null); do
+          aws elbv2 delete-target-group --target-group-arn "$tg" && echo "  borrado target group ${tg##*/}"
+        done
+        for sg in $(aws rds describe-db-subnet-groups --query "DBSubnetGroups[?starts_with(DBSubnetGroupName,'$P')].DBSubnetGroupName" --output text 2>/dev/null); do
+          aws rds delete-db-subnet-group --db-subnet-group-name "$sg" && echo "  borrado db subnet group $sg"
+        done
+        for sn in $(aws rds describe-db-snapshots --snapshot-type manual --query "DBSnapshots[?starts_with(DBSnapshotIdentifier,'$P')].DBSnapshotIdentifier" --output text 2>/dev/null); do
+          aws rds delete-db-snapshot --db-snapshot-identifier "$sn" >/dev/null && echo "  borrado snapshot $sn"
+        done
+        echo "OK purga completa. Re-auditar: task infra:verify-clean"
+
+  migrate-rds-secret:
+    desc: "MIGRACION (una sola vez): mueve random_password + secret del RDS de module.mlflow a la raiz, sin recrearlos"
+    deps: [_init]
+    cmds:
+      - |
+        set -euo pipefail
+        moved=0
+        for res in random_password.rds aws_secretsmanager_secret.rds aws_secretsmanager_secret_version.rds; do
+          if terraform -chdir={{.TF_DIR}} state list "module.mlflow.$res" >/dev/null 2>&1 \
+             && [ -n "$(terraform -chdir={{.TF_DIR}} state list "module.mlflow.$res" 2>/dev/null)" ]; then
+            echo ">>> state mv module.mlflow.$res -> $res"
+            terraform -chdir={{.TF_DIR}} state mv "module.mlflow.$res" "$res"
+            moved=$((moved + 1))
+          else
+            echo "  module.mlflow.$res no esta en el state -> skip"
+          fi
+        done
+        if [ "$moved" -eq 0 ]; then
+          echo "OK nada que migrar (ya estaba hecho, o es un stand-up desde cero)."
+        else
+          echo "OK $moved recurso(s) migrados. Verificar con: task infra:plan"
+          echo "    El plan NO debe mostrar cambios en random_password ni en el RDS."
+        fi
+
   destroy:
     desc: "DESTRUCTIVO: terraform destroy completo. Considerar `task ops:teardown` antes (preserva storage)"
     prompt: "Esto borrara TODA la infra de envs/prod (incluso S3 + ECR). Continuar?"
     deps: [_init]
     cmds:
-      - terraform -chdir={{.TF_DIR}} destroy -auto-approve
+      - |
+        set -euo pipefail
+        source tasks/lib/nuke.sh
+        lift_rds_protection "{{.RDS_ID}}"
+        terraform -chdir={{.TF_DIR}} destroy -auto-approve \
+          -var "rds_skip_final_snapshot=true"
 
   destroy-target:
     desc: "terraform destroy parcial. Vars: TARGET=module.X (REQ)"
@@ -6099,24 +5746,54 @@ tasks:
     cmds:
       - terraform -chdir={{.TF_DIR}} destroy -target={{.TARGET}} -auto-approve
 
-  # ═══ Inspeccion ═════════════════════════════════════════════════════════════
-
   output:
     desc: "Mostrar outputs de envs/prod (alb_dns, ecr_urls, rds_endpoint, ...)"
+    deps: [_init]
     cmds:
       - terraform -chdir={{.TF_DIR}} output
 
   output-raw:
     desc: "Mostrar UN output crudo (para scripts). Var: NAME=alb_dns (REQ)"
     silent: true
+    deps: [_init]
     requires:
       vars: [NAME]
     cmds:
-      - terraform -chdir={{.TF_DIR}} output -raw {{.NAME}}
+      - |
+        VAL="$(terraform -chdir={{.TF_DIR}} output -raw {{.NAME}} 2>/dev/null)"
+        if [ -z "$VAL" ]; then
+          echo "ERROR: output '{{.NAME}}' vacio o inexistente en el state de {{.TF_DIR}}." >&2
+          echo "       La infra no esta aplicada todavia -> corre 'task deploy' primero." >&2
+          exit 1
+        fi
+        printf '%s' "$VAL"
+
+  upload-raw:
+    desc: "Setup 1ª vez: sube el Excel raw al bucket de datos de PROD (deriva el bucket del state). Var opcional: FILE=data/BD_HISTORICO_ACUMULADO.xlsx"
+    deps: [_init]
+    vars:
+      FILE: '{{.FILE | default "data/BD_HISTORICO_ACUMULADO.xlsx"}}'
+    cmds:
+      - |
+        set -euo pipefail
+        BUCKET="$(terraform -chdir={{.TF_DIR}} output -raw data_bucket 2>/dev/null || true)"
+        if [ -z "$BUCKET" ]; then
+          echo "ERROR: output 'data_bucket' vacio -> la infra no esta desplegada." >&2
+          echo "       Corre 'task deploy' antes de subir el Excel raw." >&2
+          exit 1
+        fi
+        if [ ! -f "{{.FILE}}" ]; then
+          echo "ERROR: no existe el archivo local '{{.FILE}}'." >&2
+          exit 1
+        fi
+        KEY="$(basename "{{.FILE}}")"
+        echo "==> Subiendo {{.FILE}} -> s3://${BUCKET}/${KEY} ..." >&2
+        aws s3 cp "{{.FILE}}" "s3://${BUCKET}/${KEY}" --region "{{.REGION}}"
 
   urls:
     desc: "Imprime las URLs publicas de PROD (derivadas del ALB DNS, que varia por deploy)."
     silent: true
+    deps: [_init]
     cmds:
       - |
         ALB=$(terraform -chdir={{.TF_DIR}} output -raw alb_dns 2>/dev/null)
@@ -6131,7 +5808,7 @@ tasks:
            UI (dashboard gerencial)   http://$ALB/app/
            API (Swagger)              http://$ALB/docs
            MLflow runs                http://$ALB/
-           MLflow Model Registry      http://$ALB/#/models
+           MLflow Model Registry      http://$ALB/
            Reports (campeon HTML)     http://$ALB/reports/
            Artifacts                  http://$ALB/artifacts/
         ────────────────────────────────────────────────────────────────────
@@ -6141,13 +5818,25 @@ tasks:
         EOF
 
   validate:
-    desc: "terraform fmt -check + validate sin backend remoto ni credenciales AWS"
-    deps: [_init_validate]
+    desc: "terraform fmt -check + validate (init + providers; usable cold antes del primer apply)"
+    deps: [_init]
     cmds:
       - terraform -chdir={{.TF_DIR}} fmt -check -recursive
       - terraform -chdir={{.TF_DIR}} validate
 
-  # ═══ Recovery ═══════════════════════════════════════════════════════════════
+  reset-state:
+    desc: "ARRANCAR DE CERO: borra el tfstate remoto de envs/prod en S3 (todas las versiones + lock) y el .terraform local. El proximo init/plan/apply genera un state nuevo. NO toca recursos AWS ya creados (Terraform simplemente los 'olvida')."
+    prompt: "Esto BORRA el state remoto de envs/prod (todas las versiones + lock) y Terraform OLVIDARA toda la infra que ya tenga registrada. Si ya hay recursos vivos quedaran huerfanos (re-apply intentara recrearlos). Continuar?"
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/nuke.sh
+        SUFFIX="$(bash scripts/aws-suffix.sh)"
+        BUCKET="{{.PROJECT}}-tfstate-${SUFFIX}"
+        echo "==> Borrando el state remoto bajo s3://$BUCKET/envs/prod/ (state + .tflock) ..."
+        empty_bucket "$BUCKET" false "envs/prod/"
+        rm -rf "{{.TF_DIR}}/.terraform" "{{.TF_DIR}}/.terraform.lock.hcl"
+        echo "==> .terraform local limpiado. Siguiente paso: 'task deploy' (o 'task infra:plan') arranca de cero."
 
   force-unlock:
     desc: "Liberar state lock huerfano. Var: LOCK_ID=<id> (REQ)"
@@ -6156,20 +5845,6 @@ tasks:
     deps: [_init]
     cmds:
       - terraform -chdir={{.TF_DIR}} force-unlock -force {{.LOCK_ID}}
-
-  reset-state:
-    desc: "Borra el tfstate remoto de envs/prod en S3 (todas las versiones + .tflock) y el .terraform local, para arrancar de cero. NO toca recursos AWS vivos: solo hace que Terraform los 'olvide'. Util al re-empezar en una cuenta con state viejo."
-    prompt: "Esto borra el tfstate remoto de envs/prod (Terraform 'olvidara' los recursos, que SEGUIRAN vivos en AWS). Continuar?"
-    cmds:
-      # Borra todas las versiones del objeto tfstate + su .tflock en el bucket de state.
-      - |
-        export BUCKET="{{.PROJECT}}-tfstate-{{.SUFFIX}}"
-        for KEY in envs/prod/terraform.tfstate envs/prod/terraform.tfstate.tflock; do
-          aws s3api list-object-versions --bucket "$BUCKET" --prefix "$KEY" \
-            --query '[Versions,DeleteMarkers][].{Key:Key,VersionId:VersionId}' --output json 2>/dev/null \
-          | python3 -c 'import sys,json,subprocess,os; b=os.environ["BUCKET"]; [subprocess.run(["aws","s3api","delete-object","--bucket",b,"--key",o["Key"],"--version-id",o["VersionId"]]) for o in (json.load(sys.stdin) or [])]'
-        done
-      - rm -rf {{.TF_DIR}}/.terraform {{.TF_DIR}}/.terraform.lock.hcl
 ```
 
 `_init` es `internal: true` (no aparece en `task --list`) y se dispara via `deps:` cuando hace falta. `SUFFIX` se resuelve dinamicamente con `aws sts get-caller-identity` — si cambias de cuenta AWS, el backend bucket name cambia con vos.
@@ -6183,20 +5858,6 @@ tag por imagen. **Ojo con el contexto de build**: `api` usa la **raiz** del repo
 usa la raiz.
 
 ```yaml
-# =============================================================================
-# tasks/ecr.yml  -  Build + push de las 5 imagenes a ECR
-# =============================================================================
-# Incluido por Taskfile.yml raiz con namespace "ecr:".
-#
-# USO TIPICO:
-#   task ecr:build-all                                build + push de las 5
-#   task ecr:build IMG=trainer                        UNA imagen, tag default
-#   task ecr:build IMG=api TAG=v1.2.3                 UNA imagen, tag custom
-#   task ecr:list                                     listar tags en ECR
-#
-# IMG = trainer | mlflow | reports | api | ui
-# =============================================================================
-
 version: "3"
 
 vars:
@@ -6208,12 +5869,8 @@ vars:
 
 tasks:
 
-  # ═══ Login (token 12h, run: once) ═══════════════════════════════════════════
-
   login:
     desc: "docker login a ECR. Idempotente, token valido 12h"
-    # run: once: si varias tasks dependen de login en una misma corrida,
-    # solo se ejecuta una vez.
     run: once
     vars:
       ACCOUNT:
@@ -6222,12 +5879,12 @@ tasks:
       - aws ecr get-login-password --region {{.REGION}}
         | docker login --username AWS --password-stdin {{.ACCOUNT}}.dkr.ecr.{{.REGION}}.amazonaws.com
 
-  # ═══ Build + push UNA imagen ════════════════════════════════════════════════
-
   build:
     desc: "Build + push UNA imagen. Vars: IMG=trainer|mlflow|reports|api|ui (REQ), TAG=<override>"
     requires:
-      vars: [IMG]
+      vars:
+        - name: IMG
+          enum: [trainer, mlflow, reports, api, ui]
     deps: [login]
     vars:
       ACCOUNT:
@@ -6237,18 +5894,12 @@ tasks:
         sh: git rev-parse --short=12 HEAD 2>/dev/null || echo unknown
       BUILD_DATE:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
-      # Tabla IMG -> (image_name, dockerfile, context, default_tag). Cualquier IMG
-      # fuera del set valido cae en el branch ERROR validado abajo.
-      # CONTEXT: api usa contexto=raiz (necesita src/); ui usa contexto=ui/.
-      IMAGE_NAME: '{{if eq .IMG "trainer"}}{{.PROJECT}}{{else if eq .IMG "mlflow"}}{{.PROJECT}}-mlflow{{else if eq .IMG "reports"}}{{.PROJECT}}-reports{{else if eq .IMG "api"}}{{.PROJECT}}-api{{else if eq .IMG "ui"}}{{.PROJECT}}-ui{{else}}ERROR{{end}}'
-      DOCKERFILE: '{{if eq .IMG "trainer"}}Dockerfile{{else if eq .IMG "mlflow"}}docker/mlflow/Dockerfile{{else if eq .IMG "reports"}}docker/reports/Dockerfile{{else if eq .IMG "api"}}api/Dockerfile{{else if eq .IMG "ui"}}ui/Dockerfile{{else}}ERROR{{end}}'
+      IMAGE_NAME: '{{if eq .IMG "trainer"}}{{.PROJECT}}{{else}}{{.PROJECT}}-{{.IMG}}{{end}}'
+      DOCKERFILE: '{{if eq .IMG "trainer"}}Dockerfile{{else if or (eq .IMG "mlflow") (eq .IMG "reports")}}docker/{{.IMG}}/Dockerfile{{else}}{{.IMG}}/Dockerfile{{end}}'
       CONTEXT: '{{if eq .IMG "ui"}}ui{{else}}.{{end}}'
-      RESOLVED_TAG: '{{if eq .IMG "trainer"}}{{.TAG | default .TAG_TRAINER}}{{else if eq .IMG "mlflow"}}{{.TAG | default .TAG_MLFLOW}}{{else if eq .IMG "reports"}}{{.TAG | default .TAG_REPORTS}}{{else if eq .IMG "api"}}{{.TAG | default .TAG_API}}{{else if eq .IMG "ui"}}{{.TAG | default .TAG_UI}}{{else}}ERROR{{end}}'
+      RESOLVED_TAG: '{{if eq .IMG "trainer"}}{{.TAG | default .TAG_TRAINER}}{{else if eq .IMG "mlflow"}}{{.TAG | default .TAG_MLFLOW}}{{else if eq .IMG "reports"}}{{.TAG | default .TAG_REPORTS}}{{else if eq .IMG "api"}}{{.TAG | default .TAG_API}}{{else}}{{.TAG | default .TAG_UI}}{{end}}'
     cmds:
-      - 'test "{{.IMAGE_NAME}}" != "ERROR" || { echo "ERROR IMG debe ser trainer|mlflow|reports|api|ui (recibido {{.IMG}})"; exit 1; }'
       - 'echo ">>> Build {{.IMAGE_NAME}}:{{.RESOLVED_TAG}}  (sha-{{.GIT_SHA}})"'
-      # BUILD_DATE va como --label (metadata del config final), no como --build-arg:
-      # asi no invalida la cache de capas ni vuelve no-reproducible el commit.
       - docker build
         --build-arg GIT_SHA={{.GIT_SHA}}
         --build-arg VERSION={{.RESOLVED_TAG}}
@@ -6256,9 +5907,6 @@ tasks:
         -t {{.REGISTRY}}/{{.IMAGE_NAME}}:{{.RESOLVED_TAG}}
         -t {{.REGISTRY}}/{{.IMAGE_NAME}}:sha-{{.GIT_SHA}}
         -f {{.DOCKERFILE}} {{.CONTEXT}}
-      # Push idempotente. En repos IMMUTABLE (p.ej. mlflow) solo pushea si el
-      # tag NO existe -> re-correr el mismo commit es no-op en vez de error.
-      # En repos MUTABLE siempre pushea (sobrescribe latest/stable).
       - |
         MUT=$(aws ecr describe-repositories --repository-names {{.IMAGE_NAME}} \
                 --region {{.REGION}} --query 'repositories[0].imageTagMutability' --output text)
@@ -6275,16 +5923,10 @@ tasks:
         push_tag "{{.RESOLVED_TAG}}"
         push_tag "sha-{{.GIT_SHA}}"
 
-  # ═══ Build + push de las 3 ══════════════════════════════════════════════════
-
   build-all:
     desc: "Build + push de las 5 imagenes (trainer + mlflow + reports + api + ui)"
     deps: [login]
     vars:
-      # Single source of truth del tag trainer = terraform.tfvars. Sin esto,
-      # build-all pushea `latest` mientras la job-def queda pineada a otra tag
-      # (p.ej. v0.2.0) -> CannotPullImageManifestError en el primer smoke.
-      # Si el grep no encuentra nada, queda "" y `build` cae a TAG_TRAINER.
       TRAINER_TFVARS_TAG:
         sh: sed -nE 's/^[[:space:]]*trainer_image_tag[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' infra/envs/prod/terraform.tfvars 2>/dev/null | head -1
     cmds:
@@ -6298,8 +5940,6 @@ tasks:
         vars: { IMG: api }
       - task: build
         vars: { IMG: ui }
-
-  # ═══ Inspeccion ═════════════════════════════════════════════════════════════
 
   list:
     desc: "Listar las 5 imagenes con tag default presente en cada repo ECR"
@@ -6320,77 +5960,29 @@ Cada imagen se pushea con **dos tags**: el movil (`latest`/`v3.12.0`/`stable`) q
 #### 4.1.5 `tasks/batch.yml` — submit via Lambda dispatcher
 
 ```yaml
-# =============================================================================
-# tasks/batch.yml  -  AWS Batch (training jobs en la nube)
-# =============================================================================
-# Incluido por Taskfile.yml raiz con namespace "batch:".
-#
-# El submit pasa por el Lambda dispatcher (valida variety + hydrate de S3
-# antes de encolar). Si necesitas bypass, llama `aws batch submit-job` directo.
-#
-# USO TIPICO:
-#   task batch:train VARIETIES=POP                    una variedad (background)
-#   task batch:train VARIETIES=POP,VENTURA            varias en un job
-#   task batch:train VARIETIES=all                    todas las permitidas
-#   task batch:train VARIETIES=POP TUNING=smoke       sanity check (~1 min)
-#   task batch:train VARIETIES=POP WAIT=true          bloquear hasta terminar
-#   task batch:smoke                                  atajo: POP + smoke (bloquea)
-#   task batch:eda   VARIETIES=POP                    EDA exploratorio (opcional, on-demand)
-#   task batch:watch                                  seguir el ULTIMO job hasta terminar
-#   task batch:logs                                   tail de logs del ultimo job (FOLLOW=true en vivo)
-#   task batch:status                                 jobs activos en queues
-#   task batch:cancel                                 terminar el ultimo job (o JOB_ID=<id>)
-#
-# El submit es FIRE-AND-FORGET por defecto: el job corre en AWS Batch, asi que
-# cerrar la terminal o apagar la maquina NO lo detiene. watch/logs/cancel se
-# defaultean al ultimo job submiteado (persistido en .batch-last-job).
-# =============================================================================
-
 version: "3"
 
 vars:
   DISPATCHER_FN: '{{.DISPATCHER_FN | default (printf "%s-dispatcher" .PROJECT)}}'
   JOBDEF:        '{{.JOBDEF        | default (printf "%s-trainer" .PROJECT)}}'
-  QUEUE_SPOT:    '{{.QUEUE_SPOT    | default (printf "%s-job-queue-spot"     .PROJECT)}}'
-  QUEUE_OD:      '{{.QUEUE_OD      | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
-  TUNING:        '{{.TUNING        | default "prod_xl"}}'
-  # WAIT=false por defecto -> submit en background (el job vive en AWS Batch).
-  # batch:smoke pisa WAIT=true para que el smoke de deploy siga verificando exito.
   WAIT:          '{{.WAIT          | default "false"}}'
   LOG_GROUP:     '{{.LOG_GROUP     | default (printf "/aws/batch/%s" .PROJECT)}}'
 
 tasks:
 
   train:
-    desc: "Entrena en Batch (background). Vars: VARIETIES=POP[,VENTURA|all] (REQ), TUNING, WAIT=true para bloquear"
+    desc: "Entrena en Batch (background). Vars: VARIETIES=POP[,VENTURA|all] (REQ), TUNING, PARALLEL=N (variedades a la vez), WAIT=true para bloquear"
+    vars:
+      TUNING: '{{.TUNING | default "prod_xl"}}'
     requires:
       vars: [VARIETIES]
     cmds:
       - |
         set -e
         source tasks/lib/batch_wait.sh
-        # Preflight: aborta en ~2s si la job-def apunta a una imagen ausente en
-        # ECR, en vez de encolar y esperar ~3 min al CannotPullImageManifestError.
-        assert_jobdef_image "{{.JOBDEF}}" "{{.REGION}}"
-        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" --arg t "{{.TUNING}}" \
-          '{varieties: $v, tuning: $t}')
-        aws lambda invoke \
-          --function-name "{{.DISPATCHER_FN}}" \
-          --cli-binary-format raw-in-base64-out \
-          --payload "$PAYLOAD" \
-          /tmp/dispatcher-out.json \
-          --query 'StatusCode' --output text
-        cat /tmp/dispatcher-out.json
-        JOB_ID=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
-                 || jq -r '.jobId' /tmp/dispatcher-out.json)
-        echo ">>> Submitted  job=$JOB_ID  tuning={{.TUNING}}  varieties={{.VARIETIES}}"
-        batch_record_job "$JOB_ID"
-        if [ "{{.WAIT}}" != "true" ]; then
-          echo "  El job corre en AWS Batch: podes cerrar la terminal sin afectarlo."
-          echo "  Estado: task batch:watch  |  Logs: task batch:logs  |  Cancelar: task batch:cancel"
-          exit 0
-        fi
-        wait_job "$JOB_ID" "{{.VARIETIES}}"
+        PAYLOAD=$(build_train_payload "{{.VARIETIES}}" "{{.TUNING}}" "{{.PARALLEL | default 1}}")
+        dispatch_job "{{.JOBDEF}}" "{{.REGION}}" "{{.DISPATCHER_FN}}" "$PAYLOAD" \
+          "train {{.VARIETIES}} tuning={{.TUNING}} parallel={{.PARALLEL | default 1}}" "{{.WAIT}}"
 
   eda:
     desc: "EDA exploratorio en Batch (opcional, standalone, on-demand). Vars: VARIETIES=POP[,VENTURA] (REQ), WAIT"
@@ -6400,26 +5992,13 @@ tasks:
       - |
         set -e
         source tasks/lib/batch_wait.sh
-        assert_jobdef_image "{{.JOBDEF}}" "{{.REGION}}"
-        # mode=eda -> el dispatcher arma command=["--eda","--varieties",...] (sin tuning).
-        PAYLOAD=$(jq -nc --arg v "{{.VARIETIES}}" '{varieties: $v, mode: "eda"}')
-        aws lambda invoke \
-          --function-name "{{.DISPATCHER_FN}}" \
-          --cli-binary-format raw-in-base64-out \
-          --payload "$PAYLOAD" \
-          /tmp/dispatcher-out.json \
-          --query 'StatusCode' --output text
-        cat /tmp/dispatcher-out.json
-        JOB_ID=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
-                 || jq -r '.jobId' /tmp/dispatcher-out.json)
-        echo ">>> Submitted EDA  job=$JOB_ID  varieties={{.VARIETIES}}"
-        [ "{{.WAIT}}" != "true" ] && exit 0
-        wait_job "$JOB_ID" "{{.VARIETIES}}"
+        PAYLOAD=$(build_eda_payload "{{.VARIETIES}}")
+        dispatch_job "{{.JOBDEF}}" "{{.REGION}}" "{{.DISPATCHER_FN}}" "$PAYLOAD" \
+          "eda {{.VARIETIES}}" "{{.WAIT}}"
 
   smoke:
     desc: "Sanity check end-to-end (~1 min). Equivalente a train VARIETIES=POP TUNING=smoke"
     cmds:
-      # WAIT=true explicito: el smoke del deploy DEBE bloquear y verificar exito.
       - task: train
         vars: { VARIETIES: POP, TUNING: smoke, WAIT: "true" }
 
@@ -6439,16 +6018,17 @@ tasks:
       - |
         source tasks/lib/batch_wait.sh
         JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
-        tail_job_logs "$JOB_ID" "{{.LOG_GROUP}}" "{{.FOLLOW | default \"false\"}}"
+        tail_job_logs "$JOB_ID" "{{.LOG_GROUP}}" "{{.FOLLOW | default "false"}}"
 
   status:
     desc: "Jobs activos (SUBMITTED/PENDING/RUNNABLE/STARTING/RUNNING) en ambas queues"
     silent: true
     cmds:
       - |
+        source tasks/lib/batch_wait.sh
         for queue in "{{.QUEUE_SPOT}}" "{{.QUEUE_OD}}"; do
           echo "=== $queue ==="
-          for s in SUBMITTED PENDING RUNNABLE STARTING RUNNING; do
+          for s in $BATCH_ACTIVE_STATES; do
             aws batch list-jobs --job-queue "$queue" --job-status $s \
               --query 'jobSummaryList[].[jobId,jobName,status,createdAt]' --output table 2>/dev/null || true
           done
@@ -6462,9 +6042,8 @@ tasks:
       - |
         source tasks/lib/batch_wait.sh
         JOB_ID=$(batch_need_job "{{.JOB_ID}}") || exit 0
-        # terminate-job es idempotente: sobre un job ya terminal es no-op.
         aws batch terminate-job --job-id "$JOB_ID" \
-          --reason "{{.REASON | default \"cancelled via task\"}}" \
+          --reason "{{.REASON | default "cancelled via task"}}" \
           && echo ">>> terminate enviado a job=$JOB_ID"
 ```
 
@@ -6473,42 +6052,15 @@ Una sola via de submit (el Lambda dispatcher) — valida que la variety exista e
 #### 4.1.6 `tasks/ops.yml` — lifecycle cluster + MLflow registry (Dia 2)
 
 ```yaml
-# =============================================================================
-# tasks/ops.yml  -  Operaciones Dia 2: lifecycle del cluster + MLflow registry
-# =============================================================================
-# Incluido por Taskfile.yml raiz con namespace "ops:".
-#
-# Modulos VOLATILES (teardown los destruye, ~10-15 min para recrear):
-#   scheduler, lambdas, monitoring, batch, reports, mlflow, cicd, consumer_iam
-# Modulos PERMANENTES (NO se tocan en teardown):
-#   network (VPC + NAT), storage (S3 + ECR), backend state
-#
-# USO TIPICO:
-#   task ops:status                                   estado RDS + ECS + Batch
-#   task ops:state-drift                              buckets S3 en AWS vs tfstate (pre-deploy)
-#   task ops:up                                       encender idempotente (espera healthy)
-#   task ops:down [COOLDOWN=600]                      apagar (drena Batch + stop RDS)
-#   task ops:teardown                                 destroy volatiles
-#   task ops:rebuild                                  re-apply + up
-#   task ops:promote MODEL_NAME=rnd-forest-POP VERSION=3 [MAX_MAPE=20]
-#   task ops:registry-list MODEL_NAME=rnd-forest-POP
-# =============================================================================
-
 version: "3"
 
 vars:
-  # TF_DIR / RDS_ID / BACKUP_MAX_AGE_MIN se inyectan desde el Taskfile raiz
-  # (fuente unica, compartida con infra:). Ver `includes:` en Taskfile.yml.
   SCHEDULER_FN: '{{.SCHEDULER_FN | default (printf "%s-scheduler" .PROJECT)}}'
-  QUEUE_SPOT:   '{{.QUEUE_SPOT   | default (printf "%s-job-queue-spot"     .PROJECT)}}'
-  QUEUE_OD:     '{{.QUEUE_OD     | default (printf "%s-job-queue-ondemand" .PROJECT)}}'
   MAX_MAPE:     '{{.MAX_MAPE     | default "20"}}'
-  # Orden reverso de apply: importante para destroy con dependencias.
-  VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd module.consumer_iam"
+  SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
+  VOLATILE_MODULES: "module.scheduler module.lambdas module.monitoring module.batch module.reports module.api module.ui module.mlflow module.cicd"
 
 tasks:
-
-  # ═══ Estado ═════════════════════════════════════════════════════════════════
 
   status:
     desc: "Estado del cluster: RDS + ECS services + Batch jobs activos"
@@ -6529,8 +6081,6 @@ tasks:
       - task: _batch-jobs
         vars: { ABORT_IF_RUNNING: "false" }
 
-  # ═══ Helper unico: estado de Batch + assert opcional ════════════════════════
-
   _batch-jobs:
     internal: true
     silent: true
@@ -6538,10 +6088,11 @@ tasks:
       ABORT_IF_RUNNING: '{{.ABORT_IF_RUNNING | default "false"}}'
     cmds:
       - |
+        source tasks/lib/batch_wait.sh
         total=0
         running=0
         for q in {{.QUEUE_SPOT}} {{.QUEUE_OD}}; do
-          for s in SUBMITTED PENDING RUNNABLE STARTING RUNNING; do
+          for s in $BATCH_ACTIVE_STATES; do
             n=$(aws batch list-jobs --job-queue "$q" --job-status $s --query 'length(jobSummaryList)' --output text 2>/dev/null || echo 0)
             [ "$n" -gt 0 ] && echo "  queue=$q  status=$s  count=$n"
             total=$((total + n))
@@ -6556,10 +6107,8 @@ tasks:
           exit 1
         fi
 
-  # ═══ Drift detection (state vs realidad AWS) ═══════════════════════════════
-
   state-drift:
-    desc: "Detectar drift de buckets S3: existen en AWS pero no en tfstate (causa BucketAlreadyExists en apply)"
+    desc: "Detectar+auto-importar drift de buckets S3: existen en AWS pero no en tfstate (evita BucketAlreadyExists en apply)"
     silent: true
     cmds:
       - |
@@ -6578,19 +6127,48 @@ tasks:
         echo "$tf_side" | sed 's/^/  /'
         echo ""
         only_aws=$(comm -23 <(echo "$aws_side") <(echo "$tf_side"))
-        # tfstate bucket vive fuera del state por diseno (lo crea infra/bootstrap.sh)
         only_aws=$(echo "$only_aws" | grep -v -- '-tfstate-' || true)
         if [ -n "$only_aws" ]; then
-          echo "DRIFT: existen en AWS pero faltan en tfstate (causara BucketAlreadyExists):"
-          echo "$only_aws" | sed 's/^/  - /'
-          echo ""
-          echo "Fix sugerido (ajustar el nombre del resource al que corresponda en modules/storage/main.tf):"
-          echo "  terraform -chdir={{.TF_DIR}} import module.storage.aws_s3_bucket.<resource> <bucket-name>"
-          exit 1
+          echo "DRIFT: existen en AWS pero faltan en tfstate (causaria BucketAlreadyExists). Auto-importando:"
+          for b in $only_aws; do
+            res=$(echo "$b" | sed 's/^{{.PROJECT}}-//; s/-[^-]*$//')
+            case "$res" in
+              data|artifacts)
+                echo "  - import module.storage.aws_s3_bucket.$res  <-  $b"
+                terraform -chdir={{.TF_DIR}} import "module.storage.aws_s3_bucket.$res" "$b"
+                ;;
+              *)
+                echo "  - $b: recurso '$res' no reconocido (no es data/artifacts); importar a mano." >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "OK drift corregido via import; el apply ya puede crear los recursos auxiliares encima."
+          exit 0
         fi
         echo "OK no drift detectado en buckets S3."
 
-  # ═══ Lifecycle: up (idempotente) / down (con cooldown opcional) ═════════════
+  secrets-pending:
+    desc: "Purgar Secrets Manager secrets de este proyecto que quedaron en pending deletion (causan 'already scheduled for deletion' en apply)"
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo ">>> Buscando secrets de {{.PROJECT}} en pending deletion..."
+        pending=$(aws secretsmanager list-secrets \
+          --include-planned-deletion \
+          --filter Key=name,Values={{.PROJECT}}- \
+          --query 'SecretList[?DeletedDate!=null].Name' \
+          --output text)
+        if [ -z "$pending" ]; then
+          echo "OK no hay secrets en pending deletion."
+          exit 0
+        fi
+        source tasks/lib/nuke.sh
+        for s in $pending; do
+          purge_secret "$s"
+        done
+        echo "OK secrets purgados; apply puede re-crearlos."
 
   up:
     desc: "Encender stack (idempotente: recrea ALB+NAT si down los libero, invoca scheduler.start y espera RDS+ALB healthy)"
@@ -6598,16 +6176,9 @@ tasks:
     cmds:
       - |
         set -e
-        # down (hibernacion) destruyo el ALB y todo lo que dependia de el
-        # (NAT, listener+rules, ECS services, task defs, modulos ui/reports
-        # via depends_on, lambdas scheduler/dispatcher via outputs). Un apply
-        # COMPLETO (como rebuild) recrea exactamente lo que falte y es
-        # inmune a que el grafo de dependencias arrastre mas de lo previsto.
         if ! aws elbv2 describe-load-balancers --names {{.PROJECT}}-alb >/dev/null 2>&1; then
           echo ">>> ALB no existe (stack hibernado) -> terraform apply completo (~3-5 min)..."
           terraform -chdir={{.TF_DIR}} apply -auto-approve
-          # El DNS del ALB cambia al recrearlo -> descartar cualquier valor
-          # stale del env y resolver fresco desde terraform output.
           unset MLFLOW_ALB_DNS
         fi
         source tasks/lib/wake.sh
@@ -6628,9 +6199,6 @@ tasks:
           sleep {{.COOLDOWN}}
         fi
       - 'echo ">>> Invocando scheduler.stop..."'
-      # Tolerante a Lambda inexistente: en flujos de destroy / infra parcial,
-      # el scheduler ya puede estar destruido. Skipear es seguro porque
-      # `terraform destroy` igual tumba RDS/ECS a continuacion.
       - |
         if aws lambda get-function --function-name {{.SCHEDULER_FN}} >/dev/null 2>&1; then
           aws lambda invoke --function-name {{.SCHEDULER_FN}} \
@@ -6641,17 +6209,6 @@ tasks:
         else
           echo "  Lambda {{.SCHEDULER_FN}} no existe -> skip (probablemente ya destruido)"
         fi
-      # Hibernacion: ALB (~$16/mes) + NAT (~$33/mes) + IPv4 publicas (~$7/mes)
-      # son el costo idle dominante con el stack "dormido". El destroy targeted
-      # del ALB arrastra a TODOS sus dependientes en el grafo: listener + rules,
-      # los 4 ECS services + task defs, los modulos ui/reports completos
-      # (depends_on de modulo), la alarma alb-5xx y las lambdas scheduler/
-      # dispatcher (sus env vars usan outputs de los services/ALB). Todo es
-      # stateless y `up` lo recrea con un apply completo. RDS/S3 no se tocan.
-      # OJO: (1) el DNS del ALB cambia en cada ciclo sleep/wake;
-      #      (2) sin la lambda keepstop, si la hibernacion pasa de 7 dias AWS
-      #          re-arranca el RDS solo y nadie lo re-para -> para idle largo
-      #          usar `task ops:teardown` (destruye el RDS respaldandolo antes).
       - |
         if [ "{{.RELEASE_NET}}" != "true" ]; then
           echo ">>> RELEASE_NET=false -> ALB + NAT quedan encendidos (~\$1.8/dia idle)"
@@ -6665,35 +6222,101 @@ tasks:
         echo "OK stack hibernado (piso ~\$4/mes: storage + Route53). Volver: task wake"
         echo "AVISO: hibernacion >7 dias -> RDS auto-arranca (keepstop hibernado); usar teardown para idle largo"
 
-  # ═══ Teardown / Rebuild ═════════════════════════════════════════════════════
-
   teardown:
-    desc: "Down + terraform destroy de modulos volatiles. Preserva storage + network"
-    prompt: "Destruira los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
+    desc: "Backup + destroy de modulos volatiles. Preserva storage + network"
+    prompt: "Se tomara un backup del RDS y se destruiran los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
     cmds:
-      # RELEASE_NET=false: liberar ALB/NAT aqui seria redundante — el destroy
-      # de module.mlflow y el apply enable_nat=false de abajo hacen lo mismo.
       - task: down
         vars: { RELEASE_NET: "false" }
-      - 'echo ">>> Destroy modulos volatiles (orden reverso de apply)..."'
+      - 'echo ">>> [1/4] Backup del RDS ANTES de destruir (obligatorio)..."'
       - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        if ensure_backup "{{.RDS_ID}}" "backup" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null; then
+          echo "OK backup verificado. El destroy ya no puede perder datos."
+        else
+          echo "AVISO el RDS no existe -> nada que respaldar; se sigue con el destroy."
+        fi
+      - 'echo ">>> [2/4] Destroy de modulos volatiles (orden reverso de apply)..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/nuke.sh
+        lift_rds_protection "{{.RDS_ID}}"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"
-          terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve || {
+          terraform -chdir={{.TF_DIR}} destroy -target=$mod -auto-approve \
+            -var "rds_skip_final_snapshot=true" || {
             echo "FAIL destroy de $mod fallo. Revisar manualmente."
+            echo "     Tus datos ESTAN a salvo: el backup del paso 1 ya existe."
             exit 1
           }
         done
-      - 'echo "OK teardown completo. Para volver: task ops:rebuild"'
+      - 'echo ">>> [3/4] Liberando NAT gateway (enable_nat=false)..."'
+      - terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
+      - 'echo ">>> [4/4] Verificando el backup + poda (retencion {{.SNAPSHOT_KEEP}})..."'
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        assert_backup_exists "{{.RDS_ID}}"
+        prune_snapshots "{{.RDS_ID}}" "{{.SNAPSHOT_KEEP}}"
+      - 'echo "OK teardown completo (NAT liberado). Para volver: task rebuild"'
+      - 'echo "     MLflow registry + forecasts viven en el backup; rebuild los restaura."'
+      - 'echo "     Los artifacts (modelos, reports) siguen intactos en S3."'
+
+  apply-restore:
+    desc: "terraform apply completo restaurando el RDS del ultimo backup si existe. Vars: SNAPSHOT=<id>|none"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        SNAP=$(resolve_restore_snapshot "{{.RDS_ID}}" "{{.SNAPSHOT}}")
+        if [ -n "$SNAP" ]; then
+          echo ">>> Restaurando RDS desde $SNAP (~5-10 min extra)..."
+          terraform -chdir={{.TF_DIR}} apply -auto-approve \
+            -var "rds_snapshot_identifier=$SNAP"
+        else
+          terraform -chdir={{.TF_DIR}} apply -auto-approve
+        fi
 
   rebuild:
-    desc: "Re-apply de modulos volatiles + up"
+    desc: "Re-apply de modulos volatiles + up. RESTAURA el RDS desde el ultimo backup (SNAPSHOT=<id> para fijar uno, SNAPSHOT=none para empezar vacio)"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default ""}}'
     cmds:
       - 'echo ">>> Apply completo (modulos volatiles se re-crean, resto no-op)..."'
-      - task: ":infra:apply"
+      - task: apply-restore
+        vars: { SNAPSHOT: '{{.SNAPSHOT}}' }
       - task: up
 
-  # ═══ MLflow Model Registry ═════════════════════════════════════════════════
+  backups:
+    desc: "Listar los backups del RDS (los que pueden consumir `deploy`/`rebuild`)"
+    aliases: [snapshots]
+    silent: true
+    cmds:
+      - |
+        source tasks/lib/snapshot.sh
+        list_snapshots "{{.RDS_ID}}"
+
+  backup-now:
+    desc: "Tomar un backup del RDS AHORA (sin destruir nada). Arranca el RDS si esta parado"
+    aliases: [snapshot-now]
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        backup_now "{{.RDS_ID}}" "manual" >/dev/null
+
+  verify-backup:
+    desc: "Verificar que existe al menos un backup restaurable del RDS (exit 1 si no)"
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        source tasks/lib/snapshot.sh
+        assert_backup_exists "{{.RDS_ID}}"
 
   registry-list:
     desc: "Listar versiones de un modelo. Var: MODEL_NAME=rnd-forest-POP (REQ)"
@@ -6705,14 +6328,14 @@ tasks:
         source tasks/lib/mlflow_uri.sh
         URI=$(mlflow_uri {{.TF_DIR}})
         curl -s "$URI/api/2.0/mlflow/registered-models/get?name={{.MODEL_NAME}}" \
-          | jq '.registered_model.latest_versions[] | {version, aliases, run_id, creation_timestamp}'
+          | jq '.registered_model.latest_versions[] | {version, current_stage, run_id, creation_timestamp}'
 
   promote:
-    desc: "Validar y reasignar alias @champion. Vars: MODEL_NAME (REQ), VERSION=N (REQ), MAX_MAPE=20"
+    desc: "Promover a Production con gate MAPE + A/B. Vars: MODEL_NAME (REQ), VERSION=N (REQ), MAX_MAPE=20"
     requires:
       vars: [MODEL_NAME, VERSION]
     cmds:
-      - python scripts/promote_model.py {{.MODEL_NAME}} {{.VERSION}} --max-mape {{.MAX_MAPE}} --tf-dir {{.TF_DIR}}
+      - python scripts/promote_model.py {{.MODEL_NAME}} {{.VERSION}} --max-mape {{.MAX_MAPE}}
 ```
 
 **Decisiones clave** (resumidas — el codigo es la fuente):
@@ -6732,15 +6355,33 @@ Bash compartido extraido del YAML para que sea testeable con `bash -n` y reusabl
 **`tasks/lib/batch_wait.sh`** — preflight (`assert_jobdef_image`) + polling (`wait_job`):
 
 ```bash
-# Helper bash compartido por tasks/batch.yml (polling de Batch jobs).
-# Sourceado, no ejecutado. Requiere awscli configurado.
+BATCH_ACTIVE_STATES="SUBMITTED PENDING RUNNABLE STARTING RUNNING"
 
-# assert_jobdef_image <job_definition_name> [region]
-# Preflight: falla rapido si la imagen de la job-def ACTIVE no existe en ECR,
-# en vez de esperar ~3 min a que Batch reporte
-# `CannotPullImageManifestError: manifest unknown`.
-# Causa raiz tipica: se bumpeo trainer_image_tag en terraform.tfvars + apply,
-# pero nunca se corrio `task ecr:build IMG=trainer TAG=<tag>` (o al reves).
+BATCH_LAST_JOB_FILE="${BATCH_LAST_JOB_FILE:-.batch-last-job}"
+
+batch_record_job() {
+  [ -n "$1" ] && [ "$1" != "None" ] && printf '%s\n' "$1" > "$BATCH_LAST_JOB_FILE" 2>/dev/null
+  return 0
+}
+
+batch_resolve_job() {
+  local jid="$1"
+  if [ -z "$jid" ] && [ -f "$BATCH_LAST_JOB_FILE" ]; then
+    jid=$(cat "$BATCH_LAST_JOB_FILE" 2>/dev/null)
+  fi
+  printf '%s' "$jid"
+}
+
+batch_need_job() {
+  local jid; jid=$(batch_resolve_job "$1")
+  if [ -z "$jid" ]; then
+    echo "No hay JOB_ID. Pasa JOB_ID=<id>, o submitea con 'task batch:train ...' primero." >&2
+    echo "Jobs activos: task batch:status" >&2
+    return 1
+  fi
+  printf '%s' "$jid"
+}
+
 assert_jobdef_image() {
   local jobdef="$1" region="${2:-us-east-1}"
   local image repo tag
@@ -6769,19 +6410,63 @@ EOF
   return 1
 }
 
-# wait_job <job_id> <label>
-# Polling cada 30s hasta SUCCEEDED (return 0) o FAILED (return 1).
+build_train_payload() {
+  jq -nc --arg v "$1" --arg t "$2" --argjson p "${3:-1}" \
+    '{varieties: $v, tuning: $t, parallel: $p}'
+}
+
+build_eda_payload() {
+  jq -nc --arg v "$1" '{varieties: $v, mode: "eda"}'
+}
+
+dispatch_job() {
+  local jobdef="$1" region="$2" fn="$3" payload="$4" label="$5" wait="${6:-true}"
+  assert_jobdef_image "$jobdef" "$region"
+  aws lambda invoke \
+    --function-name "$fn" \
+    --cli-binary-format raw-in-base64-out \
+    --payload "$payload" \
+    /tmp/dispatcher-out.json \
+    --query 'StatusCode' --output text
+  cat /tmp/dispatcher-out.json
+  local job_id
+  job_id=$(jq -r '.body.jobId // (.body|fromjson|.jobId)' /tmp/dispatcher-out.json 2>/dev/null \
+           || jq -r '.jobId' /tmp/dispatcher-out.json)
+  echo ">>> Submitted  $label  job=$job_id"
+  batch_record_job "$job_id"
+  if [ "$wait" != "true" ]; then
+    cat <<EOF
+
+  El job corre en AWS Batch: podes cerrar la terminal / apagar la maquina
+  sin afectarlo. Para volver a verlo despues:
+    task batch:watch                  seguir ESTE job hasta SUCCEEDED/FAILED
+    task batch:status                 todos los jobs activos en las queues
+    task batch:logs                   tail de los logs (FOLLOW=true para vivo)
+    task batch:cancel                 terminar el job
+  (todos defaultean a job=$job_id; pasa JOB_ID=<id> para otro)
+EOF
+    return 0
+  fi
+  wait_job "$job_id" "$label"
+}
+
 wait_job() {
   local job_id="$1" label="$2"
   while :; do
     local status
-    status=$(aws batch describe-jobs --jobs "$job_id" --query 'jobs[0].status' --output text)
+    status=$(aws batch describe-jobs --jobs "$job_id" --query 'jobs[0].status' --output text 2>/dev/null)
+    case "$status" in
+      None|"")
+        echo "  job '$job_id' no encontrado (id invalido o ya purgado por Batch)"
+        return 2
+        ;;
+    esac
     echo "  $(date +%H:%M:%S)  $label  $status"
     case "$status" in
       SUCCEEDED) return 0 ;;
       FAILED)
         local reason
-        reason=$(aws batch describe-jobs --jobs "$job_id" --query 'jobs[0].statusReason' --output text)
+        reason=$(aws batch describe-jobs --jobs "$job_id" --query 'jobs[0].statusReason' --output text 2>/dev/null)
         echo "FAIL $label  reason=$reason"
         return 1
         ;;
@@ -6789,16 +6474,33 @@ wait_job() {
     esac
   done
 }
+
+follow_job() {
+  wait_job "$1" "$2" || true
+  return 0
+}
+
+tail_job_logs() {
+  local job_id="$1" log_group="$2" follow="${3:-false}"
+  local stream
+  stream=$(aws batch describe-jobs --jobs "$job_id" \
+             --query 'jobs[0].container.logStreamName' --output text 2>/dev/null)
+  if [ -z "$stream" ] || [ "$stream" = "None" ]; then
+    echo "  el job '$job_id' todavia no tiene log stream (probablemente RUNNABLE/STARTING)."
+    echo "  reintenta en ~1 min, o segui el estado con: task batch:watch JOB_ID=$job_id"
+    return 0
+  fi
+  echo ">>> logs de job=$job_id  stream=$stream  (grupo $log_group)"
+  local extra=""
+  [ "$follow" = "true" ] && extra="--follow"
+  aws logs tail "$log_group" --log-stream-names "$stream" --since 6h $extra 2>/dev/null \
+    || echo "  (sin eventos aun; reintenta en unos segundos)"
+}
 ```
 
 **`tasks/lib/mlflow_uri.sh`** — resolver el ALB:
 
 ```bash
-# Resolver la URI de MLflow (ALB) desde:
-#   1. env MLFLOW_ALB_DNS (usado por GHA via vars.MLFLOW_ALB_DNS)
-#   2. terraform output -raw alb_dns en TF_DIR (uso local)
-# Sourceado, no ejecutado.
-
 mlflow_uri() {
   local tf_dir="${1:-infra/envs/prod}"
   if [ -n "${MLFLOW_ALB_DNS:-}" ]; then
@@ -6820,18 +6522,7 @@ Prioridad `MLFLOW_ALB_DNS` antes de `terraform output`: GitHub Actions inyecta l
 **`tasks/lib/wake.sh`** — wake idempotente del cluster (47 lineas; extraido entero del YAML viejo para que el `ops:up` quede declarativo):
 
 ```bash
-# Wake idempotente del cluster MLflow.
-#   - Si MLflow ya responde /health -> noop, escribe true a STATUS_FILE.
-#   - Si no, invoca scheduler.start, espera RDS available, espera ALB 200.
-# Sourceado, no ejecutado.
-#
-# Vars de entorno:
-#   PROJECT       (req)  nombre base del stack (ej. ml-training)
-#   TF_DIR        (def)  infra/envs/prod
-#   MLFLOW_ALB_DNS (opt) si esta seteada, salta terraform output
-#   STATUS_FILE   (opt)  default /tmp/wake-status (true|false segun pre-check)
-
-source "$(dirname "${BASH_SOURCE[0]}")/mlflow_uri.sh"
+source tasks/lib/mlflow_uri.sh
 
 wake_cluster() {
   local project="${PROJECT:?PROJECT requerido}"
@@ -6853,10 +6544,11 @@ wake_cluster() {
   echo "false" > "$status_file"
   aws lambda invoke \
     --function-name "$scheduler_fn" \
+    --invocation-type Event \
     --cli-binary-format raw-in-base64-out \
     --payload '{"action":"start"}' \
     /tmp/wake-start.out >/dev/null
-  cat /tmp/wake-start.out && echo ""
+  echo "    scheduler.start invocado (async, 202). Esperando readiness..."
 
   echo ">>> Esperando RDS available (24x30s = 12 min max)..."
   local status=""
@@ -6894,29 +6586,67 @@ wake_cluster() {
 > 📂 **Pegar este bloque en**: `tasks/lib/nuke.sh`
 
 ```bash
-# Helpers para destroy/nuke: vaciar buckets versionados, borrar repos ECR,
-# borrar el OIDC provider. Sourceados, no ejecutados.
-
-# empty_bucket <bucket> [delete]
-#   Vacia versiones + delete markers. Si delete=true, ademas borra el bucket.
 empty_bucket() {
   local bucket="$1" delete="${2:-false}" prefix="${3:-}"
   if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
     echo "  $bucket no existe, skip"; return 0
   fi
-  echo "  Vaciando $bucket (versiones + delete markers)..."
+  echo "  Vaciando s3://$bucket/${prefix} (versiones + delete markers)..."
   aws s3api delete-objects --bucket "$bucket" \
-    --delete "$(aws s3api list-object-versions --bucket "$bucket" \
+    --delete "$(aws s3api list-object-versions --bucket "$bucket" ${prefix:+--prefix "$prefix"} \
       --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' \
-      --max-items 1000)" 2>/dev/null || echo "  (bucket ya vacio)"
+      --max-items 1000)" 2>/dev/null || echo "  (ya vacio, nada que borrar)"
   if [ "$delete" = "true" ]; then
+    if [ -n "$prefix" ]; then
+      echo "  (prefix + delete=true: no se borra el bucket, solo el prefijo)"
+      return 0
+    fi
     echo "  Borrando bucket $bucket..."
     aws s3 rb "s3://$bucket"
   fi
 }
 
-# purge_ecr <repo>
-#   Borra TODAS las imagenes de un repo ECR (no borra el repo).
+lift_rds_protection() {
+  local id="$1"
+  if ! aws rds describe-db-instances --db-instance-identifier "$id" >/dev/null 2>&1; then
+    echo "  RDS $id no existe, skip lift"; return 0
+  fi
+  echo "  Levantando deletion_protection de $id (para permitir destroy)..."
+  aws rds modify-db-instance --db-instance-identifier "$id" \
+    --no-deletion-protection --apply-immediately >/dev/null
+}
+
+ensure_rds_available() {
+  local id="$1" st
+  if ! aws rds describe-db-instances --db-instance-identifier "$id" >/dev/null 2>&1; then
+    echo "  RDS $id no existe, skip"; return 0
+  fi
+  st=$(aws rds describe-db-instances --db-instance-identifier "$id" \
+    --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null)
+  case "$st" in
+    available) echo "  RDS $id ya esta available."; return 0 ;;
+    stopped)
+      echo "  RDS $id esta stopped -> arrancando (necesario para el snapshot final)..."
+      aws rds start-db-instance --db-instance-identifier "$id" >/dev/null
+      ;;
+    starting|stopping|modifying|backing-up|configuring-enhanced-monitoring)
+      echo "  RDS $id en estado transitorio ($st) -> esperando..."
+      if [ "$st" = "stopping" ]; then
+        until [ "$(aws rds describe-db-instances --db-instance-identifier "$id" \
+              --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null)" = "stopped" ]; do
+          sleep 20
+        done
+        echo "  RDS $id ya stopped -> arrancando..."
+        aws rds start-db-instance --db-instance-identifier "$id" >/dev/null
+      fi
+      ;;
+    *) echo "  RDS $id en estado '$st' -> intentando esperar a available..." ;;
+  esac
+  echo "  Esperando a que $id quede available (puede tardar ~5-10 min)..."
+  aws rds wait db-instance-available --db-instance-identifier "$id"
+  echo "  OK RDS $id available."
+}
+
 purge_ecr() {
   local repo="$1"
   if ! aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1; then
@@ -6931,8 +6661,17 @@ purge_ecr() {
   aws ecr batch-delete-image --repository-name "$repo" --image-ids "$ids" >/dev/null
 }
 
-# delete_oidc
-#   Borra el OIDC provider de GitHub Actions de la cuenta.
+purge_secret() {
+  local name="$1"
+  if ! aws secretsmanager describe-secret --secret-id "$name" >/dev/null 2>&1; then
+    echo "  secret $name no existe, skip"; return 0
+  fi
+  echo "  Force-delete secret $name (sin recovery window)..."
+  aws secretsmanager delete-secret \
+    --secret-id "$name" \
+    --force-delete-without-recovery >/dev/null
+}
+
 delete_oidc() {
   local arn
   arn=$(aws iam list-open-id-connect-providers \
@@ -6967,13 +6706,6 @@ version: "3"
 
 dotenv: [ ".env" ]
 
-# Includes namespaced por etapa. Cada tasks/X.yml documenta su uso en el header.
-#
-# CONVENCION DE VARS COMPARTIDAS: todo nombre que use mas de un archivo se
-# declara UNA vez en el `vars:` de abajo y se INYECTA aca. El include no lo
-# redeclara — si lo hiciera, tendriamos dos defaults capaces de divergir en
-# silencio (paso con TF_DIR, declarado identico en infra.yml y ops.yml).
-# Aplica a: TF_DIR, RDS_ID, QUEUE_SPOT, QUEUE_OD, BACKUP_MAX_AGE_MIN.
 includes:
   infra:
     taskfile: ./tasks/infra.yml
@@ -6993,52 +6725,24 @@ includes:
     vars: { PROJECT: '{{.PROJECT}}', REGION: '{{.REGION}}' }
 
 vars:
-  # TUNING se define a nivel-tarea (default "prod_xl"), NO como var global:
-  # un default global pisaria el del include batch: (ver tasks/batch.yml).
   VARIETIES: '{{.VARIETIES | default "POP"}}'
   PARALLEL:  '{{.PARALLEL  | default "1"}}'
   PROJECT:   '{{.PROJECT   | default "ml-training"}}'
   REGION:    '{{.AWS_DEFAULT_REGION | default "us-east-1"}}'
   HOST_UID:  { sh: id -u }
   HOST_GID:  { sh: id -g }
-  # --user fija tu uid/gid del host en el container: los bind-mounts (./data,
-  # ./reports, ./logs) salen con tu ownership, no como mluser (uid 1001) — evita
-  # PermissionError. MPLCONFIGDIR=/tmp porque con --user el $HOME de la imagen no
-  # es escribible por tu uid (matplotlib en eda/HTML). Mismo patron en `train`.
   DC_PY: docker compose run --rm --no-deps --user "{{.HOST_UID}}:{{.HOST_GID}}" -e MPLCONFIGDIR=/tmp --entrypoint python trainer
-  # SUFFIX (sufijo del Account ID para bucket/repo names) NO se define aqui a
-  # proposito: si fuera top-level, Task lo evaluaria al cargar y dispararia
-  # `aws sts get-caller-identity` incluso para `task` o `task --list`. Solo
-  # `destroy` y `nuke` lo necesitan -> se computa por-tarea (lazy).
 
 tasks:
-
-  # ... build / data:split / eda / train / down / _up / _ensure_dirs / _print_urls ...
-  # (sin cambios, vienen de Tramo I sección 4.6)
-  # `default` se EXPANDE — ver bloque dedicado mas abajo.
 
   lint:
     desc: "ruff check src/ main.py scripts/ (config en pyproject.toml)"
     cmds:
       - ruff check src/ main.py scripts/
 
-  # ═══ Atajos high-level del stack AWS ════════════════════════════════════════
-
   deploy:
     desc: "AWS: stand-up completo (storage -> 5 imagenes -> resto) + imprime URLs"
     cmds:
-      # Pre-check: si los buckets *-data-* / *-artifacts-* existen en AWS pero
-      # no en tfstate (tipico tras nuke parcial o re-bootstrap), `apply
-      # module.storage` falla con BucketAlreadyExists. Fail-fast con instrucciones.
-      #
-      # LIMITACION CONOCIDA: `ops:state-drift` solo cubre buckets S3. Un nuke que
-      # falla a la mitad puede dejar OTROS recursos con nombre fijo huerfanos
-      # -verificado el 2026-07-20 con `ml-training-tg-api`, `ml-training-tg-mlflow`
-      # y el DB subnet group `ml-training-rds-subnets`-, y el apply falla con
-      # "already exists". Si pasa: comprobar que esten desligados (target groups
-      # con 0 LoadBalancerArns; subnet group apuntando a una VPC inexistente) y
-      # borrarlos a mano con `aws elbv2 delete-target-group` /
-      # `aws rds delete-db-subnet-group` antes de reintentar.
       - task: ops:state-drift
       - 'echo ">>> Oleada A: apply module.storage (S3 + ECR)..."'
       - task: infra:apply
@@ -7126,8 +6830,6 @@ tasks:
       - |
         set -e
         source tasks/lib/nuke.sh
-        # use_lockfile guarda el lock como objeto en el mismo bucket -> se va
-        # con `empty_bucket` (no hay tabla DynamoDB que limpiar).
         empty_bucket "{{.PROJECT}}-tfstate-{{.SUFFIX}}" true
         delete_oidc
       - 'echo ""'
@@ -7221,14 +6923,10 @@ El `default` de Tramo I sección 4.6 lista solo el pipeline local. En Tramo II s
 #### 4.1.9 Verificacion
 
 ```bash
-# El default imprime el menu curado (local + AWS). Si los `includes:` cargan
-# bien, no hay error; los namespaces (`infra:`, `ecr:`, `batch:`, `ops:`,
-# `local:`) quedan disponibles para `task <ns>:<task>`.
 task
 
-# Validar sintaxis sin ejecutar nada (substitucion de vars + estructura)
-task --dry deploy | head -5    # ver que el comando se renderiza con SUFFIX resuelto
-task --dry nuke   | head -10   # ver que empty_bucket recibe el nombre completo
+task --dry deploy | head -5
+task --dry nuke   | head -10
 ```
 
 > **Gotcha #4.1.9**: si `task` falla con `open ./tasks/X.yml: no such file`, falta crear el archivo del `includes:` correspondiente — comentar el include hasta crear el yml. Commit: `feat(tasks): refactor AWS namespacing — 4 archivos + lib/`.
@@ -7291,9 +6989,7 @@ flowchart TD
 Antes del primer `task infra:apply` (Ola A), una sola verificación: que el HCL parsea y formatea. Esto cuesta ~10 s y atrapa typos antes de un apply de varios minutos. La validación se hace **acá, no en Parte 3**, porque entre que terminás de pegar los módulos y arrancás el deploy pueden pasar días — re-validar justo antes del apply es lo único que importa.
 
 ```bash
-# Prereq: `source scripts/prod.env` en esta terminal (sección 3.5).
 task infra:validate
-# Esperado: "Success! The configuration is valid."
 ```
 
 > **Qué hace la task**: `_init` (descarga providers + backend S3) → `terraform fmt -check -recursive` → `terraform validate`. Si falla `fmt -check`, correr `terraform fmt -recursive infra/` para auto-arreglar. Si falla `validate`, el error indica archivo y línea — fijar y re-correr. **No avanzar a 4.3 hasta que diga "Success"**.
@@ -7307,12 +7003,6 @@ task infra:validate
 Crea los 2 buckets S3 (con versioning + AES256 + public-access-block) + 5 repos ECR (trainer, mlflow, reports, api, ui). Tiempo: ~1 min.
 
 ```bash
-# Prereq: una vez por terminal nueva, `source scripts/prod.env` (sección 3.5).
-# La task `infra:apply` no lee vars del shell (PROJECT/REGION tienen default
-# en Taskfile.yml; SUFFIX lo computa scripts/aws-suffix.sh lazy), pero las
-# verificaciones `aws s3api ...` de mas abajo si necesitan $PROJECT y
-# $ACCOUNT_SUFFIX en el shell.
-
 task infra:apply TARGET=module.storage
 ```
 
@@ -7321,17 +7011,12 @@ task infra:apply TARGET=module.storage
 #### Verificacion Ola A
 
 ```bash
-# Fuente de verdad post-apply: los outputs Terraform.
-# El propio apply los imprime al terminar; volver a verlos con:
 terraform -chdir=infra/envs/prod output
-# Esperado: ecr_trainer_url / ecr_mlflow_url / ecr_reports_url / data_bucket /
-# artifacts_bucket con valores no vacios.
 
-# Unica invariante NO incluida en outputs (hardening): versioning ON.
 source scripts/ensure-env.sh
 for kind in data artifacts; do
   aws s3api get-bucket-versioning --bucket "${PROJECT}-${kind}-${ACCOUNT_SUFFIX}" \
-      --query Status --output text   # Esperado: Enabled
+      --query Status --output text
 done
 ```
 
@@ -7340,16 +7025,11 @@ done
 Antes del primer training real, el bucket `data` necesita el Excel:
 
 ```bash
-# Prereq: `source scripts/prod.env` (sección 3.5) ya exporta DATA_BUCKET
-# (= ${PROJECT}-data-${ACCOUNT_SUFFIX}). Si abriste terminal nueva y solo
-# tenés PROJECT/ACCOUNT_SUFFIX, `source scripts/ensure-env.sh` lo deriva.
 source scripts/ensure-env.sh
 
-# Asume que tenes data/BD_HISTORICO_ACUMULADO.xlsx en local (workflow normal)
 aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx \
     "s3://${DATA_BUCKET}/BD_HISTORICO_ACUMULADO.xlsx"
 
-# Verificar
 aws s3 ls "s3://${DATA_BUCKET}/" --human-readable
 ```
 
@@ -7388,32 +7068,25 @@ resuelve la task: `api` usa la raiz (para incluir `src/`), `ui` usa `ui/`.
 #### 4.4.2 Overrides via variables CLI
 
 ```bash
-# Override del tag (e.g. bump version de MLflow)
 task ecr:build IMG=mlflow TAG=v3.13.0
 
-# Solo trainer (re-build despues de cambio de codigo)
 task ecr:build IMG=trainer
 ```
 
 #### 4.4.3 Ejecutar
 
 ```bash
-# Prereq: `source scripts/prod.env` (sección 3.5). La task `ecr:build-all` computa
-# ACCOUNT_ID y la URI de ECR internamente, no las lee del shell.
 task ecr:build-all
 ```
 
 #### Verificacion Ola B
 
 ```bash
-# Push de imagenes NO esta en terraform outputs (Terraform no trackea estado ECR).
-# Check directo de las 5 tags moviles esperadas:
 for pair in "ml-training:latest" "ml-training-mlflow:v3.12.0" "ml-training-reports:stable" "ml-training-api:latest" "ml-training-ui:latest"; do
   repo="${pair%:*}"; tag="${pair#*:}"
   aws ecr list-images --repository-name "$repo" \
       --query "imageIds[?imageTag=='${tag}']" --output text
 done
-# Esperado: cada linea no vacia (imageDigest + tag).
 ```
 
 > **En consola AWS veras** despues de Ola B:
@@ -7457,16 +7130,13 @@ task infra:apply TARGET=module.network
 
 ```bash
 task infra:plan TARGET=module.mlflow
-task infra:apply TARGET=module.mlflow      # ~8 min (RDS create domina)
+task infra:apply TARGET=module.mlflow
 
 task infra:plan TARGET=module.reports
-task infra:apply TARGET=module.reports     # ~2 min
+task infra:apply TARGET=module.reports
 
-# App stack (Capa 4.5). api primero (la ui depende de api.internal_url).
-task infra:apply TARGET=module.api         # ~2 min
-task infra:apply TARGET=module.ui          # ~2 min
-
-# Checkpoint: ALB responde + RDS available + app stack ruteado
+task infra:apply TARGET=module.api
+task infra:apply TARGET=module.ui
 export ALB="$(terraform -chdir=infra/envs/prod output -raw alb_dns)"
 curl -sI "http://${ALB}/" | head -1          # MLflow   -> HTTP/1.1 200 OK
 curl -sI "http://${ALB}/reports/" | head -1  # Reports  -> HTTP/1.1 200 OK
@@ -7544,10 +7214,8 @@ task infra:apply
 #### Verificacion Ola C
 
 ```bash
-# Outputs cubren ALB DNS, ECR URLs, bucket names, queues.
 terraform -chdir=infra/envs/prod output
 
-# Smoke unico que outputs NO cubre: ALB sirve trafico Y RDS quedo available.
 export ALB="$(terraform -chdir=infra/envs/prod output -raw alb_dns)"
 curl -sf "http://${ALB}/" > /dev/null         && echo "MLflow OK"
 curl -sf "http://${ALB}/reports/" > /dev/null && echo "reports OK"
@@ -7615,31 +7283,20 @@ Breakdown:
 #### 4.6.3 Verificacion post-smoke
 
 ```bash
-source scripts/ensure-env.sh   # aborta si $PROJECT o $ACCOUNT_SUFFIX vacias
+source scripts/ensure-env.sh
 
 export ALB="$(terraform -chdir=infra/envs/prod output -raw alb_dns)"
 export ARTIFACTS_BUCKET="${PROJECT}-artifacts-${ACCOUNT_SUFFIX}"
 
-# 1) MLflow tiene el run
 curl "http://${ALB}/api/2.0/mlflow/experiments/search" \
     -X POST -H "Content-Type: application/json" \
     -d '{}'
-# Esperado: al menos un experimento llamado "POP" con runs.id
 
-# 2) S3 tiene los artifacts
 aws s3 ls "s3://${ARTIFACTS_BUCKET}/artifacts/" --recursive --human-readable | grep POP
-# Esperado: final_pipeline_POP_*.joblib + run_summary_POP*.json
 
-# 3) S3 tiene los reports
 aws s3 ls "s3://${ARTIFACTS_BUCKET}/reports/" --recursive | grep POP
-# Esperado: dashboard_POP.html
 
-# 4) /reports/POP/ accesible via ALB
 curl "http://${ALB}/reports/POP/"   # esperado: HTML del dashboard
-
-# 5) Custom metric MAPE publicada (despues de Parte 5, no ahora)
-# Para esta primera vuelta sin patch del trainer, NO esperar metricas
-# en namespace "ml-training/Training" todavia.
 ```
 
 Si (1) y (2) salen OK, **el smoke pasa**. (3) y (4) tambien deberian
@@ -7658,7 +7315,6 @@ SNS manda un email de confirmacion cuando creas la suscripcion (Parte
 ```bash
 export TOPIC_ARN="$(terraform -chdir=infra/envs/prod output -raw sns_topic_arn)"
 
-# Estado de la suscripcion
 aws sns list-subscriptions-by-topic \
     --topic-arn "${TOPIC_ARN}" \
     --query 'Subscriptions[].[Endpoint,SubscriptionArn]' --output table
@@ -7687,20 +7343,20 @@ Las implementaciones viven en `tasks/*.yml` (definidas en sección 4.1.3-4.1.8).
 Submit via Lambda dispatcher (valida variety + S3 key) y **fire-and-forget por defecto**: el job corre en AWS Batch, así que cerrar la terminal o apagar la máquina no lo detiene. Las varias variedades van en **un solo job** (el dispatcher las une en un `--varieties POP,JUPITER`). El hydrate de S3 corre dentro del trainer (`main.py::_hydrate_data_from_s3`), no en el dispatcher.
 
 ```bash
-task batch:train VARIETIES=POP                # background; vuelve al prompt al instante
-task batch:train VARIETIES=POP,JUPITER        # varias variedades en un job
-task batch:train VARIETIES=all                # todas las permitidas
-task batch:train VARIETIES=POP TUNING=prod_xl # ~5-6h en On-Demand (evita kills Spot)
-task batch:train VARIETIES=POP WAIT=true      # bloquea + hace polling hasta SUCCEEDED/FAILED
+task batch:train VARIETIES=POP
+task batch:train VARIETIES=POP,JUPITER
+task batch:train VARIETIES=all
+task batch:train VARIETIES=POP TUNING=prod_xl
+task batch:train VARIETIES=POP WAIT=true
 ```
 
 Ver el estado de un entrenamiento (watch/logs/cancel se defaultean al último job submiteado, persistido en `.batch-last-job`):
 
 ```bash
-task batch:watch                 # sigue el último job hasta SUCCEEDED/FAILED (nunca rompe la terminal)
-task batch:logs                  # tail de los logs en CloudWatch (FOLLOW=true para seguirlos en vivo)
-task batch:status                # todos los jobs activos en ambas queues
-task batch:cancel                # termina el último job (o JOB_ID=<id>)
+task batch:watch
+task batch:logs
+task batch:status
+task batch:cancel
 ```
 
 #### 4.8.1.1 EDA exploratorio on-demand (`task batch:eda`)
@@ -7710,9 +7366,9 @@ El EDA es una necesidad **aparte y opcional** del entrenamiento: lo corres cuand
 Mismo camino que `batch:train` (dispatcher → Batch → hydrate de S3), pero el dispatcher recibe `mode=eda` y arma `command=["--eda", "--varieties", ...]`. El trainer, con `--eda`, corre `src.diagnostics.eda.run_eda` por variedad en vez de entrenar y sincroniza los HTML a S3 — quedan visibles en `http://$ALB/reports/EDA_<variety>_<ts>.html`.
 
 ```bash
-task batch:eda VARIETIES=POP              # EDA de una variedad (background)
-task batch:eda VARIETIES=POP,JUPITER      # varias en un solo job
-task batch:eda VARIETIES=POP WAIT=true    # bloquea hasta que termina
+task batch:eda VARIETIES=POP
+task batch:eda VARIETIES=POP,JUPITER
+task batch:eda VARIETIES=POP WAIT=true
 ```
 
 > **Equivalente local**: `task eda VARIETIES=POP` (corre el mismo `run_eda` en docker compose contra la data local). El de Batch es para correrlo contra la data ya hidratada en S3, sin levantar el stack local.
@@ -7722,18 +7378,14 @@ task batch:eda VARIETIES=POP WAIT=true    # bloquea hasta que termina
 #### 4.8.2 Lifecycle del cluster
 
 ```bash
-# Encender / apagar (atajos high-level → ops:up / ops:down)
-task wake                          # idempotente: skip si ya UP, espera RDS+ALB healthy
-task sleep                         # aborta si hay Batch RUNNING
-task ops:down COOLDOWN=600         # apaga tras 10 min (para CI post-train)
+task wake
+task sleep
+task ops:down COOLDOWN=600
 
-# Estado
-task status                        # outputs Terraform + RDS + ECS + Batch
-task ops:status                    # solo cluster (sin outputs Terraform)
-
-# Teardown / rebuild (preserva storage + network)
-task teardown                      # ops:down + destroy de modulos volatiles
-task rebuild                       # re-apply (idempotente) + ops:up
+task status
+task ops:status
+task teardown
+task rebuild
 ```
 
 `ops:up` es la misma task que usan los workflows CI auto-train. Hace pre-check `/health`, invoca `scheduler.start` si MLflow esta DOWN, y espera RDS available (12 min max) + ALB 200 (5 min max). El estado previo queda en `/tmp/wake-status` (`true|false`) para que el workflow decida si tiene que apagar al final.
@@ -7741,8 +7393,8 @@ task rebuild                       # re-apply (idempotente) + ops:up
 #### 4.8.3 Destroy total
 
 ```bash
-task destroy   # vacia buckets + purga ECR + terraform destroy (backend tfstate queda)
-task nuke      # ↑ + borra tfstate + OIDC  (IRREVERSIBLE: requiere re-bootstrap)
+task destroy
+task nuke
 ```
 
 #### 4.8.4 Resumen
@@ -7844,15 +7496,12 @@ log = logging.getLogger(__name__)
 
 NAMESPACE: Final[str] = "ml-training/Training"
 
-
 def emit_mape_metric(variety: str, mape_value: float) -> None:
     """Publica MAPE a CloudWatch con dimension `variety`.
 
     No falla el training si la publicacion falla (best-effort).
     """
     if not os.environ.get("AWS_BATCH_JOB_ID"):
-        # Local (docker compose): skip silencioso.
-        # AWS_BATCH_JOB_ID lo inyecta el servicio Batch automaticamente.
         return
 
     try:
@@ -7886,11 +7535,8 @@ Verificar: `python3 -m py_compile src/utils/cloudwatch_metrics.py` no debe impri
 En `src/orchestration/variety_runner.py`:
 
 ```python
-# 1) Import al inicio del modulo
 from src.utils.cloudwatch_metrics import emit_mape_metric
 
-# 2) Dentro de train_variety, despues del bloque `if not mape_ok / elif not gap_ok / else`
-#    (linea ~104), antes de `losers = [...]`:
 emit_mape_metric(variety=variety, mape_value=champion.oof_mape)
 ```
 
@@ -7899,10 +7545,6 @@ emit_mape_metric(variety=variety, mape_value=champion.oof_mape)
 ### 5.4 Verificar local que no rompe
 
 ```bash
-# AWS_BATCH_JOB_ID solo existe en Batch -> en docker compose local, emit hace skip silencioso
-# --user/MPLCONFIGDIR: evitan el PermissionError en los bind-mounts (logs/reports) al
-# correr como mluser; en Batch no se usan (no hay bind-mount). En local podes correr
-# `task train VARIETIES=POP TUNING=smoke`, que ya los aplica.
 docker compose run --rm --user "$(id -u):$(id -g)" -e MPLCONFIGDIR=/tmp trainer --varieties POP --tuning smoke
 ```
 
@@ -7914,24 +7556,18 @@ El log NO debe tener "CloudWatch MAPE=..." (es Batch-only). El training termina 
 git add src/utils/cloudwatch_metrics.py src/orchestration/variety_runner.py
 git commit -m "feat(monitoring): emit MAPE custom metric a CloudWatch con dim=variety"
 
-# Bump version para que ECR retenga la anterior
 task ecr:build IMG=trainer TAG=v0.2.0
 
-# Propagar la tag a Batch
-# Editar terraform.tfvars: trainer_image_tag = "v0.2.0"
 task infra:apply TARGET=module.batch
 
-# Re-correr smoke con el trainer parchado
 task batch:smoke
 
-# Confirmar metric publicada
 aws cloudwatch list-metrics \
     --namespace "ml-training/Training" \
     --metric-name MAPE \
     --dimensions Name=variety,Value=POP \
     --query 'Metrics[]' --output table
 
-# Y el ultimo datapoint
 aws cloudwatch get-metric-statistics \
     --namespace "ml-training/Training" \
     --metric-name MAPE \
@@ -8064,8 +7700,6 @@ Settings → Secrets and variables → Actions. **Variables** (no secret):
 **Secrets**: ninguno (OIDC remplaza access keys).
 
 ```bash
-# Prereqs: `source scripts/prod.env` (sección 3.5) para $ACCOUNT_ID y terraform state
-# inicializado en infra/envs/prod (para los `terraform output -raw`).
 gh variable set AWS_REGION              -b "us-east-1"
 gh variable set AWS_GHA_DEPLOY_ROLE_ARN -b "$(terraform -chdir=infra/envs/prod output -raw gha_deploy_role_arn)"
 gh variable set AWS_GHA_TRAIN_ROLE_ARN  -b "$(terraform -chdir=infra/envs/prod output -raw gha_train_role_arn)"
@@ -8100,13 +7734,6 @@ Trigger: push a `main`, PR a `main`, `workflow_dispatch`. Cinco jobs:
 
 ```yaml
 name: Deploy
-
-# Estrategia thin: cada job autentica via OIDC y delega en `task X`.
-# Jobs y disparos:
-#   lint + test     -> SIEMPRE (push, PR, manual).
-#   build-and-push  -> solo push a main (publica trainer en ECR con sha + latest)
-#   terraform-plan  -> solo PR a main con cambios en infra/** (comenta plan en PR)
-#   infra-apply     -> solo push a main (orquesta task deploy con approval)
 
 on:
   push:
@@ -8174,7 +7801,6 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-      # Single source of truth: las mismas tasks que un dev corre local.
       - run: task lint
       - run: task infra:validate
 
@@ -8347,12 +7973,6 @@ Trigger: `workflow_dispatch` (UI manual) **o** `workflow_run` cuando `Deploy` co
 ```yaml
 name: Training
 
-# Workflow consolidado. Tres modos via input `action`:
-#   action=train    -> entrena variedades elegidas (con wake/cool-down si MLflow esta apagado)
-#   action=promote  -> valida y reasigna @champion después del approval
-# Tambien auto-trigger:
-#   - workflow_run "Deploy" success -> auto-train si push toco trainer
-
 on:
   workflow_dispatch:
     inputs:
@@ -8371,7 +7991,7 @@ on:
 permissions:
   id-token: write
   contents: read
-  actions:  read  # gh run list (detect.BASE_SHA en auto-train)
+  actions:  read
 
 concurrency:
   group: training-${{ github.event.inputs.action || 'auto' }}
@@ -8401,8 +8021,6 @@ jobs:
             exit 0
           fi
 
-          # workflow_run: BASE_SHA = ultimo Deploy success anterior
-          # (cubre push multi-commit y squash merges)
           HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
           PREV_SHA=$(gh run list --workflow Deploy --branch main --status success --limit 20 --json headSha \
             --jq "[.[] | select(.headSha != \"$HEAD_SHA\")] | .[0].headSha" 2>/dev/null || echo "")
@@ -8437,7 +8055,6 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_GHA_TRAIN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      # Same logica que `task ops:up` local. STATUS_FILE comunica was_up al cool-down.
       - id: wake
         env:
           MLFLOW_ALB_DNS: ${{ vars.MLFLOW_ALB_DNS }}
@@ -8569,17 +8186,6 @@ Trigger: **solo `workflow_dispatch`**.
 ```yaml
 name: Destroy
 
-# Tres modos via input `modo`:
-#   TEAR-DOWN -> destroy volatiles + libera NAT (enable_nat=false). Preserva
-#                S3 + ECR + network (sin NAT) + tfstate + OIDC.
-#                Reversible con `task rebuild` (restaura el RDS del backup).
-#                Costo restante: ~$1/mes (S3 + backups).
-#   DESTROY   -> terraform destroy de TODOS los modulos (incluye storage). Vacia
-#                buckets versionados + purga ECR antes. Preserva tfstate + OIDC.
-#   NUKE      -> DESTROY + borra tfstate bucket + OIDC. Cuenta limpia.
-#
-# Doble salvaguarda: input textual exacto + environment approval.
-
 on:
   workflow_dispatch:
     inputs:
@@ -8618,7 +8224,6 @@ jobs:
       - uses: arduino/setup-task@v2
         with: { version: 3.x, repo-token: "${{ secrets.GITHUB_TOKEN }}" }
 
-      # Capturar Lambdas ANTES del destroy (log groups los crea AWS, no TF, asi que sobreviven)
       - id: lambdas
         run: |
           FNS=$(aws lambda list-functions \
@@ -8885,7 +8490,6 @@ import mlflow
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
 
-
 def tracking_uri(tf_dir: str) -> str:
     explicit = os.getenv("MLFLOW_TRACKING_URI")
     if explicit:
@@ -8898,7 +8502,6 @@ def tracking_uri(tf_dir: str) -> str:
     )
     return result.stdout.strip().rstrip("/")
 
-
 def metric(run, name: str) -> float:
     value = run.data.metrics.get(name)
     if value is None:
@@ -8908,13 +8511,11 @@ def metric(run, name: str) -> float:
         raise SystemExit(f"FAIL métrica no finita: {name}={result}")
     return result
 
-
 def required_tag(tags: dict[str, str], name: str) -> str:
     value = tags.get(name)
     if value in (None, "", "unknown", "missing"):
         raise SystemExit(f"FAIL falta tag válido: {name}")
     return value
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -8989,7 +8590,6 @@ def main() -> None:
         args.model_name, args.version, "deployment_status", "champion"
     )
     print(f"OK {args.model_name}@champion -> v{args.version}")
-
 
 if __name__ == "__main__":
     main()
@@ -9090,13 +8690,8 @@ flowchart TD
 acumulado), o pediste un re-train porque cambiaste hiperparametros.
 
 ```bash
-# Opcion A — via Task (preferido para humanos, polling + exit-code visible)
 task batch:train VARIETIES=POP TUNING=prod WAIT=true
 
-# Opcion B — via GitHub Actions UI (preferido si lo dispara alguien sin AWS CLI)
-# Actions -> Train -> Run workflow -> POP / prod / wait=true
-
-# Opcion C — via AWS CLI directo (preferido en scripts ad-hoc)
 aws lambda invoke 
     --function-name ml-training-dispatcher 
     --cli-binary-format raw-in-base64-out 
@@ -9117,7 +8712,6 @@ hizo que los runs del ultimo mes no se loggearan, o necesitas refresh
 total.
 
 ```bash
-# Loop: una variedad a la vez, espera completion antes de la siguiente
 varieties=(POP JUPITER VENTURA SEKOYA ALLISON STELLA)
 for v in "${varieties[@]}"; do
     echo "==> Retrain $v"
@@ -9155,17 +8749,14 @@ queue = JOB_QUEUE_ONDEMAND if tuning == "prod_xl" else JOB_QUEUE_SPOT
 volver a la anterior sin re-build.
 
 ```bash
-# Listar tags del trainer en ECR
 aws ecr list-images --repository-name ml-training \
     --query 'imageIds[?imageTag != null].[imageTag]' --output table
 
-# Re-tag la version anterior como :latest
 export PREV_SHA="sha-abcdef123456"   # buscar la version anterior buena
 export REGION="$AWS_DEFAULT_REGION"
 export ACCOUNT="$ACCOUNT_ID"
 REG="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
 
-# Pull la imagen vieja
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REG"
 docker pull "${REG}/ml-training:${PREV_SHA}"
 docker tag  "${REG}/ml-training:${PREV_SHA}" \
@@ -9181,7 +8772,6 @@ preferible para rollbacks de produccion (en ese caso usar la Opcion
 Terraform de abajo).
 
 ```bash
-# Opcion Terraform (mas auditable)
 terraform -chdir=infra/envs/prod apply -target=module.batch -var=trainer_image_tag=sha-abcdef123456 -auto-approve
 ```
 
@@ -9194,17 +8784,12 @@ No hay nada que recordar de un ciclo al otro — el estado viaja solo, vía el
 backup del RDS (metadata) y S3 (artifacts). Ver #8.5 para el mecanismo.
 
 ```bash
-# ── DÍA DE TRABAJO ──────────────────────────────────────────────────────────
-task deploy                  # levanta todo y RESTAURA el último backup si existe
-                             #   (cuenta virgen o SNAPSHOT=none -> RDS vacío)
-task status                  # confirma RDS available + servicios healthy + URLs
+task deploy
+task status
 
-task batch:train VARIETIES=A,B,C,D PARALLEL=4     # entrenar en grupos de 4
-task batch:watch                                   # bloquea hasta SUCCEEDED/FAILED
-# ... UI :8501 para pronósticos, reports para los HTML del campeón ...
-
-# ── AL TERMINAR ─────────────────────────────────────────────────────────────
-task teardown                # backup verificado -> destroy -> poda. ~$1/mes
+task batch:train VARIETIES=A,B,C,D PARALLEL=4
+task batch:watch
+task teardown
 ```
 
 **Qué garantiza el ciclo**, y qué no:
@@ -9246,7 +8831,6 @@ Conocido como "scale to near-zero".
 
 ```bash
 task teardown
-# Confirmar con "y" al prompt de Task
 ```
 
 Antes de destruir nada toma un **backup del RDS y espera a que quede
@@ -9285,15 +8869,11 @@ nuevo con los datos acumulados.
 ```bash
 export BUCKET="${PROJECT}-data-${ACCOUNT_SUFFIX}"
 
-# Subir nuevo Excel (versiones se guardan automaticamente por
-# `aws_s3_bucket_versioning` Enabled en modulo storage)
 aws s3 cp data/BD_HISTORICO_ACUMULADO.xlsx "s3://${BUCKET}/BD_HISTORICO_ACUMULADO.xlsx"
 
-# Verificar version mas reciente
 aws s3api list-object-versions --bucket "$BUCKET" --prefix BD_HISTORICO_ACUMULADO.xlsx \
     --query 'Versions[0].[VersionId,LastModified,Size]' --output table
 
-# Lanzar re-train de todas las variedades con la data nueva
 for v in POP JUPITER VENTURA SEKOYA ALLISON STELLA; do
     task batch:train VARIETIES=$v TUNING=prod WAIT=false
 done
@@ -9317,19 +8897,15 @@ RUNNABLE` por mas de 10 min sin pasar a `STARTING`.
 **Que mirar**:
 
 ```bash
-# 1) Estado del CE
 aws batch describe-compute-environments 
     --compute-environments ml-training-ce-spot 
     --query 'computeEnvironments[0].status' --output text
-# Esperado: VALID. Si dice INVALID, ver statusReason.
 
-# 2) Quota EC2
 aws service-quotas get-service-quota 
     --service-code ec2 
     --quota-code L-1216C47A 
     --query 'Quota.Value'
 
-# 3) Estado del Spot fleet implicito (via instancias)
 aws ec2 describe-spot-instance-requests 
     --filters Name=state,Values=open,active 
     --query 'SpotInstanceRequests[].[InstanceType,State,Status.Code]' --output table
@@ -9387,14 +8963,10 @@ es un objeto `envs/prod/terraform.tfstate.tflock` en el bucket de tfstate.
 **Fix**:
 
 ```bash
-# Ver el lock huerfano en S3 (deberia haber UN objeto .tflock si hay lock)
 aws s3 ls "s3://${PROJECT}-tfstate-${ACCOUNT_SUFFIX}/envs/prod/" | grep tflock
 
-# Opcional: descargar el objeto y leer su JSON (contiene LockID, Who, Operation)
 aws s3 cp "s3://${PROJECT}-tfstate-${ACCOUNT_SUFFIX}/envs/prod/terraform.tfstate.tflock" -
 
-# Si el ID corresponde a un proceso que ya murio (laptop crasheada),
-# forzar unlock:
 LOCK_ID="reemplazar-con-el-id-real"
 task infra:force-unlock LOCK_ID="$LOCK_ID"
 ```
@@ -9407,7 +8979,6 @@ task infra:force-unlock LOCK_ID="$LOCK_ID"
 **Que mirar**:
 
 ```bash
-# Inline policy del job role
 aws iam list-role-policies --role-name ml-training-job-role
 POLICY_NAME="reemplazar-con-el-nombre-real"
 aws iam get-role-policy --role-name ml-training-job-role --policy-name "$POLICY_NAME"
@@ -9432,7 +9003,6 @@ conectar a `tracking_uri` y obtiene timeout.
 
 ```bash
 task wake
-# Esperar 5-8 min hasta que ALB responde 200
 task batch:train VARIETIES=POP
 ```
 
@@ -9467,7 +9037,6 @@ El Dockerfile ya tiene `tini` y `STOPSIGNAL SIGTERM` (3.0.5 contracts).
 opcional:
 
 ```python
-# main.py — al inicio de main()
 import signal
 
 def _graceful_exit(signum, _frame):
@@ -9481,7 +9050,7 @@ def _graceful_exit(signum, _frame):
     except Exception:
         pass
     import sys
-    sys.exit(143)   # 128 + 15 (SIGTERM)
+    sys.exit(143)
 
 signal.signal(signal.SIGTERM, _graceful_exit)
 ```
@@ -9532,22 +9101,6 @@ gasto, evento de costo inesperado, pausar el proyecto.
 
 ```bash
 task teardown
-# Pide confirmacion: Task pide "y" para proceder.
-# Pasos internos (tasks/ops.yml :: teardown):
-#  0. ops:down -> aborta si hay Batch jobs RUNNING; invoca la Lambda
-#     ml-training-scheduler (action=stop) para apagar RDS + Fargate.
-#  1. [1/4] ensure_backup: BACKUP ANTES DE TOCAR NADA, y se espera a que quede
-#     `available`. Incluye ensure_rds_available, porque el paso 0 PARO el RDS y
-#     AWS rechaza snapshotear una instancia detenida. Si esto falla, el teardown
-#     ABORTA con la infra intacta: mejor no apagar que perder datos.
-#  2. [2/4] lift_rds_protection + loop `terraform destroy -target=$mod` sobre los
-#     modulos VOLATILES, en orden reverso de apply:
-#     scheduler -> lambdas -> monitoring -> batch -> reports -> api -> ui -> mlflow -> cicd -> consumer_iam
-#     Pasa rds_skip_final_snapshot=true: el backup del paso 1 ya esta verificado.
-#  3. [3/4] `terraform apply -target=module.network -var enable_nat=false` -> LIBERA el NAT (~$33/mes).
-#  4. [4/4] assert_backup_exists (falla ruidosamente si no quedo backup) +
-#     prune_snapshots: conserva los SNAPSHOT_KEEP ultimos (default 6).
-#  storage es PERMANENTE: NO se destruye. network se preserva pero con el NAT liberado.
 ```
 
 #### Ciclo backup → restauración
@@ -9679,9 +9232,9 @@ master, pero ya no es un rebuild automático (ver #8.7).
 ##### Tareas de apoyo
 
 ```bash
-task backups              # listar los backups restaurables (alias: task snapshots)
-task ops:backup-now       # backup manual sin destruir nada (RDS debe estar available)
-task ops:verify-backup    # ¿hay al menos un backup restaurable? exit 1 si no
+task backups
+task ops:backup-now
+task ops:verify-backup
 ```
 
 ##### Implementación
@@ -9697,44 +9250,7 @@ a las tres funciones que ya existían:
 
 ```bash
 #!/usr/bin/env bash
-# =============================================================================
-# tasks/lib/snapshot.sh  -  Backups del RDS: crear, verificar, restaurar, podar
-# =============================================================================
-# Sourceado (no ejecutado) desde tasks/ops.yml, tasks/infra.yml y Taskfile.yml.
-# Asume el CWD en la raiz del repo (Task siempre corre desde ahi).
-#
-# VOCABULARIO UNICO (mismas palabras en tasks, docs y mensajes en pantalla):
-#   backup    = un snapshot MANUAL del RDS. Unica copia de MLflow tracking +
-#               Model Registry + la tabla `forecasts`.
-#   restaurar = crear el RDS a partir de un backup (rds_snapshot_identifier).
-#   artifacts = modelos .joblib + reports HTML. Viven en S3, NO en el RDS, y no
-#               participan de este ciclo: sobreviven al teardown solos.
-#
-# CICLO — ver docs/02-produccion-aws.md #8.5 "Ciclo backup -> restauracion".
-#   apagar:   ensure_backup -> destroy (skip_final_snapshot=true)
-#             -> assert_backup_exists -> prune_snapshots
-#   levantar: resolve_restore_snapshot -> apply [-var rds_snapshot_identifier]
-#
-# POR QUE EL BACKUP VA ANTES DEL DESTROY (y no como final_snapshot de Terraform):
-#   El `final_snapshot` de aws_db_instance se toma DURANTE el destroy. Si algo
-#   falla ahi —el caso real es el RDS en `stopped` -> InvalidDBInstanceState— el
-#   destroy aborta a la mitad y quedas con la infra rota Y sin backup. Tomandolo
-#   antes, verificado y `available`, el destroy ya no puede perder datos.
-#
-# Solo se miran snapshots `manual`: los `automated` (backup_retention_period = 7)
-# se borran junto con la instancia y no sirven como fuente de
-# `aws_db_instance.snapshot_identifier`.
-#
-# Uso:  source tasks/lib/snapshot.sh
-# =============================================================================
 
-# ─── Consulta ────────────────────────────────────────────────────────────────
-
-# latest_snapshot <db-instance-id>
-#   Imprime en stdout el identifier del backup mas reciente (por
-#   SnapshotCreateTime) que este `available`. Si no hay ninguno, imprime vacio
-#   y retorna 0 (NO es un error: es el caso de un stand-up desde cero).
-#   Todo el ruido va a stderr para no contaminar la sustitucion de comandos.
 latest_snapshot() {
   local db_id="$1"
   local snap
@@ -9743,7 +9259,6 @@ latest_snapshot() {
     --query "sort_by(DBSnapshots[?DBInstanceIdentifier=='${db_id}' && Status=='available'], &SnapshotCreateTime)[-1].DBSnapshotIdentifier" \
     --output text 2>/dev/null || echo "")
 
-  # La CLI devuelve el string "None" cuando el query no matchea nada.
   if [ -z "$snap" ] || [ "$snap" = "None" ]; then
     echo "  No hay backups de $db_id -> el RDS se creara VACIO." >&2
     echo ""
@@ -9753,8 +9268,6 @@ latest_snapshot() {
   echo "$snap"
 }
 
-# list_snapshots <db-instance-id>
-#   Tabla legible de los backups (mas nuevo primero).
 list_snapshots() {
   local db_id="$1"
   aws rds describe-db-snapshots \
@@ -9763,12 +9276,6 @@ list_snapshots() {
     --output table
 }
 
-# ─── Creacion ────────────────────────────────────────────────────────────────
-
-# backup_now <db-instance-id> [etiqueta]
-#   Crea un backup y ESPERA a que quede `available`. Imprime el identifier en
-#   stdout; todo lo demas va a stderr para poder capturarlo con $(...).
-#   Retorna 1 si el RDS no existe: quien llama decide si eso es fatal.
 backup_now() {
   local db_id="$1"
   local label="${2:-backup}"
@@ -9779,9 +9286,6 @@ backup_now() {
     return 1
   fi
 
-  # AWS rechaza snapshotear una instancia detenida (InvalidDBInstanceState) y
-  # `ops:down` la deja parada. ensure_rds_available vive en nuke.sh; se sourcea
-  # aca si el caller no lo hizo, para que backup_now sea autosuficiente.
   if ! command -v ensure_rds_available >/dev/null 2>&1; then
     # shellcheck source=tasks/lib/nuke.sh
     source tasks/lib/nuke.sh
@@ -9800,18 +9304,6 @@ backup_now() {
   echo "$snap"
 }
 
-# ensure_backup <db-instance-id> [etiqueta] [max-edad-minutos]
-#   "Si no hay backup, lo hace; si ya hay uno fresco, trabaja con ese."
-#   Garantiza que exista un backup `available` ANTES de una operacion
-#   destructiva. Imprime en stdout el identifier del backup vigente.
-#
-#   max-edad-minutos (default 0 = siempre crea uno nuevo). Con un valor > 0
-#   reutiliza el ultimo backup si es mas nuevo que esa edad: sirve para
-#   reintentar un teardown que fallo DESPUES de haber respaldado, sin volver a
-#   pagar los ~8 min de espera.
-#
-#   Retorna 1 si el RDS no existe (nada que respaldar): hacer teardown de una
-#   infra ya destruida es legitimo, y el caller lo trata como no-fatal.
 ensure_backup() {
   local db_id="$1"
   local label="${2:-backup}"
@@ -9842,13 +9334,6 @@ ensure_backup() {
   backup_now "$db_id" "$label"
 }
 
-# ─── Verificacion ────────────────────────────────────────────────────────────
-
-# assert_backup_exists <db-instance-id>
-#   Falla ruidosamente si NO quedo ningun backup restaurable. Se corre DESPUES
-#   del teardown/destroy: convierte una perdida silenciosa de datos (el bug
-#   historico de este repo) en un error visible mientras todavia se puede
-#   reaccionar.
 assert_backup_exists() {
   local db_id="$1"
   local snap
@@ -9867,24 +9352,6 @@ assert_backup_exists() {
   echo "  OK backup vigente: $snap (lo consumira el proximo deploy/rebuild)."
 }
 
-# ─── Restauracion ────────────────────────────────────────────────────────────
-
-# resolve_restore_snapshot <db-instance-id> [preferencia]
-#   Fuente UNICA de la decision "restaurar o arrancar limpio". La comparten
-#   `task deploy` y `task rebuild` para que el resultado sea identico por
-#   cualquiera de los dos caminos.
-#
-#   Imprime en stdout el identifier a restaurar, o vacio si corresponde crear un
-#   RDS nuevo. Los mensajes van a stderr.
-#
-#   preferencia:
-#     ""      (default) -> el backup mas reciente, si existe
-#     "none"            -> forzar RDS vacio (ignora los backups)
-#     "<id>"            -> ese backup exacto (se valida que exista y este available)
-#
-#   Precedencia deliberada: si el RDS YA existe, nunca se restaura. Restaurar es
-#   una operacion de CREACION (snapshot_identifier es ForceNew); pasarlo sobre
-#   una instancia viva la recrearia y destruiria los datos actuales.
 resolve_restore_snapshot() {
   local db_id="$1"
   local pref="${2:-}"
@@ -9918,11 +9385,6 @@ resolve_restore_snapshot() {
   latest_snapshot "$db_id"
 }
 
-# ─── Retencion ───────────────────────────────────────────────────────────────
-
-# prune_snapshots <db-instance-id> <keep-n>
-#   Borra los backups mas viejos, conservando los <keep-n> ultimos.
-#   Idempotente. Con menos de keep-n backups no hace nada.
 prune_snapshots() {
   local db_id="$1"
   local keep="${2:-6}"
@@ -9937,7 +9399,6 @@ prune_snapshots() {
     return 0
   fi
 
-  # `tr` porque --output text separa por tabs en una sola linea.
   count=$(echo "$all" | tr '\t' '\n' | grep -c . || true)
   if [ "$count" -le "$keep" ]; then
     echo "  $count backup(s) <= retencion ($keep) -> nada que podar."
@@ -9958,22 +9419,12 @@ después; `rebuild` delega la decisión al resolver compartido. Reemplazar el
 bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
 
 ```yaml
-  # ═══ Teardown / Rebuild ═════════════════════════════════════════════════════
-
   teardown:
     desc: "Backup + destroy de modulos volatiles. Preserva storage + network"
     prompt: "Se tomara un backup del RDS y se destruiran los modulos volatiles. Storage (S3+ECR) y network (VPC) quedan. Continuar?"
     cmds:
-      # RELEASE_NET=false: liberar ALB/NAT aqui seria redundante — el destroy
-      # de module.mlflow y el apply enable_nat=false de abajo hacen lo mismo.
       - task: down
         vars: { RELEASE_NET: "false" }
-      # PASO 1 — BACKUP ANTES DE TOCAR NADA. Si esto falla, se aborta con la
-      # infra intacta: preferimos un teardown que no ocurre a datos perdidos.
-      # `down` (arriba) paro el RDS; ensure_backup lo re-arranca (ensure_rds_
-      # available) porque AWS no snapshotea instancias detenidas.
-      # BACKUP_MAX_AGE_MIN>0 permite reintentar un teardown fallido reutilizando
-      # el backup recien tomado, sin pagar otros ~8 min de espera.
       - 'echo ">>> [1/4] Backup del RDS ANTES de destruir (obligatorio)..."'
       - |
         set -euo pipefail
@@ -9983,13 +9434,10 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
         else
           echo "AVISO el RDS no existe -> nada que respaldar; se sigue con el destroy."
         fi
-      # PASO 2 — destroy. rds_skip_final_snapshot=true: el backup del paso 1 ya
-      # esta tomado y VERIFICADO, un final_snapshot seria un duplicado de ~8 min.
       - 'echo ">>> [2/4] Destroy de modulos volatiles (orden reverso de apply)..."'
       - |
         set -euo pipefail
         source tasks/lib/nuke.sh
-        # El RDS tiene deletion_protection=true -> levantarla antes del destroy.
         lift_rds_protection "{{.RDS_ID}}"
         for mod in {{.VOLATILE_MODULES}}; do
           echo ">>> terraform destroy -target=$mod"
@@ -10000,11 +9448,8 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
             exit 1
           }
         done
-      # Libera el NAT gateway + EIP (~$33/mes idle) sin tocar VPC/subnets/SGs.
       - 'echo ">>> [3/4] Liberando NAT gateway (enable_nat=false)..."'
       - terraform -chdir={{.TF_DIR}} apply -target=module.network -var enable_nat=false -auto-approve
-      # PASO 4 — verificar + podar. assert_backup_exists convierte una perdida
-      # silenciosa en un error visible mientras todavia se puede reaccionar.
       - 'echo ">>> [4/4] Verificando el backup + poda (retencion {{.SNAPSHOT_KEEP}})..."'
       - |
         set -euo pipefail
@@ -10015,14 +9460,6 @@ bloque `teardown`/`rebuild` y agregar las dos tareas de apoyo:
       - 'echo "     MLflow Registry + forecasts viven en el backup; rebuild los restaura."'
       - 'echo "     Los artifacts (modelos, reports) siguen intactos en S3."'
 
-  # Apply completo que RESTAURA el RDS del backup cuando corresponde. Es el
-  # camino UNICO de "levantar": lo comparten `task deploy` (oleada C) y
-  # `ops:rebuild`, para que los dos den el mismo resultado y no exista una
-  # variante que pierda datos en silencio.
-  #
-  # Un apply a secas crearia una instancia VACIA y el backup quedaria huerfano:
-  # ese era el bug historico —teardown -> rebuild perdia registry + forecasts
-  # sin avisar—.
   apply-restore:
     desc: "terraform apply completo restaurando el RDS del ultimo backup si existe. Vars: SNAPSHOT=<id>|none"
     vars:
@@ -10083,12 +9520,7 @@ Y en el bloque `vars:` de `tasks/ops.yml`, junto a `SNAPSHOT_KEEP`:
 
 ```yaml
 vars:
-  # Cuantos backups del RDS conserva el teardown al podar. Con 1 ciclo por
-  # semana (deploy miercoles / teardown jueves), 6 = ~6 semanas de historia.
   SNAPSHOT_KEEP: '{{.SNAPSHOT_KEEP | default "6"}}'
-  # Reutilizar un backup mas nuevo que N minutos en vez de crear otro. 0 =
-  # siempre crear uno nuevo. >0 sirve para reintentar un teardown que fallo
-  # despues de respaldar, sin pagar otra vez los ~8 min de espera.
   BACKUP_MAX_AGE_MIN: '{{.BACKUP_MAX_AGE_MIN | default "0"}}'
 ```
 
@@ -10098,7 +9530,6 @@ Taskfile raíz no define `TF_DIR`, y duplicar el bloque reintroduciría justo la
 divergencia que este diseño elimina):
 
 ```yaml
-      # La implementacion vive en ops:apply-restore, compartida con `rebuild`.
       - 'echo ">>> Oleada C: apply resto (network, mlflow, batch, ...)..."'
       - task: ops:apply-restore
         vars: { SNAPSHOT: '{{.SNAPSHOT}}' }
@@ -10118,8 +9549,6 @@ Y en `destroy`, insertar el backup como **primer** paso, antes de vaciar nada:
     prompt: "Destruira envs/prod (S3 + ECR + RDS + ...). Los artifacts de S3 NO se recuperan. Continuar?"
     cmds:
       - task: ops:down
-      # El backup va primero: si el destroy falla a la mitad, los datos del RDS
-      # ya estan a salvo. OJO: esto NO respalda los artifacts de S3 — ver #8.7.
       - 'echo ">>> Backup del RDS antes de destruir..."'
       - |
         set -euo pipefail
@@ -10127,7 +9556,6 @@ Y en `destroy`, insertar el backup como **primer** paso, antes de vaciar nada:
         ensure_backup "{{.RDS_ID}}" "predestroy" "{{.BACKUP_MAX_AGE_MIN}}" >/dev/null \
           || echo "AVISO el RDS no existe -> nada que respaldar."
       - 'echo ">>> Vaciando buckets S3 versionados + purgando ECR..."'
-      # ... (resto del destroy sin cambios)
 ```
 
 En `tasks/infra.yml::destroy`, el `-var` del final snapshot ya no hace falta
@@ -10163,23 +9591,10 @@ de MLflow para mirar runs viejos.
 #### Comando `task rebuild`
 
 ```bash
-task rebuild                       # restaura desde el backup mas reciente (default)
+task rebuild
 SNAPSHOT_ID="reemplazar-con-el-id-real"
 task rebuild SNAPSHOT="$SNAPSHOT_ID" # restaura uno específico (ver `task backups`)
-task rebuild SNAPSHOT=none         # arranca con un RDS VACIO (descarta el historico)
-# Pasos internos (tasks/ops.yml :: rebuild):
-#  1. resolve_restore_snapshot() decide que restaurar (ver #8.5). Es la MISMA
-#     funcion que usa `task deploy`, no logica duplicada:
-#     - si el RDS YA existe -> no restaura nada (apply normal, idempotente).
-#     - SNAPSHOT=none -> instancia vacia.
-#     - SNAPSHOT=<id> -> ese (se valida que exista y este `available`).
-#     - por defecto -> el backup mas reciente `available`.
-#       Si no hay ninguno (stand-up desde cero) sigue con instancia vacia.
-#  2. terraform apply COMPLETO (sin -target) con -var rds_snapshot_identifier=<id>:
-#     los modulos volatiles se re-crean, el resto es no-op.
-#  3. ops:up -> invoca la Lambda scheduler (action=start): arranca RDS (~5 min
-#     cold start) + servicios Fargate de forma secuencial y espera ALB 200.
-#  El ALB DNS nuevo cambia respecto al stand-up original.
+task rebuild SNAPSHOT=none
 ```
 
 > [!IMPORTANT]
@@ -10268,8 +9683,6 @@ para empezar de cero.
 `task destroy` solo; lo demás no lo respalda nadie):
 
 ```bash
-# Pre-requisito: bucket de archivo FUERA del proyecto, idealmente en otra
-# cuenta. Este ejemplo aplica el mínimo: versioning, cifrado y bloqueo público.
 export ARCHIVE_BUCKET="${PROJECT}-archive-${ACCOUNT_SUFFIX}"
 if ! aws s3api head-bucket --bucket "${ARCHIVE_BUCKET}" 2>/dev/null; then
   aws s3api create-bucket --bucket "${ARCHIVE_BUCKET}" --region "${AWS_DEFAULT_REGION}"
@@ -10283,33 +9696,20 @@ if ! aws s3api head-bucket --bucket "${ARCHIVE_BUCKET}" 2>/dev/null; then
     'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true'
 fi
 
-# (1) Export del Model Registry a JSON (corre con MLflow encendido)
 export MLFLOW_TRACKING_URI="http://<ALB-DNS>/"
 mlflow models search > artifacts/model-registry-export.json
 aws s3 cp artifacts/model-registry-export.json \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/"
 
-# (2) Backup del RDS (queda independiente de la instancia)
-#     `task destroy` ya lo hace solo (paso 2 del comando, ver abajo); esto es
-#     el equivalente manual. Automatizado y con espera: `task ops:backup-now`.
 aws rds create-db-snapshot \
   --db-instance-identifier ml-training-mlflow \
   --db-snapshot-identifier "ml-training-mlflow-final-$(date +%Y-%m-%d)"
 
-# (2-bis) NO exportar la credencial. Si la restauración será posterior al nuke:
-#     a) conservar el secret en un stack externo de custodia; o
-#     b) restaurar el snapshot y rotar el master password con `modify-db-instance`.
-
-# (2-ter) Los ARTIFACTS. `task destroy` vacia los buckets del proyecto: si no
-#     los copias afuera, los modelos y reports no vuelven (el backup del RDS
-#     solo trae la metadata que los referencia).
 aws s3 sync "s3://ml-training-artifacts-${ACCOUNT_SUFFIX}/" \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/artifacts/"
 aws s3 sync "s3://ml-training-data-${ACCOUNT_SUFFIX}/" \
   "s3://${ARCHIVE_BUCKET}/ml-training-$(date +%Y-%m-%d)/data/"
 
-# (3) El state contiene secretos. Exportarlo solo si el bucket de archivo tiene
-#     acceso restringido y cifrado; nunca adjuntarlo a tickets ni commits.
 cd infra/envs/prod
 terraform state pull > /tmp/tfstate-final-backup.json
 aws s3 cp /tmp/tfstate-final-backup.json \
@@ -10328,20 +9728,6 @@ cd ../../..
 
 ```bash
 task destroy
-# Pide confirmacion: Task pide "y" en dos prompts.
-# Pasos internos (Taskfile :: destroy):
-#  1. ops:down (apaga scheduler/RDS/Fargate; aborta si hay jobs RUNNING).
-#  2. ensure_backup del RDS: backup verificado ANTES de tocar nada (#8.5).
-#     Cubre la metadata (Registry + forecasts), NO los artifacts de S3.
-#  3. Vaciar buckets versionados data + artifacts (incluye versions + delete markers).
-#     <- ACA se pierden los modelos y los reports. Es irreversible.
-#  4. purge_ecr de los 5 repos (ml-training, -mlflow, -reports, -api, -ui).
-#  5. infra:destroy -> terraform destroy total de envs/prod (incluye S3 + RDS),
-#     con rds_skip_final_snapshot=true porque el backup del paso 2 ya existe.
-#  6. purge_secret del rds-password. Para restaurar después, rotar el password
-#     del RDS restaurado o usar un secret de custodia externo.
-# NOTA: el bucket tfstate y el OIDC provider NO los borra `task destroy`;
-#       para eso esta `task nuke` (destroy + empty tfstate + delete_oidc).
 ```
 
 **Tiempo**: 30-45 min, dominado por el vaciado de buckets versionados
@@ -10725,23 +10111,25 @@ se documenta como laboratorio o preproducción.
 **Gate de red verificable**
 
 ```bash
-# RDS no es público
 aws rds describe-db-instances \
   --db-instance-identifier "${PROJECT}-mlflow" \
   --query 'DBInstances[0].PubliclyAccessible' --output text
-# False
 
-# Las tasks Fargate no reciben IP pública
 aws ecs describe-services \
   --cluster "${PROJECT}-cluster" \
   --services mlflow api ui reports \
   --query 'services[].networkConfiguration.awsvpcConfiguration.assignPublicIp'
-# DISABLED para todos
 
-# Ningún listener productivo debe terminar en HTTP sin redirect
+ALB_ARN=$(aws elbv2 describe-load-balancers --names "${PROJECT}-alb" \
+  --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+
 aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
   --query 'Listeners[].{Port:Port,Protocol:Protocol,Actions:DefaultActions[].Type}'
 ```
+
+> **Nota** — Los tres comandos dependen de `$PROJECT`. Si la terminal es nueva,
+> `source scripts/prod.env` antes (#3.5): sin esa variable los tres fallan con
+> un nombre de recurso vacío, no con un error de permisos.
 
 ### 10.3 Suite de pruebas por riesgo
 
