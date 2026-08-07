@@ -25,8 +25,13 @@ El pipeline implementa validación dual:
    solo lado y dejando un gap entre train y validación.
 4. Baseline jerárquico `FUNDO+FORMATO → FUNDO → FORMATO → global`, ajustado
    únicamente con el train de cada fold.
-5. El último año del expanding-window se publica además como
-   `final_holdout_*`. No interviene en Optuna ni en la elección de parámetros.
+5. El último año del expanding-window se publica además como `final_holdout_*`.
+   **No es un holdout virgen** (corrección de la auditoría 2026-08-07): los
+   `best_params` con los que se evalúa salen de la ronda final de Optuna, que
+   optimiza sobre el dataset completo —ese año incluido— y puede venir sembrada
+   por warm-start del campeón registrado. Mide **drift temporal** con
+   hiperparámetros dados, no generalización virgen; leerlo como lo segundo lo
+   vuelve optimista. Ver `docs/05-auditoria-ml-2026-08-07.md` #2.3.
 
 Para investigación se conserva el default:
 
