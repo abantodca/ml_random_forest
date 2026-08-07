@@ -27,10 +27,10 @@ URLs: UI `:8501` · API `:8000/docs` · MLflow `:5000` · reports `:8080`.
 1. **Rama** desde `main` (`git switch -c tipo/descripcion`).
 2. Edita. Los hooks de `pre-commit` formatean/lint en cada commit.
 3. **Lint** manual: `task lint` (== `ruff check …`). Formato: `ruff format .`.
-4. Cambios estructurales: validar con el stack
-   (`task build` → `task train …` → revisar UI/API/reports). No hay suite de
-   tests committeada (retirada el 2026-07-01).
-5. **Commit** en español, `tipo(scope): resumen` (ver §4).
+4. Cambios estructurales: validar con el stack (`task build` → `task train …` → revisar
+   UI/API/reports). No hay suite de tests committeada (ADR-008): se pega desde la guía
+   cuando se necesita.
+5. **Commit** en español, `tipo(scope): resumen` (ver #4).
 
 ## 3. Convenciones de código
 

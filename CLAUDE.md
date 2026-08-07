@@ -29,6 +29,16 @@ reference sections as `#N`, not `§N`.
 - **`docs/adr/`** — the ratified decisions (ADR-001..009), referenced throughout the code.
 - **`docs/03-arquitectura.md`** — visual layer (Mermaid C4 + sequence + deployment diagrams) of the
   end-to-end system. Complements the README's ASCII map; does not duplicate it.
+- **`docs/04-guia-validacion-estadistica.md`** — validation policy: nowcasting vs ex-ante, dual CV,
+  which metrics to read together, temporal gate.
+- **`docs/05-auditoria-ml-2026-08-07.md`** — audit findings + prioritized experiment plan to cut
+  error (objective/gate misalignment, data discarded by early stopping, feature levers with prior
+  evidence). Read before touching tuning or feature flags.
+
+`tasks/` (the five namespaced taskfiles + five shell helpers that `Taskfile.yml` includes) is
+**not in the repo**: it is pasted from `docs/01-local.md` #4.6.2 (`local.yml`) and
+`docs/02-produccion-aws.md` #4.1.3–4.1.7 (the rest). Until you do, *no* `task` command works —
+not even `task --list`, since go-task resolves `includes:` before dispatching.
 - **`CONTRIBUTING.md`** — onboarding/how-to-work: setup, dev loop, commit convention, and the
   invariants checklist for structural PRs.
 
@@ -64,9 +74,13 @@ task lint          # == ruff check src/ main.py scripts/ api/ ui/   (ruff config
 
 ### Tests
 
-No hay suite de tests committeada (la suite P0 se retiró el 2026-07-01 por decisión del
-owner). La validación es lint + stack local: `task build` → `task train VARIETIES=POP
-TUNING=smoke` → revisar UI/MLflow.
+No hay suite de tests committeada (ver ADR-008). Se retiró la suite P0 el 2026-07-01, volvió
+brevemente el 2026-07-23/24 y se retiró de nuevo el 2026-08-07 por decisión del owner, junto
+con `pytest` de `pyproject.toml`/`requirements-dev.txt`: las pruebas se pegan desde la guía
+cuando se necesitan, no viven en el repo.
+
+La validación es lint + stack local: `task build` → `task train VARIETIES=POP TUNING=smoke` →
+revisar UI/MLflow.
 
 El **CD** (GHA OIDC → ECR/ECS deploy) es deliberadamente Terraform pegable en
 `docs/02-produccion-aws.md` #3.11 (`infra/modules/cicd/`), no un workflow committeado.

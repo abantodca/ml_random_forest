@@ -1,10 +1,3 @@
-# Base Debian (glibc), NO alpine: el paquete `aws-cli` de Alpine venia con un
-# expat roto en la imagen (pyexpat/minidom: "XML_SetAllocTrackerActivationThreshold:
-# symbol not found"), lo que tumbaba CUALQUIER invocacion de `aws` con un
-# traceback de Python -> el `aws s3 sync` del entrypoint nunca corria y
-# /reports + /artifacts quedaban vacios aunque S3 tuviera los archivos.
-# AWS CLI v2 oficial es glibc, self-contained y soportado: no depende del
-# expat/prompt_toolkit del sistema.
 FROM nginx:1.27
 
 RUN apt-get update \
@@ -19,7 +12,6 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# config nginx que sirve /usr/share/nginx/html con autoindex
 COPY docker/reports/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/reports/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
