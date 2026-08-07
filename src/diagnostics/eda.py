@@ -102,9 +102,8 @@ def _write_eda_sidecar(
     from dataclasses import asdict
 
     def _safe(obj):
-        # Recursivo: maneja dataclasses, dicts, lists, np types y pandas
         try:
-            import numpy as np  # local import
+            import numpy as np
         except Exception:
             np = None  # type: ignore[assignment]
         if obj is None:
@@ -112,9 +111,7 @@ def _write_eda_sidecar(
         if hasattr(obj, "__dataclass_fields__"):
             return {k: _safe(v) for k, v in asdict(obj).items()}
         if isinstance(obj, dict):
-            # JSON solo soporta keys string/int/float/bool/None: tuples (ej.
-            # DriftReport.psi_values con (year_a, year_b)) se serializan como
-            # "year_a-year_b". Aplicamos lo mismo a otros tipos no triviales.
+
             def _safe_key(k):
                 if isinstance(k, tuple):
                     return "-".join(str(_safe(x)) for x in k)
@@ -246,7 +243,6 @@ def _synthesize_findings(
     """
     findings: list[tuple[str, str]] = []
 
-    # Heteroscedasticidad latente: variables muy skewed o con kurt alta
     for p in var_profiles:
         if abs(p.skew) > SKEW_THRESHOLD or abs(p.kurtosis) > EDA_KURT_WARN:
             sev = (
@@ -263,7 +259,6 @@ def _synthesize_findings(
                 )
             )
 
-    # Outliers altos
     for p in var_profiles:
         if p.n > 0 and p.n_outliers_iqr / max(p.n, 1) > OUTLIER_FRACTION_WARN:
             findings.append(
@@ -275,7 +270,6 @@ def _synthesize_findings(
                 )
             )
 
-    # Autocorrelacion del target sin remover (estacional)
     if target_temporal.durbin_watson.statistic is not None:
         dw = target_temporal.durbin_watson.statistic
         if dw < 1.5:
@@ -295,7 +289,6 @@ def _synthesize_findings(
                 )
             )
 
-    # Estacionariedad del target
     adf = target_temporal.adf
     kpss = target_temporal.kpss
     if adf.rejects_h0 and kpss.rejects_h0 is False:
@@ -314,7 +307,6 @@ def _synthesize_findings(
             )
         )
 
-    # Multicolinealidad alta
     high_vif = [r for r in vif_results if r.severity == "high"]
     if high_vif:
         top = ", ".join(r.feature for r in high_vif[:5])
@@ -325,7 +317,6 @@ def _synthesize_findings(
             )
         )
 
-    # Correlation pairs >0.95 (redundancia casi perfecta)
     very_high = [(a, b, r) for a, b, r in high_corr_pairs if abs(r) >= 0.95]
     if very_high:
         findings.append(
@@ -335,7 +326,6 @@ def _synthesize_findings(
             )
         )
 
-    # Drift severo
     severe_drift = [r for r in drift_reports if r.drift_severity == "severo"]
     if severe_drift:
         names = ", ".join(r.variable for r in severe_drift[:5])
@@ -347,7 +337,6 @@ def _synthesize_findings(
             )
         )
 
-    # Si no hay hallazgos, mensaje positivo
     if not findings:
         findings.append(
             (
@@ -356,7 +345,6 @@ def _synthesize_findings(
             )
         )
 
-    # Cap a top 8 ordenados por severidad
     severity_order = {"high": 0, "medium": 1, "low": 2, "good": 3}
     findings.sort(key=lambda f: severity_order.get(f[0], 9))
     return findings[:8]
@@ -370,20 +358,15 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_path = out_dir / f"EDA_{variety}_{ts}.html"
 
-    # ---- 1. Carga raw ----
     logger.info(f"[EDA/{variety}] cargando data raw...")
-    # EDA observa los niveles originales. El agrupamiento fold-safe vive en el
-    # pipeline de entrenamiento, no en la carga exploratoria.
     X, y = load_data(sheet=variety, collapse_rare_categories=False)
     df = X.copy()
     df[TARGET] = y.values
     if DATE_COLUMN in df.columns:
         df = df.sort_values(DATE_COLUMN).reset_index(drop=True)
 
-    # ---- 2. Calidad ----
     quality = _quality_metrics(df)
 
-    # ---- 3. Univariado ----
     numeric_cols = [c for c in NUMERIC_FEATURES if c in df.columns] + [TARGET]
     logger.info(f"[EDA/{variety}] univariado sobre {len(numeric_cols)} variables...")
     var_profiles = profile_all_numeric(df, numeric_cols)
@@ -399,7 +382,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
         for p in var_profiles
     ]
 
-    # ---- 4. Temporal del target ----
     logger.info(f"[EDA/{variety}] temporal sobre target...")
     target_series = df[TARGET]
     target_temporal = profile_temporal(TARGET, target_series, period=12)
@@ -414,7 +396,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
             ),
         )
     ]
-    # Tambien temporal de top-3 numericas con mayor varianza
     top_var_cols = sorted(
         [(c, df[c].var()) for c in NUMERIC_FEATURES if c in df.columns],
         key=lambda t: t[1] or 0,
@@ -429,7 +410,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
             )
         )
 
-    # ---- 5. Multivariado ----
     logger.info(f"[EDA/{variety}] multivariado...")
     numeric_only = df[[c for c in numeric_cols if c != TARGET]]
     corr = correlation_matrix(
@@ -441,14 +421,12 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     mi_columns = [column for column in RAW_FEATURE_COLUMNS if column in df.columns]
     mi_results = compute_mutual_information(df[mi_columns], df[TARGET])
 
-    # ---- 5-bis. Categoricas (FORMATO, FUNDO, ...) ----
     cat_cols = [c for c in CATEGORICAL_FEATURES if c in df.columns]
     cat_report: CategoricalReport | None = None
     if cat_cols:
         logger.info(f"[EDA/{variety}] categoricas sobre {len(cat_cols)} columnas: {cat_cols}...")
         cat_report = build_categorical_report(df, cat_cols, df[TARGET], top_n=15)
 
-    # ---- 6. Drift por anio ----
     logger.info(f"[EDA/{variety}] drift entre anios...")
     drift_reports = [
         drift_report(df, c, year_col="ANIO", date_col=DATE_COLUMN)
@@ -457,7 +435,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     ]
     drift_reports = [r for r in drift_reports if r.year_pairs]
 
-    # ---- 7. Findings ----
     findings = _synthesize_findings(
         var_profiles=var_profiles,
         target_temporal=target_temporal,
@@ -466,7 +443,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
         drift_reports=drift_reports,
     )
 
-    # ---- 8. Render ----
     html = render_eda_html(
         variety=variety,
         n_rows=len(df),
@@ -487,9 +463,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     write_eda_html(html, out_path)
     logger.info(f"[EDA/{variety}] HTML generado: {out_path}")
 
-    # ---- 8-bis. JSON sidecar con stats crudos ----
-    # Sirve para que el feature engineering / LLM lea datos reales sin
-    # parsear HTML. Mismo basename que el HTML, extension .json.
     json_path = out_path.with_suffix(".json")
     _write_eda_sidecar(
         json_path,
@@ -506,13 +479,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     )
     logger.info(f"[EDA/{variety}] JSON sidecar: {json_path}")
 
-    # ---- 9. MLflow artifact ----
-    # Fix 2026-06-13: el modo standalone (`task eda` / main --eda) NUNCA
-    # abre un run, asi que el `if active_run()` anterior se saltaba el log
-    # en silencio y el EDA jamas aparecia en MLflow UI (queja del usuario).
-    # Ahora: sin run activo se crea un run dedicado `eda_<variedad>` en el
-    # experimento de la variedad. Se sube tambien el sidecar JSON (mismo
-    # contrato que el HTML: datos crudos sin parsear HTML).
     if log_to_mlflow:
         try:
             import mlflow
@@ -533,12 +499,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
         except Exception as exc:
             logger.warning(f"[EDA/{variety}] log_artifact MLflow fallo: {exc}")
 
-    # ---- 10. Regenerar dashboard global (reports/index.html) ----
-    # Sin esto el sidebar de http://localhost:8080/reports/ no muestra la
-    # variedad nueva hasta el siguiente training. variety_runner ya hace
-    # esto post-training; replicamos aqui para que `task eda VARIETIES=X`
-    # tambien aparezca de inmediato — con solo el bloque EDA mientras no
-    # exista Winner/Residuals para X.
     try:
         from src.diagnostics.dashboard_index import write_dashboard
 
@@ -549,9 +509,6 @@ def run_eda(variety: str, out_dir: Path | None = None, *, log_to_mlflow: bool = 
     return out_path
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="EDA diagnostico standalone")
     p.add_argument("--variety", required=True, help="Variedad (hoja del Excel)")

@@ -24,12 +24,8 @@ page_header(
     "🏆",
 )
 
-# Solo variedades con modelo entrenado: el reporte (Winner_<VARIEDAD>.html) es
-# un artifact que se genera al entrenar, así que las no entrenadas no aplican.
 _all_names = get_all_variety_names()
 if not _all_names:
-    # Lista vacía ⇒ backend caído vs. registry sin modelos (p. ej. entrenando).
-    # `get_cached_health()` solo es None si el backend no responde.
     if get_cached_health() is None:
         st.error("No se puede conectar al backend. Verifica que el servicio esté corriendo.")
     else:

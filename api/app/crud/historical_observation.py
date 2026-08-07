@@ -18,11 +18,6 @@ from app.schemas import HistoricalObservationCreate
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Lectura listado
-# ============================================================================
-
-
 async def list_history(
     db: AsyncSession,
     variety: str,
@@ -41,11 +36,6 @@ async def list_history(
         .all()
     )
     return list(rows), total
-
-
-# ============================================================================
-# Insercion
-# ============================================================================
 
 
 async def bulk_insert(
@@ -94,8 +84,7 @@ async def import_rows(
     """
     if replace and not rows:
         raise ValueError(
-            "El archivo no contiene filas históricas válidas; "
-            "se conserva el histórico existente."
+            "El archivo no contiene filas históricas válidas; se conserva el histórico existente."
         )
     if not rows:
         return 0, 0
@@ -133,11 +122,6 @@ async def import_rows(
     except Exception:
         await db.rollback()
         raise
-
-
-# ============================================================================
-# Borrado
-# ============================================================================
 
 
 async def delete_by_variety(db: AsyncSession, variety: str) -> int:

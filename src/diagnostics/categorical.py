@@ -36,15 +36,12 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
 @dataclass
 class TopCategory:
     value: str
     count: int
-    pct: float  # frecuencia relativa (0..1)
-    cum_pct: float  # frecuencia acumulada (orden descendente)
+    pct: float
+    cum_pct: float
     target_mean: float | None = None
     target_std: float | None = None
     target_count: int = 0
@@ -57,13 +54,13 @@ class CategoricalProfile:
     n_missing: int
     miss_ratio: float
     cardinality: int
-    n_singletons: int  # categorias con count==1 (ruido potencial)
+    n_singletons: int
     top_categories: list[TopCategory] = field(default_factory=list)
-    coverage_top10_pct: float = 0.0  # cobertura cumulativa del top-10
+    coverage_top10_pct: float = 0.0
     chi2_statistic: float | None = None
     chi2_p_value: float | None = None
     chi2_dof: int | None = None
-    cramers_v_target: float | None = None  # asociacion con target binarizado
+    cramers_v_target: float | None = None
     target_encoding_recommendation: str = ""
 
 
@@ -75,7 +72,7 @@ class CategoricalAssociation:
     feature_b: str
     cramers_v: float
     chi2_p_value: float
-    severity: str  # "ok"|"watch"|"high"
+    severity: str
 
 
 @dataclass
@@ -84,9 +81,6 @@ class CategoricalReport:
     associations: list[CategoricalAssociation]
 
 
-# ---------------------------------------------------------------------------
-# Computacion
-# ---------------------------------------------------------------------------
 def _cramers_v(table: np.ndarray) -> tuple[float, float, int]:
     """Cramer's V con correccion de sesgo (Bergsma & Wicher 2013).
 
@@ -103,7 +97,6 @@ def _cramers_v(table: np.ndarray) -> tuple[float, float, int]:
     r, k = table.shape
     if min(r, k) <= 1 or n == 0:
         return 0.0, p, dof
-    # correccion de sesgo
     phi2 = chi2 / n
     phi2_corr = max(0.0, phi2 - (r - 1) * (k - 1) / (n - 1))
     r_corr = r - (r - 1) ** 2 / (n - 1)
@@ -127,7 +120,6 @@ def profile_categorical(
     n = len(s)
     n_miss = int(s.isna().sum())
 
-    # Top-N + target stats por categoria
     counts = s.value_counts(dropna=False)
     cardinality = int(counts.shape[0])
     n_singletons = int((counts == 1).sum())
@@ -139,7 +131,6 @@ def profile_categorical(
         pct = c / total if total > 0 else 0.0
         cum += c
         cum_pct = cum / total if total > 0 else 0.0
-        # target stats sobre las filas donde s == val
         mask = s == val if not pd.isna(val) else s.isna()
         sub_target = target[mask].dropna()
         tmean = float(sub_target.mean()) if len(sub_target) >= min_count_for_target else None
@@ -158,7 +149,6 @@ def profile_categorical(
 
     coverage_top10 = float(counts.head(10).sum() / total) if total > 0 else 0.0
 
-    # Chi-square contra target binarizada por la mediana
     chi2_stat = chi2_p = None
     chi2_dof_val = None
     cramers_v_val = None
@@ -173,17 +163,12 @@ def profile_categorical(
                 cramers_v_val = v
                 chi2_p = p
                 chi2_dof_val = dof
-                # statistic util para el HTML
                 from scipy.stats import chi2_contingency
 
                 chi2_stat = float(chi2_contingency(ct.values)[0])
         except Exception as exc:
-            # Stats inferenciales opcionales del EDA: si scipy falla (tabla
-            # degenerada, frecuencias esperadas 0) quedan en None y el HTML
-            # simplemente no los muestra.
             logger.debug("Chi2/Cramers V omitidos para la categorica: %s", exc)
 
-    # Recomendacion target-encoding
     rec = _target_encoding_rec(cardinality, n - n_miss, cramers_v_val)
 
     return CategoricalProfile(

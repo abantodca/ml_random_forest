@@ -57,8 +57,6 @@ def create_preprocessing_pipeline(
     componentes (clone-safe) y serializados con el pipeline.
     """
     cfg = variety_cfg or VarietyConfig(variety="")
-    # kwargs condicionales: no pasar None pisaria el default del componente
-    # (p.ej. fallback_threshold lee env IMPUTER_KNN_THRESHOLD).
     imputer_kwargs = (
         {"fallback_threshold": cfg.imputer_knn_threshold}
         if cfg.imputer_knn_threshold is not None
@@ -70,18 +68,6 @@ def create_preprocessing_pipeline(
             group_col=(["FUNDO", "FORMATO"] if ENABLE_OUTLIER_CASCADE_FF else "FUNDO"),
         ),
     )
-    # LOF como FEATURE (additive). EDA POP 2026-05-09 detecto kurt=158
-    # en DPC y 9.1% outliers IQR en KG/HA. LOF informa al modelo cuando
-    # una fila es atipica multivariadamente — los arboles deciden si lo
-    # usan o no. Va DESPUES del imputer (LOF no acepta NaN) y ANTES de
-    # FeatureGenerator (asi el score se conserva en el output final).
-    #
-    # Orden LOF vs capper (flag ENABLE_LOF_BEFORE_CAPPER, Fase B.5):
-    #   - OFF (legacy): capper -> LOF. El LOF puntua data ya recortada;
-    #     los extremos que el capper clipeo desaparecen del score.
-    #   - ON: LOF -> capper. El score captura los extremos REALES y el
-    #     capper sigue protegiendo al modelo despues. lof_score no esta
-    #     en NUMERIC_FEATURES, el capper no lo toca.
     lof_step = ("outlier_score", LOFOutlierScorer())
     middle_steps = [lof_step, capper_step] if ENABLE_LOF_BEFORE_CAPPER else [capper_step, lof_step]
     return Pipeline(
@@ -102,9 +88,6 @@ def create_preprocessing_pipeline(
                     low_season_months=cfg.low_season_months,
                 ),
             ),
-            # Experimento EX-ANTE (#11): passthrough con EXANTE_MODE=0
-            # (default); con el flag activo elimina las features del dia
-            # del evento (KG/HA, %INDUS y derivadas) — ver exante.py.
             ("drop_concurrent", ConcurrentFeatureDropper()),
             (
                 "variance_filter",

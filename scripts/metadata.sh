@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Metadata del run de training. Cada subcomando imprime un valor en stdout
-# y lo consume Taskfile.yml `train.vars` via `sh:`.
-#
-# Sin `set -e`: los comandos usan `||` para fallback ("unknown", "missing").
 
 case "${1:-}" in
   git-sha)

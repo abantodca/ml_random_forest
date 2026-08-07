@@ -22,8 +22,6 @@ from pathlib import Path
 
 import plotly.graph_objects as go
 
-#: API publica del modulo. Otros modulos (residuals.py, dashboard_index)
-#: importan estos symbols, asi que NO llevan underscore prefix.
 BASE_CSS = """
 <style>
   :root {
@@ -183,7 +181,6 @@ def _eda_history_links(variety: str, current_path: Path | None = None, max_links
         return ""
     items = []
     for p in candidates[:max_links]:
-        # Extrae timestamp del filename si tiene patron EDA_<v>_<ts>.html
         ts_part = p.stem.replace(f"EDA_{variety}_", "")
         items.append(
             f'<a href="{escape(p.name)}" '
@@ -300,7 +297,6 @@ def _categorical_section(report) -> str:
 
     cards = []
     for p in report.profiles:
-        # Top categorias table
         rows = []
         for tc in p.top_categories:
             tmean = f"{tc.target_mean:.2f}" if tc.target_mean is not None else "—"
@@ -323,7 +319,6 @@ def _categorical_section(report) -> str:
             f"<tbody>{''.join(rows)}</tbody></table>"
         )
 
-        # Stats line
         v_str = f"V={p.cramers_v_target:.2f}" if p.cramers_v_target is not None else "V=—"
         chi2_str = (
             f"χ²={p.chi2_statistic:.1f}, p={format_pvalue(p.chi2_p_value)}"
@@ -340,7 +335,6 @@ def _categorical_section(report) -> str:
             f"<span>{chi2_str}</span>"
         )
 
-        # Recomendacion badge
         rec_kind = (
             "warn"
             if (
@@ -364,7 +358,6 @@ def _categorical_section(report) -> str:
             f"</div>"
         )
 
-    # Asociaciones entre categoricas
     assoc_html = ""
     if report.associations:
         rows = "".join(
@@ -416,8 +409,8 @@ def render_eda_html(
     n_cols: int,
     quality_metrics: dict,
     findings: list[tuple],
-    var_profiles_with_figs: Iterable[tuple],  # [(profile, hist, qq, box), ...]
-    temporal_profiles_with_figs: Iterable[tuple],  # [(profile, acf_fig), ...]
+    var_profiles_with_figs: Iterable[tuple],
+    temporal_profiles_with_figs: Iterable[tuple],
     corr_fig: go.Figure,
     vif_fig: go.Figure,
     mi_fig: go.Figure,
@@ -427,7 +420,6 @@ def render_eda_html(
     out_path: Path | None = None,
 ) -> str:
     """Construye el HTML completo y lo devuelve como string."""
-    # Var cards
     var_cards = []
     for i, (profile, h, q, b) in enumerate(var_profiles_with_figs):
         var_cards.append(_variable_card(profile, h, q, b, idx=i))
@@ -450,7 +442,6 @@ def render_eda_html(
         </table>
         """
 
-    # Reusa el tag canonico (offline vs CDN segun config) para tamaño consistente.
     from src.utils.html_assets import plotly_js_tag
 
     plotly_cdn = plotly_js_tag()

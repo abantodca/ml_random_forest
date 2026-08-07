@@ -13,13 +13,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# `streamlit run app/app.py` inserta el directorio del entrypoint (`…/app`) al
-# frente de `sys.path` (streamlit/web/bootstrap.py). Como ESTE archivo se llama
-# `app.py`, ahí ensombrece al paquete `app/` y `from app.components import …`
-# revienta con "ModuleNotFoundError: 'app' is not a package". Anteponemos la
-# raíz del proyecto (el padre de `app/`) para que `import app` resuelva el
-# PAQUETE, no este módulo. Imprescindible bajo `streamlit run` (no bajo AppTest,
-# que ya corre con la raíz en el path — por eso no lo detectaba).
 _PKG_ROOT = str(Path(__file__).resolve().parent.parent)
 if sys.path[:1] != [_PKG_ROOT]:
     sys.path.insert(0, _PKG_ROOT)
@@ -38,8 +31,6 @@ st.set_page_config(
 inject_css()
 
 
-# url_path explícito por página — evita que Streamlit "adivine" la URL a
-# partir del título y entre en conflicto con el router legacy de pages/.
 _PAGES: list[st.Page] = [
     st.Page(
         "views/home.py",
@@ -81,10 +72,6 @@ _PAGES: list[st.Page] = [
 ]
 
 
-# IMPORTANTE: st.navigation() debe llamarse ANTES que cualquier st.page_link()
-# (que vive dentro del sidebar). De lo contrario el router legacy de Streamlit
-# intenta resolver la URL contra pages/ y emite "Page not found" antes de que
-# st.navigation tome el control.
 pg = st.navigation(_PAGES, position="hidden")
 render_sidebar(_PAGES)
 pg.run()

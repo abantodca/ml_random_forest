@@ -22,8 +22,6 @@ _BACKEND_SPECIFIC = dict(
     verbose=-1,
     objective="regression_l1",
     subsample_freq=1,
-    # n_estimators NO se tunea (rev. 8): techo alto + early stopping interno
-    # (EarlyStoppingLGBMRegressor) decide el corte real por fold/trial.
     n_estimators=N_ESTIMATORS_MAX,
 )
 

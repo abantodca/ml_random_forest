@@ -19,7 +19,6 @@ from app.components.charts.gauge import build_drift_gauge
 from app.components.layout.insight_card import insight_card
 from app.schemas import BatchDriftReport, DriftReport
 
-# Rango z-score que se considera "normal" (espeja Z_OK_THRESHOLD del backend).
 _Z_OK = 1.0
 _STATUS_LABEL = {
     "ok": "🟢 OK",
@@ -57,11 +56,6 @@ def render_drift_panel(
     with st.expander(header, expanded=expanded):
         _render_summary(drift)
         _render_feature_table(drift)
-
-
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
 
 
 def _render_summary(drift: DriftReport) -> None:
@@ -149,11 +143,6 @@ def _alert_reason(f) -> str:
     if f.baseline_freq is not None and f.baseline_freq < 0.01:
         return f"sólo {f.baseline_freq * 100:.1f}% del histórico"
     return "fuera del rango habitual"
-
-
-# ---------------------------------------------------------------------------
-# Batch drift panel (PSI + K-S + Chi²)
-# ---------------------------------------------------------------------------
 
 
 def render_batch_drift_panel(

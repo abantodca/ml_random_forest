@@ -77,41 +77,19 @@ logger = logging.getLogger(__name__)
 WINDOWS: tuple[int, ...] = (7, 14, 30, 90)
 MIN_PERIODS = 3
 COLD_START_FILL_VALUE = -1.0
-# Sentinel para features con rango real que cruza -1 (hoy: slope). Debe
-# quedar fuera de todo valor fisico posible (min observado POP: -1189).
 SLOPE_COLD_FILL_VALUE = -99999.0
 KG_HA_COL = "KG/HA"
 
-# Estabilizadores adicionales por FUNDO+FORMATO sobre KG/HA:
-# - std rolling 30: VOLATILIDAD del grupo. Un FUNDO+FORMATO con std alta
-#   es mas dificil de predecir; el arbol puede tratarlo distinto. Tambien
-#   alimenta predict_with_std de OOFEnsembleRegressor.
-# - slope rolling 30: regresion lineal de KG/HA contra t en ultimas 30 obs.
-#   Captura momentum (alza/caida) que la mediana no ve.
-# - days_since_last_FF: dias desde la cosecha previa en mismo FF. Senal de
-#   cadencia agronomica.
-# - REL_FORMATO_30: KG_HA_lag_F_30 / KG_HA_lag_FMT_30. Posicionamiento
-#   relativo del fundo dentro de su cohorte de formato.
-#
-# EWMA halflife=15 + std_FF_90 fueron evaluados pero descartados: corr
-# +0.98 con KG_HA_lag_FF_30 y +0.95 entre std_FF_30 y std_FF_90. Una sola
-# ventana cubre la senal de volatilidad sin duplicar.
 STD_WINDOW: int = 30
 SLOPE_WINDOW: int = 30
 
-# Lag estacional: ventana centrada en (fecha - 365d) con tolerancia +/-15d.
-# Captura ciclo agronomico anual (mismo periodo del ano anterior por FUNDO+FORMATO).
-# Ventana ±30d (wide) fue evaluada (2026-05-05) y descartada: corr +0.969
-# con la ±15d sobre POP (cadencia diaria regular). La ventana mas amplia
-# captura casi exactamente las mismas obs -> redundancia.
 SEASONAL_PERIOD_DAYS: int = 365
 SEASONAL_TOLERANCE_DAYS: int = 15
 
-# Grupos a calcular: nombre_corto -> columnas de groupby
 GROUP_DEFS: list[tuple[str, list[str]]] = [
-    ("FF", ["FUNDO", "FORMATO"]),  # combinacion (mas especifica, menos densidad)
-    ("F", ["FUNDO"]),  # solo fundo (mas densidad)
-    ("FMT", ["FORMATO"]),  # solo formato
+    ("FF", ["FUNDO", "FORMATO"]),
+    ("F", ["FUNDO"]),
+    ("FMT", ["FORMATO"]),
 ]
 
 
@@ -186,14 +164,6 @@ def _seasonal_lag_for_group(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Helpers privados de add_lag_features. Cada uno muta `df_work` in-place
-# (escribe columnas nuevas) y devuelve la lista de nombres agregados. La
-# mutacion es deliberada para evitar copiar ~10k filas x 30 columnas en
-# cada paso intermedio (cada call de pipeline.fit lo invoca).
-# ---------------------------------------------------------------------------
-
-
 def _compute_rolling_lags(df_work: pd.DataFrame, exante: bool = False) -> list[str]:
     """Lags rolling por grupo (FF, F, FMT) x valor (KG_JR_H, KG_HA) x ventana.
 
@@ -213,10 +183,6 @@ def _compute_rolling_lags(df_work: pd.DataFrame, exante: bool = False) -> list[s
                 name = f"{vname}_lag_{alias}_{w}"
                 df_work.loc[df_sorted.index, name] = lag_fn(df_sorted, value_col, group_cols, w)
                 new_cols.append(name)
-    # NOTA: las flags LAG_FF_COLD y LAG_FF_SEASONAL_COLD existian aqui para
-    # marcar filas sin historia. Se eliminaron tras permutation_importance
-    # (mayo 2026) que mostro importance ~0 / negativa: el sentinel -1 ya
-    # comunica el cold-start a los arboles, la flag binaria era redundante.
     return new_cols
 
 
@@ -243,10 +209,6 @@ def _compute_volatility_and_momentum_lags(df_work: pd.DataFrame, exante: bool = 
     df_sorted = df_work.sort_values(["FUNDO", "FORMATO", DATE_COLUMN])
     grouped_kgha = df_sorted.groupby(["FUNDO", "FORMATO"], sort=False)[KG_HA_COL]
 
-    # Helper slope: recibe Series, devuelve Series de slopes (shift(1)
-    # excluye self). Usa apply para mantener legibilidad; el costo es
-    # aceptable porque la ventana es chica (30) y solo corre en
-    # LagFeatureTransformer.fit_transform (no en cada predict).
     def _rolling_slope(s: pd.Series) -> pd.Series:
         s_shift = s.shift(1)
         return s_shift.rolling(SLOPE_WINDOW, min_periods=MIN_PERIODS).apply(
@@ -257,11 +219,6 @@ def _compute_volatility_and_momentum_lags(df_work: pd.DataFrame, exante: bool = 
     slope_name = f"KG_HA_slope_FF_{SLOPE_WINDOW}"
 
     if exante:
-        # Modo ex-ante: std y slope sobre la serie DIARIA por FF (mismo
-        # razonamiento que _rolling_lag_exante — el shift(1) por fila
-        # incluia hermanas del dia actual). std diaria pierde la varianza
-        # intra-dia, pero esa varianza es justamente la senal concurrente
-        # que el ex-ante no puede ver.
         daily = _daily_series(df_sorted, KG_HA_COL, ["FUNDO", "FORMATO"])
         g_daily = daily.groupby(["FUNDO", "FORMATO"], sort=False)[KG_HA_COL]
         daily["__std"] = g_daily.transform(
@@ -276,19 +233,14 @@ def _compute_volatility_and_momentum_lags(df_work: pd.DataFrame, exante: bool = 
         df_work.loc[df_sorted.index, std_name] = merged["__std"].to_numpy()
         df_work.loc[df_sorted.index, slope_name] = merged["__slope"].to_numpy()
     else:
-        # 1) std rolling 30 sobre KG/HA por FF
         df_work.loc[df_sorted.index, std_name] = grouped_kgha.transform(
             lambda s: s.shift(1).rolling(STD_WINDOW, min_periods=MIN_PERIODS).std()
         )
-        # 2) slope rolling 30: pendiente OLS sobre KG/HA(t) en ventana de 30
         df_work.loc[df_sorted.index, slope_name] = grouped_kgha.transform(_rolling_slope)
 
     new_cols.append(std_name)
     new_cols.append(slope_name)
 
-    # 3) days_since_last_FF: diferencia en dias hasta la fila previa en
-    #    mismo FF. Primera fila del grupo => NaN (cold-start, captado por
-    #    sentinel -1 al final de add_lag_features).
     days_name = "days_since_last_FF"
     fechas_sorted = pd.to_datetime(df_sorted[DATE_COLUMN])
     diffs = (
@@ -299,20 +251,6 @@ def _compute_volatility_and_momentum_lags(df_work: pd.DataFrame, exante: bool = 
     df_work.loc[df_sorted.index, days_name] = diffs.values
     new_cols.append(days_name)
 
-    # 4) tenure_FUNDO: dias desde la PRIMERA observacion del FUNDO en el
-    #    dataset. Captura "antiguedad" del fundo dentro del registro. Un
-    #    fundo nuevo (tenure chico) puede tener manejo agronomico distinto
-    #    a uno con anos de historia. Independiente de days_since_last_FF
-    #    (que es gap entre cosechas consecutivas dentro de un FF).
-    #
-    #    LEAK NOTE: el min(FECHA) por FUNDO se calcula aqui sobre `df_work`
-    #    (combined = history + new en transform). Si llega una fila con
-    #    fecha anterior al min visto en fit (backfill), el origen se redefine
-    #    y tenure cambia retroactivamente. LagFeatureTransformer.transform
-    #    sobrescribe esta columna usando `self.fundo_first_seen_` memoizado
-    #    en fit; el calculo aqui es solo el fallback para `fit_transform`
-    #    y `add_lag_features` standalone (donde leak no aplica porque solo
-    #    se ve el train).
     tenure_name = "tenure_FUNDO_days"
     fechas_full = pd.to_datetime(df_work[DATE_COLUMN])
     first_per_fundo = fechas_full.groupby(df_work["FUNDO"]).transform("min")
@@ -331,8 +269,6 @@ def _slope_of_window(arr: np.ndarray) -> float:
     n = len(arr)
     if n < MIN_PERIODS:
         return np.nan
-    # Saltar NaN en y (raro porque KG/HA no tiene NaN post-imputer, pero
-    # defensivo cuando el helper se llama via rolling.apply en init de fold)
     mask = ~np.isnan(arr)
     if mask.sum() < MIN_PERIODS:
         return np.nan
@@ -361,7 +297,6 @@ def _compute_simple_lags_and_diff(df_work: pd.DataFrame) -> list[str]:
     df_sorted = df_work.sort_values(["FUNDO", "FORMATO", DATE_COLUMN])
     grouped_target = df_sorted.groupby(["FUNDO", "FORMATO"], sort=False)[TARGET]
 
-    # shift(1) y shift(2) del target por FF (ordenado por FECHA).
     shift_1 = grouped_target.transform(lambda s: s.shift(1))
     shift_2 = grouped_target.transform(lambda s: s.shift(2))
 
@@ -370,7 +305,6 @@ def _compute_simple_lags_and_diff(df_work: pd.DataFrame) -> list[str]:
         df_work.loc[df_sorted.index, name] = series
         new_cols.append(name)
 
-    # diff(1) en lo previo (no usa target actual).
     diff_name = "KG_JR_H_diff_1_FF"
     df_work.loc[df_sorted.index, diff_name] = (shift_1 - shift_2).values
     new_cols.append(diff_name)
@@ -451,11 +385,6 @@ def _compute_target_volatility(df_work: pd.DataFrame) -> list[str]:
     return [name]
 
 
-# Derivadas con colas pesadas que LAG_LOG_DERIVED comprime. Auditoria
-# 2026-06-11 sobre POP (el OutlierCapper/LOF/skew solo cubren las 6 raw):
-#   KG_HA_ratio_FF_30 kurt=383 max=55x | slope kurt=393 | days_since kurt=836.
-# log1p es monotona y estateless (misma fila -> mismo valor train/inference)
-# y el sentinel -1 (cold-start) queda fuera del rango de log1p(x>=0).
 _LOG_RATIO_COLS = [
     "KG_HA_ratio_FF_30",
     "KG_HA_ratio_FF_90",
@@ -514,12 +443,10 @@ def _compute_ratios(df_work: pd.DataFrame) -> list[str]:
     """
     new_cols: list[str] = []
 
-    # Locales (KG_HA actual vs su lag FF)
     df_work["KG_HA_ratio_FF_30"] = safe_ratio(df_work[KG_HA_COL], df_work["KG_HA_lag_FF_30"])
     df_work["KG_HA_ratio_FF_90"] = safe_ratio(df_work[KG_HA_COL], df_work["KG_HA_lag_FF_90"])
     new_cols += ["KG_HA_ratio_FF_30", "KG_HA_ratio_FF_90"]
 
-    # Global pool (KG_HA actual vs mediana cross-fundos rolling 30 obs)
     df_sorted_date = df_work.sort_values(DATE_COLUMN)
     rolling_global_30 = (
         df_sorted_date[KG_HA_COL].shift(1).rolling(30, min_periods=MIN_PERIODS).median()
@@ -529,16 +456,11 @@ def _compute_ratios(df_work: pd.DataFrame) -> list[str]:
     df_work.drop(columns=["_KG_HA_lag_GLOBAL_30"], inplace=True)
     new_cols.append("KG_HA_REL_GLOBAL_30")
 
-    # Delta short/long del target (entre lags, no leakage)
     df_work["delta_KG_JR_H_30_90"] = safe_ratio(
         df_work["KG_JR_H_lag_FF_30"], df_work["KG_JR_H_lag_FF_90"]
     )
     new_cols.append("delta_KG_JR_H_30_90")
 
-    # Posicionamiento del FUNDO dentro de su cohorte de FORMATO en el lag 30:
-    # KG_HA_lag_F_30 / KG_HA_lag_FMT_30 -> >1 si el fundo rinde por encima
-    # del promedio de su formato en ese horizonte, <1 si por debajo. Auditado
-    # vs los lag base: corr <0.5 -> senal independiente.
     df_work["KG_HA_REL_FORMATO_30"] = safe_ratio(
         df_work["KG_HA_lag_F_30"], df_work["KG_HA_lag_FMT_30"]
     )
@@ -564,8 +486,6 @@ def _current_flags() -> dict:
         "feature_lags": ENABLE_FEATURE_LAGS,
         "seasonal_2y": ENABLE_SEASONAL_2Y,
         "log_derived": LAG_LOG_DERIVED,
-        # Ex-ante (experimento #11): lags same-day-safe. Los pickles previos
-        # a 2026-06-13 no tienen esta clave -> leer SIEMPRE con .get(False).
         "exante": EXANTE_MODE,
     }
 
@@ -594,14 +514,10 @@ def add_lag_features(df: pd.DataFrame, flags: dict | None = None) -> pd.DataFram
         raise ValueError(f"add_lag_features: columnas faltantes: {missing}")
 
     df_work = df.copy()
-    # .get con default False: pickles serializados antes de 2026-06-13
-    # tienen flags_ sin la clave "exante" (compat con rnd-forest-POP v1).
     exante = bool(flags.get("exante", False))
     new_cols: list[str] = []
     new_cols.extend(_compute_rolling_lags(df_work, exante=exante))
     if flags["simple_lags"]:
-        # NOTA: los simple lags shift(1)/shift(2) son posicionales (incluyen
-        # hermanas same-day) — no combinarlos con exante sin adaptarlos.
         new_cols.extend(_compute_simple_lags_and_diff(df_work))
     seasonal_cols = _compute_seasonal_lags(df_work, seasonal_2y=flags["seasonal_2y"])
     new_cols.extend(seasonal_cols)
@@ -614,25 +530,13 @@ def add_lag_features(df: pd.DataFrame, flags: dict | None = None) -> pd.DataFram
     if flags["log_derived"]:
         _apply_log_derived(df_work, new_cols)
 
-    # Conteo de filas con cold-start (solo informativo para el log).
     n_cold_pre = int(df_work[[c for c in new_cols if "_lag_FF_" in c]].isna().all(axis=1).sum())
     n_cold_seasonal_pre = int(df_work[seasonal_cols].isna().all(axis=1).sum())
 
-    # Sentinel en todas las features nuevas (incluyendo ratios). El -1 ya
-    # le comunica al arbol que la fila es cold-start sin necesidad de flag.
-    #
-    # EXCEPCION (fix 2026-06-11): el slope tiene valores REALES negativos
-    # (48% de filas <= -0.5, min -1189 en POP): el sentinel -1 colisionaba
-    # con "grupo cayendo ~1 kg/HA por obs" y el arbol no podia distinguir
-    # cold-start de declive real. Esas features usan un sentinel fuera de
-    # cualquier rango fisico. El resto (ratios, lags, std, days) son >= 0
-    # por construccion y -1 sigue siendo seguro.
     for c in new_cols:
         fill = SLOPE_COLD_FILL_VALUE if c.startswith("KG_HA_slope") else COLD_START_FILL_VALUE
         df_work[c] = df_work[c].fillna(fill)
 
-    # DEBUG porque se llama por cada pipeline.fit dentro de Optuna nested CV
-    # (~4500 veces en TUNING=prod). Subir a INFO temporal solo para diagnostico.
     logger.debug(
         f"Lag features agregadas | grupos={[g[0] for g in GROUP_DEFS]} | "
         f"cold_start_FF={n_cold_pre} ({n_cold_pre / len(df_work) * 100:.1f}%) | "
@@ -642,9 +546,6 @@ def add_lag_features(df: pd.DataFrame, flags: dict | None = None) -> pd.DataFram
     return df_work
 
 
-# ---------------------------------------------------------------------------
-# Sklearn transformer wrapper
-# ---------------------------------------------------------------------------
 def lag_output_columns(flags: dict | None = None) -> list[str]:
     """Columnas que produce add_lag_features dado un snapshot de flags."""
     f = flags if flags is not None else _current_flags()
@@ -656,9 +557,6 @@ def lag_output_columns(flags: dict | None = None) -> list[str]:
             for w in WINDOWS
         ]
         + (
-            # Solo se exponen los simple lags si el flag esta activo: con OFF
-            # el pipeline reproduce exactamente el output del LGB v3 baseline
-            # (75 cols antes de FUNDO_FORMATO interaction).
             ["KG_JR_H_lag_FF_simple_1", "KG_JR_H_lag_FF_simple_2", "KG_JR_H_diff_1_FF"]
             if f["simple_lags"]
             else []
@@ -728,14 +626,8 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
     """
 
     def __init__(self) -> None:
-        # Sin hiperparametros tuneables: ventanas/sentinel son constantes
-        # globales del modulo. Mantener __init__ vacio respeta el contrato
-        # sklearn (no se debe hacer trabajo aqui).
         pass
 
-    # ------------------------------------------------------------------
-    # Helpers internos
-    # ------------------------------------------------------------------
     def _flags(self) -> dict:
         """Snapshot horneado en fit; fallback al env actual para pickles
         legacy (pre-fix) que no tienen flags_ — mismo comportamiento que
@@ -753,56 +645,31 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
         """Crea snapshot historico minimo (FUNDO, FORMATO, FECHA, KG/HA, TARGET)."""
         history = X[_history_cols(self._flags())].copy()
         history[TARGET] = y.values if isinstance(y, pd.Series) else np.asarray(y, dtype=float)
-        # Normalizamos el index para que pd.concat en transform no produzca
-        # duplicados confusos.
         return history.reset_index(drop=True)
 
-    # ------------------------------------------------------------------
-    # Sklearn API
-    # ------------------------------------------------------------------
     def fit(self, X: pd.DataFrame, y=None) -> LagFeatureTransformer:
         if y is None:
             raise ValueError(
                 "LagFeatureTransformer.fit requiere y (KG/JR_H) para construir history_."
             )
-        # Hornear el snapshot de flags ANTES de cualquier uso: el pipeline
-        # serializado debe producir las mismas columnas en cualquier proceso
-        # (API sin env vars incluida). Ver _current_flags.
         self.flags_ = _current_flags()
         self._validate_input(X)
         self.history_ = self._build_history(X, y)
-        # Memoiza la fecha mas temprana vista por FUNDO durante el fit. Se usa
-        # en `transform` para evitar leak temporal en tenure_FUNDO_days: sin
-        # esto, si una fila nueva llega con fecha anterior al min visto en fit
-        # (backfill), `transform("min")` sobre el dataframe combinado redefine
-        # el origen del fundo -> tenure de filas historicas y nuevas inconsistente.
         fechas_fit = pd.to_datetime(X[DATE_COLUMN], errors="coerce")
         self.fundo_first_seen_: dict = fechas_fit.groupby(X["FUNDO"]).min().dropna().to_dict()
         return self
 
     def fit_transform(self, X: pd.DataFrame, y=None, **fit_params) -> pd.DataFrame:
-        # 1. Memoriza historial.
         self.fit(X, y)
-        # 2. Calcula lags sobre el propio train llamando a la implementacion
-        #    canonica con (X + target). Devuelve X con las nuevas columnas.
         df = X.copy()
         df[TARGET] = y.values if isinstance(y, pd.Series) else np.asarray(y, dtype=float)
         df_with_lags = add_lag_features(df, self._flags()).drop(columns=[TARGET])
-        # Cache de transient: permite que `final_pipeline.predict(X_train)`
-        # (caso 'Aplicacion Total' en single_run.py) reutilice los lags ya
-        # computados en fit_transform en vez de pasar por el camino `transform`
-        # que duplicaria filas y produciria lags con leakage o ventana
-        # diluida. Se descarta al picklear (`__getstate__`) para no inflar
-        # el artifact MLflow ni filtrarse a inferencia.
         self._fit_X_ref_ = X
         self._fit_output_ = df_with_lags
         return df_with_lags
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        # Caches transient: no deben viajar en el pickle del modelo. En
-        # inferencia, el LagFeatureTransformer recibe data nueva y `transform`
-        # entra por el camino normal (history_ + filas nuevas).
         state.pop("_fit_X_ref_", None)
         state.pop("_fit_output_", None)
         return state
@@ -812,10 +679,6 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
             raise RuntimeError(
                 "LagFeatureTransformer no fue ajustado. Llama fit/fit_transform primero."
             )
-        # Atajo in-sample: si la pipeline llama transform con el MISMO objeto
-        # que se uso en fit_transform, devolvemos los lags ya calculados.
-        # Object identity (`is`) es estricto a proposito: cualquier copia
-        # cae al camino normal.
         cached_X = getattr(self, "_fit_X_ref_", None)
         if cached_X is not None and X is cached_X:
             return self._fit_output_
@@ -823,11 +686,8 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
         self._validate_input(X)
 
         X_work = X.copy().reset_index(drop=True)
-        # __row_id preserva el orden original para reordenar al final.
         X_work["__row_id"] = np.arange(len(X_work))
         X_work["__is_new"] = True
-        # add_lag_features requiere TARGET; en inferencia no lo tenemos.
-        # NaN propaga correctamente por rolling.median (skipna).
         if TARGET not in X_work.columns:
             X_work[TARGET] = np.nan
 
@@ -835,15 +695,9 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
         history["__row_id"] = -1
         history["__is_new"] = False
 
-        # Alinear columnas: history tiene las minimas (_HISTORY_COLS+TARGET);
-        # X_work puede traer mas columnas raw (DPC, %INDUS, etc). Para el
-        # calculo solo importan _HISTORY_COLS+TARGET, asi que rellenamos las
-        # faltantes en history con NaN.
         for col in X_work.columns:
             if col not in history.columns:
                 history[col] = np.nan
-        # Y a la inversa: si history trajera columnas que X_work no tiene
-        # (no deberia pero defensivo), las descartamos.
         history = history[X_work.columns]
 
         combined = pd.concat([history, X_work], axis=0, ignore_index=True)
@@ -855,19 +709,12 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
             .reset_index(drop=True)
         )
 
-        # Override tenure_FUNDO_days usando el origen memoizado en fit.
-        # add_lag_features lo recalculo sobre el combined (history + new) lo
-        # cual reintroduce leak si llegan filas con fechas anteriores al
-        # min(FUNDO) del fit (backfill). Aqui reescribimos con el dict del fit.
-        # Fundo no visto en fit -> tenure=0 (cold-start: primera vez que se ve).
         if hasattr(self, "fundo_first_seen_") and "tenure_FUNDO_days" in new_only.columns:
             fechas_new = pd.to_datetime(new_only[DATE_COLUMN], errors="coerce")
             first_seen_series = new_only["FUNDO"].map(self.fundo_first_seen_)
             tenure_override = (fechas_new - first_seen_series).dt.days.astype(float)
-            # Fundos no vistos en fit (NaN first_seen) -> tenure = 0
             new_only["tenure_FUNDO_days"] = tenure_override.fillna(0.0)
 
-        # Limpiar helpers y el placeholder de TARGET.
         drop_cols = ["__row_id", "__is_new"]
         if TARGET in new_only.columns and TARGET not in X.columns:
             drop_cols.append(TARGET)
@@ -875,6 +722,5 @@ class LagFeatureTransformer(BaseEstimator, TransformerMixin):
 
     def get_feature_names_out(self, input_features=None) -> list[str]:
         base: list[str] = list(input_features) if input_features is not None else []
-        # Filtra TARGET si vino en input_features (no es output).
         base = [c for c in base if c != TARGET]
         return base + lag_output_columns(self._flags())

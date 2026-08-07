@@ -27,7 +27,6 @@ if not _varieties:
 _cov = build_coverage_vm(_varieties)
 _with_model = [v for v in _varieties if v.model_loaded]
 
-# ── Resumen ──────────────────────────────────────────────────────────────
 section_title("📊 Resumen")
 _c1, _c2, _c3, _c4 = st.columns(4)
 with _c1:
@@ -66,7 +65,6 @@ if not _with_model:
     )
     st.stop()
 
-# ── Comparativo (out-of-fold) ─────────────────────────────────────────────
 if len(_with_model) >= 2:
     section_title("🔬 Comparativo de métricas (out-of-fold)")
     st.plotly_chart(
@@ -79,7 +77,6 @@ if len(_with_model) >= 2:
         use_container_width=True,
     )
 
-# ── Detalle por variedad (filtro + cards + tabla de best-params) ──────────
 section_title("🔎 Detalle por variedad")
 _sel = st.selectbox("Variedad", sorted(v.name for v in _with_model))
 _vm = next(v for v in _with_model if v.name == _sel)
@@ -102,7 +99,6 @@ with _m4:
 with _m5:
     insight_card("Salud", _detail.badge_label, "Brecha train vs test", _detail.badge_variant)
 
-# ── Overfit gap (train vs test) ───────────────────────────────────────────
 _gaps = _detail.gaps
 if _gaps.has_train:
     section_title("⚖️ Brecha train vs test")
@@ -137,7 +133,6 @@ else:
         "El análisis de brecha requiere que el trainer exponga métricas de entrenamiento."
     )
 
-# ── Hiperparámetros del campeón (agrupados por etapa) ─────────────────────
 section_title("⚙️ Hiperparámetros del campeón")
 _params = _detail.params
 if _params.has_any:

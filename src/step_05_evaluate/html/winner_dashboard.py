@@ -115,22 +115,16 @@ def render_winner_dashboard(
     )
     actions_html = build_actions_section(kit.actions)
 
-    # PDP (Partial Dependence Plots): defensivo, requiere cargar pipeline +
-    # transformar X_sample. Si cualquier paso falla, la seccion se omite.
     pdp_html = ""
     if X_raw is not None and champion.pipeline_path:
         try:
             import joblib
 
             ensemble = joblib.load(champion.pipeline_path)
-            # Tomamos el primer pipeline del ensemble para preprocessor + features
             inner_pipe = ensemble.models_[0] if hasattr(ensemble, "models_") else ensemble
             preprocessor = inner_pipe.named_steps["preprocessor"]
             X_sample = X_raw.head(min(500, len(X_raw)))
             X_transformed = preprocessor.transform(X_sample)
-            # `preprocessor.transform()` puede devolver ndarray (default
-            # sklearn) o DataFrame. Preferimos `get_feature_names_out()` y
-            # caemos a `.columns` o a nombres sinteticos si no esta disponible.
             try:
                 feature_names = list(preprocessor.get_feature_names_out())
             except (AttributeError, ValueError):
@@ -159,8 +153,6 @@ def render_winner_dashboard(
         real=kit.real,
     )
 
-    # Run identification para trazabilidad: run_id MLflow truncado + link al
-    # tracking server. Permite ir del HTML al run de MLflow sin buscar manual.
     run_id = champion.mlflow_run_id or ""
     run_id_short = run_id[:12] if run_id else ""
     mlflow_link = (

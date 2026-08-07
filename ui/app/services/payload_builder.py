@@ -31,10 +31,6 @@ def build_forecast_payload(
         "FORMATO": formato,
         "FUNDO": fundo,
     }
-    # `is not None` (no `> 0`): si el usuario escribió un valor explícito en el
-    # form — incluso 0 — debe viajar al backend para que aparezca en el panel
-    # de drift. El default vacío del form se traduce a None y queda fuera del
-    # payload, dejando que el imputer del modelo rellene con la mediana.
     if indus_pct is not None:
         payload["%INDUS"] = indus_pct
     if p_baya is not None:

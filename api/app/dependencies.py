@@ -21,17 +21,7 @@ from app.services import (
     MLflowService,
 )
 
-# ============================================================================
-# Database
-# ============================================================================
-
-
 DbSession = Annotated[AsyncSession, Depends(get_session)]
-
-
-# ============================================================================
-# MLflow Service
-# ============================================================================
 
 
 def get_mlflow_service(request: Request) -> MLflowService:
@@ -56,11 +46,6 @@ def get_mlflow_service(request: Request) -> MLflowService:
 MLflow = Annotated[MLflowService, Depends(get_mlflow_service)]
 
 
-# ============================================================================
-# Drift Service
-# ============================================================================
-
-
 def get_drift_service(request: Request) -> DriftService:
     """Devuelve el DriftService singleton inicializado en el lifespan.
 
@@ -70,8 +55,6 @@ def get_drift_service(request: Request) -> DriftService:
     """
     service: DriftService | None = getattr(request.app.state, "drift_service", None)
     if service is None:
-        # Fallback defensivo: si el lifespan no lo inicializó (e.g. en tests),
-        # lo construimos al vuelo con el MLflowService disponible.
         mlflow_service: MLflowService | None = getattr(request.app.state, "mlflow_service", None)
         if mlflow_service is None:
             raise RuntimeError(
@@ -86,11 +69,6 @@ def get_drift_service(request: Request) -> DriftService:
 Drift = Annotated[DriftService, Depends(get_drift_service)]
 
 
-# ============================================================================
-# Feature Pipeline
-# ============================================================================
-
-
 @lru_cache(maxsize=1)
 def get_feature_pipeline() -> FeaturePipeline:
     """`FeaturePipeline` es stateless; lru_cache garantiza un único
@@ -99,11 +77,6 @@ def get_feature_pipeline() -> FeaturePipeline:
 
 
 Features = Annotated[FeaturePipeline, Depends(get_feature_pipeline)]
-
-
-# ============================================================================
-# Forecast Service (orquestación)
-# ============================================================================
 
 
 def get_forecast_service(
@@ -121,11 +94,6 @@ def get_forecast_service(
 
 
 ForecastSvc = Annotated[ForecastService, Depends(get_forecast_service)]
-
-
-# ============================================================================
-# Variety Validation
-# ============================================================================
 
 
 def validate_optional_variety(variety: str | None) -> str | None:
@@ -163,8 +131,6 @@ def get_validated_variety(
     Raises:
         VarietyNotFoundError: Si la variedad no está en el catálogo
     """
-    # variety nunca es None aquí (Path obligatorio); el cast tranquiliza al
-    # type checker sobre el retorno str | None de la función compartida.
     return validate_optional_variety(variety)  # type: ignore[return-value]
 
 

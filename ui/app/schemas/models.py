@@ -19,10 +19,6 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
 
-# El backend (`/varieties/{variety}`) devuelve las métricas con sus nombres
-# CRUDOS de MLflow (nested_cv_*_mean, full_model_r2, ...), no `test_mae`/
-# `test_r2`. Resolvemos sobre una lista de candidatos para que el dashboard
-# muestre el valor real out-of-fold en vez de 0.
 _MAE_KEYS: tuple[str, ...] = ("test_mae", "mae", "nested_cv_mae_mean")
 _R2_KEYS: tuple[str, ...] = ("test_r2", "r2", "nested_cv_r2_mean", "full_model_r2")
 
@@ -71,16 +67,11 @@ class PredictionResult(_Frozen):
     variety: str
     kghora: float
     kgjn: float | None = None
-    # Banda de incertidumbre (conformal por fundo / heurística). Mirror de
-    # PredictionResponse del backend: sin estos campos la UI descartaba la
-    # banda que el API ya calcula (invariante #10).
     kghora_std: float | None = None
     kghora_lo: float | None = None
     kghora_hi: float | None = None
     confidence: Literal["alta", "media", "baja"] | None = None
     inputs: dict = Field(default_factory=dict)
-    # Drift report copiado del ForecastRecord subyacente. None cuando el
-    # backend no expuso baseline para esa variedad.
     drift: DriftReport | None = None
 
 
@@ -147,9 +138,6 @@ class ForecastRecord(_Frozen):
     horas_efectivas: float | None = None
     kghora_pred: float = 0.0
     kgjn_pred: float | None = None
-    # Banda de incertidumbre (mirror de ForecastResponse del backend). El
-    # API las emite (conformal por fundo); sin estos campos la UI las
-    # descartaba en silencio vía _Frozen (invariante #10).
     kghora_std: float | None = None
     kghora_lo: float | None = None
     kghora_hi: float | None = None
@@ -311,7 +299,4 @@ class ServiceHealth(_Frozen):
         return self.status in ("healthy", "ok")
 
 
-# Resuelve forward references: PredictionResult.drift apunta a DriftReport,
-# definida más abajo en el archivo. Llamamos model_rebuild() para que Pydantic
-# resuelva el string `"DriftReport | None"` ahora que la clase ya existe.
 PredictionResult.model_rebuild()

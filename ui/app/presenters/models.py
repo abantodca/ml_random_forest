@@ -12,13 +12,10 @@ from dataclasses import dataclass, field
 
 from app.schemas import VarietyViewModel
 
-# ── Umbrales de sobreajuste ───────────────────────────────────────────────────
-# MAE gap: (test_mae - train_mae) / test_mae  (positivo = train < test → sobreajuste)
-# R² gap:  train_r2 - test_r2                 (positivo = tren mejor que test)
-_OVERFIT_MAE_THR_WARN = 0.15  # gap relativo MAE > 15 % → warning
-_OVERFIT_MAE_THR_BAD = 0.30  # gap relativo MAE > 30 % → danger
-_OVERFIT_R2_THR_WARN = 0.08  # gap absoluto R² > 0.08 → warning
-_OVERFIT_R2_THR_BAD = 0.15  # gap absoluto R² > 0.15 → danger
+_OVERFIT_MAE_THR_WARN = 0.15
+_OVERFIT_MAE_THR_BAD = 0.30
+_OVERFIT_R2_THR_WARN = 0.08
+_OVERFIT_R2_THR_BAD = 0.15
 
 
 def short_param(key: str) -> str:
@@ -35,7 +32,6 @@ def _overfit_badge(mae_gap_rel: float | None, r2_gap: float | None) -> tuple[str
     """Retorna (label, variant) para el badge de salud del modelo."""
     if mae_gap_rel is None and r2_gap is None:
         return "Sin datos train", "info"
-    # Combina ambos gaps: el peor determina el nivel
     is_bad = (mae_gap_rel is not None and mae_gap_rel > _OVERFIT_MAE_THR_BAD) or (
         r2_gap is not None and r2_gap > _OVERFIT_R2_THR_BAD
     )
@@ -72,25 +68,23 @@ def _train_test_gaps(
 
     mae_gap_rel: float | None = None
     if tr_mae is not None and te_mae is not None and te_mae != 0:
-        # gap = cuánto mejor (o peor) entrena vs generaliza: train < test → sobreajuste
-        mae_gap_rel = (te_mae - tr_mae) / te_mae  # positivo cuando test > train
+        mae_gap_rel = (te_mae - tr_mae) / te_mae
 
     r2_gap: float | None = None
     if tr_r2 is not None and te_r2 is not None:
-        r2_gap = tr_r2 - te_r2  # positivo cuando train > test
+        r2_gap = tr_r2 - te_r2
 
     return tr_mae, te_mae, mae_gap_rel, tr_r2, te_r2, r2_gap
 
 
-# ── View-models ───────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class CoverageVM:
     total: int
     n_with_model: int
     pending: int
     coverage_pct: float
-    coverage_variant: str  # success / warning / danger
-    with_model_variant: str  # success / accent
+    coverage_variant: str
+    with_model_variant: str
 
 
 @dataclass(frozen=True)
@@ -110,8 +104,8 @@ class GapsVM:
 @dataclass(frozen=True)
 class ParamGroupsVM:
     has_any: bool
-    reg_rows: list[dict] = field(default_factory=list)  # regresor + otros (mezclados)
-    prep_rows: list[dict] = field(default_factory=list)  # preprocesador
+    reg_rows: list[dict] = field(default_factory=list)
+    prep_rows: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

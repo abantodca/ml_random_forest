@@ -44,38 +44,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Umbrales (algoritmo, no deployment)
-# ---------------------------------------------------------------------------
-
-# z-score sobre numéricas (usa mediana e IQR, robusto a colas largas).
 Z_OK_THRESHOLD: float = 1.0
 Z_WARNING_THRESHOLD: float = 3.0
 
-# Frecuencia mínima de una categoría para considerarla "habitual".
-CATEGORY_RARE_THRESHOLD: float = 0.01  # <1% del baseline = rara
+CATEGORY_RARE_THRESHOLD: float = 0.01
 
-# Population Stability Index: regla de oro de la industria (riesgo crediticio).
 PSI_OK_THRESHOLD: float = 0.10
 PSI_WARNING_THRESHOLD: float = 0.25
 
-# Tamaño mínimo de muestra para que K-S / Chi² / PSI sean confiables.
 MIN_BATCH_FOR_DISTRIBUTION_TESTS: int = 30
 
-# Pequeña constante para evitar log(0) en PSI.
 _PSI_EPS: float = 1e-4
 
-# p-value bajo = drift significativo (convención estándar α=0.05).
 _PVALUE_ALPHA: float = 0.05
-
-# NUMERIC_FEATURES, CATEGORICAL_FEATURES, MIN_HISTORY_SAMPLES y las
-# estructuras de baseline (NumericBaseline, VarietyBaseline) viven ahora en
-# `drift_baseline.py` junto al extractor que las produce; aquí se importan.
-
-
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
 
 
 class DriftService:
@@ -88,16 +69,8 @@ class DriftService:
     def __init__(self, mlflow_service: MLflowService) -> None:
         self._mlflow_service = mlflow_service
         self._cache: dict[str, tuple[str, VarietyBaseline]] = {}
-        # Extractor stateless: reconstruye el baseline desde el Pipeline.
         self._extractor = DriftBaselineExtractor()
-        # `compute`/`compute_batch` corren en threadpool (ver ForecastService):
-        # el lock evita que dos requests concurrentes del mismo cold path
-        # descarguen y desempaqueten el modelo dos veces.
         self._baseline_lock = threading.Lock()
-
-    # ------------------------------------------------------------------
-    # API pública
-    # ------------------------------------------------------------------
 
     def compute(self, variety: str, features_df: pd.DataFrame) -> list[dict[str, Any] | None]:
         """Devuelve un reporte de drift por fila (o None si no hay baseline).
@@ -175,10 +148,6 @@ class DriftService:
             )
             return None
 
-    # ------------------------------------------------------------------
-    # Construcción de baseline (lazy, una vez por (variety, run_id))
-    # ------------------------------------------------------------------
-
     def _get_baseline(self, variety: str) -> VarietyBaseline | None:
         version_info = self._mlflow_service.get_latest_version_info(variety)
         if not version_info:
@@ -190,7 +159,6 @@ class DriftService:
             return cached[1]
 
         with self._baseline_lock:
-            # Double-check: otro thread pudo construirlo mientras esperábamos.
             cached = self._cache.get(variety)
             if cached and cached[0] == run_id:
                 return cached[1]
@@ -224,10 +192,6 @@ class DriftService:
         )
         return baseline
 
-    # ------------------------------------------------------------------
-    # Reporte por fila
-    # ------------------------------------------------------------------
-
     def _row_report(
         self,
         baseline: VarietyBaseline,
@@ -243,10 +207,6 @@ class DriftService:
             if nb is None:
                 continue
             value = row.get(col)
-            # Si la feature es opcional (%INDUS, P/BAYA) y no vino en el
-            # request, la mostramos igual con "no enviado" para que el
-            # panel exponga el rango histórico — el usuario ve qué valor
-            # esperaría el modelo si decidiera incluirla.
             if value is None or pd.isna(value):
                 per_feature.append(
                     {
@@ -373,10 +333,6 @@ class DriftService:
             "entrenamiento. Revisar antes de tomar decisiones."
         )
 
-    # ------------------------------------------------------------------
-    # Reporte agregado del lote (PSI + K-S + Chi²)
-    # ------------------------------------------------------------------
-
     def _batch_report(
         self,
         baseline: VarietyBaseline,
@@ -388,8 +344,6 @@ class DriftService:
         psi_count = 0
         worst_status = "ok"
 
-        # Numéricas: PSI (siempre que haya baseline) + K-S (solo si hay
-        # samples crudos en baseline, hoy solo KG/HA).
         for col in NUMERIC_FEATURES:
             nb = baseline.numeric.get(col)
             if nb is None or col not in features_df.columns:
@@ -405,9 +359,6 @@ class DriftService:
             if ks_stat is not None:
                 method_parts.append("ks")
 
-            # Combinación: PSI domina; K-S puede subir el status si detecta
-            # diferencia significativa que PSI no capturó (por ejemplo,
-            # corrimiento de la mediana sin cambio de bins).
             feature_status = psi_status
             if ks_pval is not None and ks_pval < _PVALUE_ALPHA and feature_status == "ok":
                 feature_status = "warning"
@@ -430,11 +381,9 @@ class DriftService:
                     "source": nb.source,
                 }
             )
-            psi_sum += min(psi, 1.0)  # capped para que un PSI gigante no domine
+            psi_sum += min(psi, 1.0)
             psi_count += 1
 
-        # Categóricas: PSI + Chi² (goodness-of-fit) cuando hay >=2 categorías
-        # en común con el baseline.
         for col in CATEGORICAL_FEATURES:
             cb = baseline.categorical.get(col)
             if cb is None or col not in features_df.columns:
@@ -457,8 +406,6 @@ class DriftService:
             if chi2_pval is not None and chi2_pval < _PVALUE_ALPHA and feature_status == "ok":
                 feature_status = "warning"
             if n_unseen > 0:
-                # Categoría no vista siempre eleva el estado a alert: es
-                # señal categórica de drift estructural.
                 feature_status = "alert"
             worst_status = self._merge_status(worst_status, feature_status)
 
@@ -485,7 +432,6 @@ class DriftService:
 
         score = psi_sum / max(psi_count, 1)
 
-        # Conteo por estado de las filas individuales (si vienen).
         row_counts = {"ok": 0, "warning": 0, "alert": 0}
         if per_row_reports:
             for r in per_row_reports:
@@ -528,14 +474,9 @@ class DriftService:
             [-np.inf, nb.p05, nb.p25, nb.center, nb.p75, nb.p95, np.inf],
             dtype=float,
         )
-        # Defensivo: edges deben ser monotónicamente crecientes. Cuando una
-        # feature tiene varianza muy chica (todo el batch igual), p25=p75
-        # y np.histogram falla. Forzamos monotonicidad acumulada.
         edges = np.maximum.accumulate(edges)
-        # Y eliminamos duplicados internos (bins de tamaño 0 colapsan).
         unique_edges, _ = np.unique(edges, return_index=True)
         if len(unique_edges) < 3:
-            # Pipeline degenerado: no hay bins distinguibles.
             return 0.0, "ok"
         edges = unique_edges
 
@@ -546,8 +487,6 @@ class DriftService:
                 return 0.0, "ok"
             baseline_freqs = baseline_counts.astype(float) / total
         else:
-            # Reparto teórico para 6 bins. Si los edges colapsaron, repartimos
-            # uniformemente entre los bins resultantes.
             n_bins = len(edges) - 1
             theoretical = np.array(
                 [0.05, 0.20, 0.25, 0.25, 0.20, 0.05],
@@ -627,9 +566,6 @@ class DriftService:
             [baseline_freqs[c] for c in common_cats],
             dtype=float,
         )
-        # Renormalizamos para que sum(expected) == sum(observed) (requisito
-        # de scipy.stats.chisquare). Las masas omitidas (categorías no
-        # vistas en baseline) ya se contaron en PSI.
         if expected_p.sum() <= 0:
             return None, None
         expected = expected_p / expected_p.sum() * obs.sum()

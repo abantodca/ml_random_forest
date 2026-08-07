@@ -10,7 +10,7 @@ de imports client ↔ schemas. Quien los necesite los importa con
 `from app.client.mappers import ...` (path directo).
 """
 
-from app.client import endpoints  # mantiene `app.client.endpoints` accesible como módulo
+from app.client import endpoints
 from app.client.api_client import ApiClient
 from app.client.endpoints import (
     CATALOGS,
@@ -33,9 +33,7 @@ from app.client.endpoints import (
 )
 
 __all__ = [
-    # Cliente HTTP
     "ApiClient",
-    # Endpoints (constantes + builders)
     "HEALTH",
     "RELOAD_MODELS",
     "VARIETIES",
@@ -53,6 +51,5 @@ __all__ = [
     "forecasts_by_fecha",
     "history_list",
     "history_upload",
-    # Submódulo expuesto para usos `app.client.endpoints.*`
     "endpoints",
 ]

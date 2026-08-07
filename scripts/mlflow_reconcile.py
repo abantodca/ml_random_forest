@@ -51,7 +51,6 @@ import boto3
 import mlflow
 from mlflow.tracking import MlflowClient
 
-# Prefijo raiz dentro del bucket (== `--artifacts-destination s3://<bucket>/artifacts`).
 ARTIFACTS_ROOT = "artifacts"
 
 
@@ -59,26 +58,18 @@ def log(msg: str) -> None:
     print(f"[mlflow-reconcile] {msg}", flush=True)
 
 
-# ---------------------------------------------------------------------------
-# Resolucion de entorno
-# ---------------------------------------------------------------------------
 def resolve_config() -> tuple[str, str, str, str]:
     """Devuelve (tracking_uri, bucket, experiment_prefix, registry_prefix)."""
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
     bucket = os.environ.get("S3_MLFLOW_BUCKET") or os.environ.get("S3_ARTIFACTS_BUCKET")
     if not bucket:
         log("ERROR: falta S3_MLFLOW_BUCKET/S3_ARTIFACTS_BUCKET; nada que reconciliar.")
-        sys.exit(0)  # best-effort: no bloquear el arranque
-    # Espejan al trainer: experimento = f"{MLFLOW_EXPERIMENT_PREFIX}{variety}",
-    # modelo registrado = f"{MODEL_REGISTRY_PREFIX}{variety}".
+        sys.exit(0)
     experiment_prefix = os.environ.get("MLFLOW_EXPERIMENT_PREFIX", "")
     registry_prefix = os.environ.get("MODEL_REGISTRY_PREFIX", "rnd-forest-")
     return tracking_uri, bucket, experiment_prefix, registry_prefix
 
 
-# ---------------------------------------------------------------------------
-# Helpers S3
-# ---------------------------------------------------------------------------
 def s3_list(s3, bucket: str, prefix: str) -> list[dict]:
     """Lista TODOS los objetos bajo `prefix` (paginado)."""
     out: list[dict] = []
@@ -116,9 +107,6 @@ def s3_download_prefix(s3, bucket: str, prefix: str, dest: Path) -> int:
     return n
 
 
-# ---------------------------------------------------------------------------
-# Descubrimiento de campeones en S3
-# ---------------------------------------------------------------------------
 def discover_champions(s3, bucket: str) -> dict[str, dict]:
     """Encuentra el champion_<variety>.json mas reciente por variedad.
 
@@ -133,7 +121,6 @@ def discover_champions(s3, bucket: str) -> dict[str, dict]:
     by_variety: dict[str, dict] = {}
     for o in sorted(champ_keys, key=lambda x: x["LastModified"]):
         key = o["Key"]
-        # artifacts/<exp_id>/<run_id>/artifacts/champion/champion_<VAR>.json
         parts = key.split("/")
         exp_id = parts[1]
         variety = parts[-1][len("champion_") : -len(".json")]
@@ -145,7 +132,6 @@ def discover_champions(s3, bucket: str) -> dict[str, dict]:
         run_id = doc.get("champion_run_id")
         if not run_id:
             continue
-        # El sorted() asc por fecha deja el ultimo (mas reciente) como ganador.
         by_variety[variety] = {
             "exp_id": exp_id,
             "run_id": run_id,
@@ -166,13 +152,10 @@ def find_logged_model_prefix(s3, bucket: str, exp_id: str, run_id: str) -> str |
         except Exception:
             continue
         if f"run_id: {run_id}" in text:
-            return key.rsplit("/MLmodel", 1)[0] + "/"  # .../m-<id>/artifacts/
+            return key.rsplit("/MLmodel", 1)[0] + "/"
     return None
 
 
-# ---------------------------------------------------------------------------
-# Mapeo de metricas: run_summary JSON -> nombres que la API espera
-# ---------------------------------------------------------------------------
 def build_metrics(summary: dict) -> dict[str, float]:
     """Aplana el run_summary a los nombres de metrica que lee la API
     (`api/app/services/mlflow_service.py`): nested_cv_*, business_oof_mape,
@@ -184,16 +167,15 @@ def build_metrics(summary: dict) -> dict[str, float]:
     bo = summary.get("business_metrics_oof") or {}
     for k, v in bo.items():
         if isinstance(v, (int, float)):
-            m[f"business_oof_{k}"] = float(v)  # -> business_oof_mape, etc.
+            m[f"business_oof_{k}"] = float(v)
     fm = summary.get("full_metrics_model") or {}
     for k, v in fm.items():
         if isinstance(v, (int, float)):
-            m[f"full_model_{k}"] = float(v)  # -> full_model_r2, etc.
+            m[f"full_model_{k}"] = float(v)
     fb = summary.get("full_metrics_business") or {}
     for k, v in fb.items():
         if isinstance(v, (int, float)):
             m[f"full_business_{k}"] = float(v)
-    # Alias que la API lee como "train_mape" in-sample.
     if "mape" in fb and isinstance(fb["mape"], (int, float)):
         m["business_insample_mape"] = float(fb["mape"])
     return m
@@ -206,9 +188,6 @@ def build_params(summary: dict) -> dict[str, str]:
     return params
 
 
-# ---------------------------------------------------------------------------
-# Reconstruccion de una variedad
-# ---------------------------------------------------------------------------
 def already_registered(client: MlflowClient, model_name: str) -> bool:
     try:
         versions = client.search_model_versions(f"name='{model_name}'", max_results=1)
@@ -234,7 +213,6 @@ def reconstruct_variety(
         log(f"  {variety}: sin artifacts en {run_prefix}; salto.")
         return False
 
-    # run_summary (metricas/params) — el del modelo campeon.
     summary_key = next(
         (o["Key"] for o in objs if "/run_summary_" in o["Key"] and o["Key"].endswith(".json")),
         None,
@@ -278,14 +256,10 @@ def reconstruct_variety(
                     "reconciled_from_run_id": run_id,
                 }
             )
-            # Re-sube los artifacts del run original (incluye winner_dashboard/,
-            # que la API lista para servir el reporte HTML).
             mlflow.log_artifacts(str(run_dir))
 
             model_uri = None
             if n_model:
-                # Re-loguea el Logged Model como artifact del run nuevo; queda
-                # como pyfunc+sklearn cargable por la API (que importa `src`).
                 mlflow.log_artifacts(str(model_dir), artifact_path="model_pipeline")
                 model_uri = f"runs:/{new_run_id}/model_pipeline"
 
@@ -326,9 +300,6 @@ def register_model(
     log(f"  {variety}: registrado {model_name} v{mv.version} ✅")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dry-run", action="store_true", help="solo reporta, no escribe")

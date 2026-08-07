@@ -17,13 +17,11 @@ from app.models.forecast import Forecast
 from app.models.historical_observation import HistoricalObservation
 
 __all__ = [
-    # Database
     "Base",
     "dispose_engine",
     "get_engine",
     "get_session",
     "init_db",
-    # ORM models
     "Forecast",
     "HistoricalObservation",
 ]

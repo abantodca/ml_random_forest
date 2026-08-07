@@ -67,10 +67,6 @@ class ForecastService:
         }
     )
 
-    # ------------------------------------------------------------------
-    # API pública
-    # ------------------------------------------------------------------
-
     async def create_one(
         self,
         db: AsyncSession,
@@ -159,7 +155,6 @@ class ForecastService:
         """
         preds, stds, drift_reports, _ = await self._predict(variety, [forecast_data])
         kghora = preds[0]
-        # KGJN en memoria (no hay fila que persistir); misma fórmula que el CRUD.
         kgjn = crud.forecast.calc_kgjn(kghora, forecast_data.horas_efectivas)
 
         drift: DriftReport | None = None
@@ -190,9 +185,7 @@ class ForecastService:
         )
 
         items: list[PredictionResponse] = []
-        for idx, (forecast_data, kghora) in enumerate(
-            zip(forecasts_data, preds, strict=True)
-        ):
+        for idx, (forecast_data, kghora) in enumerate(zip(forecasts_data, preds, strict=True)):
             response = PredictionResponse(
                 variety=variety,
                 kghora_pred=kghora,
@@ -243,10 +236,7 @@ class ForecastService:
         std: float | None = None
         drift_dict: dict[str, Any] | None = None
         if model_changed:
-            merged = {
-                field: getattr(existing, field)
-                for field in ForecastCreate.model_fields
-            }
+            merged = {field: getattr(existing, field) for field in ForecastCreate.model_fields}
             merged.update(changes)
             forecast_data = ForecastCreate.model_validate(merged)
             preds, stds, drift_reports, _ = await self._predict(
@@ -268,10 +258,6 @@ class ForecastService:
             response = self._attach_uncertainty(response, response.kghora_pred, std)
             response = self._attach_drift(response, drift_dict)
         return response
-
-    # ------------------------------------------------------------------
-    # Helpers internos
-    # ------------------------------------------------------------------
 
     async def _predict(
         self,
@@ -305,14 +291,6 @@ class ForecastService:
         preds, stds = await self._mlflow.predict_with_std(variety, features_df)
         self._validate_predictions(variety, preds, stds, len(forecasts_data))
 
-        # `DriftService.compute` y `compute_batch` son síncronos. En el camino
-        # caliente (baseline ya cacheado por variedad) solo hacen aritmética
-        # vectorial (NumPy/Pandas) — intensivo en CPU pero rápido para N típico.
-        # En el camino frío (primera predicción de la variedad o tras un reload)
-        # `_get_baseline` hace dos llamadas de red a MLflow
-        # (get_latest_version_info + sklearn.load_model), que son bloqueantes.
-        # Para no congelar el event loop en ninguno de los dos casos,
-        # delegamos ambos cálculos al threadpool.
         loop = asyncio.get_running_loop()
         row_drifts = await loop.run_in_executor(None, self._drift.compute, variety, features_df)
         batch_drift = await loop.run_in_executor(
@@ -351,12 +329,6 @@ class ForecastService:
         if any(not math.isfinite(value) or value < 0 for value in halfwidths):
             raise PredictionError(variety, "el modelo devolvió bandas de incertidumbre no válidas")
 
-    # Umbral del SEMIANCHO relativo (halfwidth/pred) para clasificar
-    # confianza. El semiancho viene de MLflowService.predict_with_std:
-    # conformal q90 por fundo (con factor cold-start x2) cuando el modelo
-    # trae `conformal_`, o ±1.96·std del ensemble en modelos legacy.
-    # Referencias POP 2026-06-11: A9 ~0.31 rel (media), LN ~0.37 (media),
-    # cold-start C6 ~0.87 (baja — revisar manualmente).
     _CONF_MEDIA = 0.25
     _CONF_BAJA = 0.50
 
@@ -398,6 +370,5 @@ class ForecastService:
         try:
             response.drift = DriftReport.model_validate(drift_dict)
         except Exception as exc:
-            # Drift es metadata opcional: nunca debe tumbar el response.
             logger.warning("No se pudo serializar reporte de drift: %s", exc)
         return response

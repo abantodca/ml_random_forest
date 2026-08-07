@@ -77,7 +77,6 @@ def _abs_res_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
             hovertemplate="pred=%{x:.3f}<br>|residual|=%{y:.3f}<extra></extra>",
         )
     )
-    # Suavizado lowess para visualizar tendencia
     try:
         from statsmodels.nonparametric.smoothers_lowess import lowess
 
@@ -92,8 +91,6 @@ def _abs_res_vs_pred_fig(y_true: np.ndarray, y_pred: np.ndarray) -> go.Figure:
             )
         )
     except Exception as exc:
-        # El lowess es decorativo: sin la curva de tendencia el scatter
-        # de |residuos| sigue siendo interpretable.
         logger.debug("Suavizado lowess omitido: %s", exc)
     fig.update_xaxes(title="prediccion (y_pred)")
     fig.update_yaxes(title="|residual|")
@@ -164,7 +161,6 @@ def _run_residual_tests(residuals: np.ndarray, y_pred: np.ndarray) -> dict:
     ad = anderson_darling(res_series)
     jb = jarque_bera(res_series)
 
-    # Heteroscedasticidad: regresion residuals² ~ y_pred
     pred_series = pd.Series(y_pred, name="y_pred")
     resid_sq = pd.Series(residuals**2, name="resid_sq")
     bp = breusch_pagan(resid_sq, pd.DataFrame({"y_pred": pred_series}))
@@ -262,19 +258,15 @@ def render_residual_report(
     y_pred = np.asarray(y_pred, dtype=float)
     residuals = y_true - y_pred
 
-    # Tests estadisticos
     test_results = _run_residual_tests(residuals, y_pred)
 
-    # Plots
     fig_rvp = _residuals_vs_pred_fig(y_true, y_pred)
     fig_arvp = _abs_res_vs_pred_fig(y_true, y_pred)
     fig_hist = _residuals_hist_fig(residuals)
     fig_qq = _residuals_qq_fig(residuals)
 
-    # Bloques HTML de tests
     test_blocks_html = _render_test_blocks(test_results)
 
-    # Findings / verdict
     summary_findings = _build_residual_findings(test_results)
     findings_html = "".join(
         f'<li class="{cls}">{escape(msg)}</li>' for cls, msg in summary_findings
@@ -285,12 +277,10 @@ def render_residual_report(
     mae = float(np.mean(np.abs(residuals)))
     bias = float(np.mean(residuals))
 
-    # Reusa el tag canonico del proyecto (offline vs CDN segun config).
     from src.utils.html_assets import plotly_js_tag
 
     plotly_cdn = plotly_js_tag()
 
-    # Run identification para trazabilidad MLflow.
     run_meta = ""
     if run_id:
         run_id_short = run_id[:12]

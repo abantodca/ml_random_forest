@@ -24,11 +24,9 @@ from sklearn.compose import TransformedTargetRegressor
 
 from src.config import RANDOM_STATE
 
-CAP_PERCENTILE: float = 99.5  # p99.5 -> ~0.5% de filas aplastadas en train
+CAP_PERCENTILE: float = 99.5
 
 
-# Docstring compartido por las factories model_xgb / model_lgb. Se inyecta via
-# format() para evitar duplicar el bloque sobre paralelismo en cada modulo.
 _PARALLELISM_DOCSTRING = """`n_jobs` lee env var MODEL_N_JOBS (default -1 = todos los cores). Antes
     estaba hardcoded a 1, lo que desperdiciaba cores cuando se entrena UNA
     sola variedad (caso comun: `task train VARIETIES=POP`). Para multi-variedad

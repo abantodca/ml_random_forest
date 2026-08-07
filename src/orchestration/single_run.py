@@ -83,18 +83,11 @@ def train_model(
 
     t0 = time.perf_counter()
 
-    # Config POR VARIEDAD (P0.2): overrides explicitos (meses de temporada,
-    # umbral KNN, rare_min_count). Para variedades sin overrides es
-    # passthrough de los defaults globales (POP queda identico).
     variety_cfg = for_variety(
         variety,
         shadow_temporal=getattr(args, "shadow_temporal_window", False),
     )
 
-    # Presupuesto efectivo: override POR BACKEND (config.BACKEND_BUDGET_FRACTION).
-    # Por defecto el dict esta vacio -> todos los backends corren al perfil
-    # completo (frac=1.0). inner_folds intacto (barato; reducirlo degrada el
-    # tuning). Escala correctamente en smoke/dev/prod/prod_xl.
     frac = BACKEND_BUDGET_FRACTION.get(model_type, 1.0)
     eff = dict(settings)
     if frac < 1.0:
@@ -108,31 +101,22 @@ def train_model(
         )
 
     log.info(f"[1/6] Cargando datos | hoja={variety}")
-    # Las categorías raras se aprenden dentro del pipeline para que cada fold
-    # use únicamente sus frecuencias de train.
     X, y = load_data(
         sheet=variety,
         rare_min_count=variety_cfg.rare_min_count,
         collapse_rare_categories=False,
     )
-    business_cols = load_business_columns(sheet=variety)  # KG/JR + H-EF alineadas con (X,y)
+    business_cols = load_business_columns(sheet=variety)
 
     log.info("[2/6] Construyendo preprocesador...")
     preprocessor = create_preprocessing_pipeline(variety_cfg)
 
-    # Run name versionado: el experimento ya identifica la variedad, asi que
-    # el run solo necesita decir el modelo y su version (xgb_v1, xgb_v2, ...).
-    # `experiment_prefix` viene vacio por default desde config.py -> el
-    # experimento es el nombre de la variedad (e.g. "POP").
     experiment_name = f"{args.experiment_prefix}{variety}"
     version = next_run_version(experiment_name, model_type)
     run_name = f"{model_type}_v{version}"
 
     with safe_start_run(run_name=run_name) as run:
         set_initial_run_tags(variety, model_type, version, args)
-        # Trazabilidad: git commit + dataset hash + n_rows. Hace cada run
-        # reproducible y permite detectar drift automaticamente cuando
-        # dataset_sha256 cambia.
         log_run_metadata_and_params(
             variety=variety,
             model_type=model_type,
@@ -158,10 +142,6 @@ def train_model(
             variety_cfg=variety_cfg,
         )
 
-        # Bandas conformal por fundo + cold-start (2026-06-11): calibradas
-        # con los residuos OOF de ESTE nested CV y adjuntas al pipeline como
-        # atributo pickle-safe. La API las usa para kghora_lo/hi en lugar de
-        # la heuristica ±1.96·std del ensemble (cobertura real << nominal).
         try:
             from src.step_05_evaluate.conformal_bands import build_conformal_metadata
 
@@ -196,7 +176,6 @@ def train_model(
         log_nested_cv_summary(nested_metrics)
         log_params(best_params)
 
-        # ---- Validacion en unidad de negocio (KG/JR = KG/JR_H * H-EF) ----
         business_validation = run_business_validation(
             oof=oof,
             final_pipeline=final_pipeline,
@@ -212,9 +191,6 @@ def train_model(
             log=log,
         )
 
-        # ---- Metricas en DATASET COMPLETO (refit + predict all) ----
-        # "Aplicacion Total": tarjeta del dashboard ejecutivo. Es la perspectiva
-        # del modelo de produccion aplicado a toda la historia disponible.
         full_metrics_business, full_metrics_h, _pred_h_full = full_dataset_metrics(
             final_pipeline,
             X,
@@ -224,15 +200,6 @@ def train_model(
         )
         log_full_metrics(full_metrics_business, full_metrics_h)
 
-        # NOTE: el Excel multi-hoja YA NO se genera aqui. Se genera UNA SOLA
-        # vez en `variety_runner` para el modelo CAMPEON, en
-        # `reports/Winner_{variety}.xlsx` (junto al HTML del dashboard).
-        # Razon: evitar archivos residuales de modelos perdedores.
-
-        # best_params como artifact JSON (precision sin truncado de MLflow params).
-        # Path versionado por run_name (xgb_v20, lgb_v3, ...) para que el archivo
-        # local de v19 NO sea sobrescrito por v20. MLflow ya tiene historial
-        # versionado por run_id, esto agrega trazabilidad fuera de MLflow.
         params_path = dump_json_artifact(
             ARTIFACTS_DIR / f"best_params_{variety}_{run_name}.json",
             best_params,
@@ -241,12 +208,6 @@ def train_model(
 
         log.info("[5/6] Persistiendo pipeline en MLflow...")
         model_uri = log_pipeline_with_signature(final_pipeline, X)
-        # MLflow 3.x guarda log_model en LoggedModel separado (visible en
-        # tab "Models" del experimento). Subimos tambien el .joblib y el OOF
-        # como artifacts tradicionales para que sean visibles bajo la
-        # pestaña "Artifacts" del run, tanto en MLflow local como en
-        # produccion (Fargate). Sin esto la pestaña aparece "No Artifacts
-        # Recorded" aunque el modelo si este registrado.
         log_artifact(str(local_pipeline), artifact_path="pipeline")
         log_artifact(str(oof_arr_path), artifact_path="oof")
 
@@ -261,8 +222,6 @@ def train_model(
 
         elapsed = time.perf_counter() - t0
         bv_oof_dump = _build_bv_oof_dump(business_validation)
-        # Summary local versionado por run_name. Cada run histórico (xgb_v19,
-        # xgb_v20, ...) conserva su propio JSON sin sobrescribirse.
         summary = build_run_summary(
             variety=variety,
             model_type=model_type,
@@ -307,7 +266,6 @@ def train_model(
             model_uri=model_uri,
         )
 
-    # liberar referencias grandes ANTES del cleanup global
     del X, y, preprocessor, final_pipeline, best_params, nested_metrics, oof
     del business_cols
     return result

@@ -116,10 +116,6 @@ def _model_charts(r: ModelResult, *, is_winner: bool) -> str:
 
 
 _SUBGRP_MIN_N = 5
-# Tope de puntos por caja: el boxplot embebe el array completo en el HTML
-# (x7 tabs). El muestreo es determinista y sobre el array ORDENADO con paso
-# uniforme, asi que los cuantiles que dibuja la caja se preservan aun con
-# pocos puntos; 600 basta para mediana/cuartiles/bigotes estables.
 _BOX_MAX_POINTS = 600
 
 
@@ -317,10 +313,6 @@ def _build_subgroup_table(
     p50_g = float(np.percentile(abs_err, 50))
     p90_g = float(np.percentile(abs_err, 90))
     mae_g = float(np.mean(abs_err))
-    # Defensivo: si `real` y `abs_err` tienen tamaños distintos (p.ej. pickle
-    # antiguo con shape desalineado), no podemos reconstruir un `pred` valido.
-    # Misma validacion que en `_build_subgroup_block` (l.348). `mape_safe`
-    # recibe `(real, real - abs_err)` porque solo usa |yt-yp| (== abs_err).
     mape_g = mape_safe(real, real - abs_err) if real.size == abs_err.size else float("nan")
 
     rows: list[dict] = [
@@ -529,8 +521,6 @@ def build_technical_section(
         )
         for i, r in enumerate(ordered)
     )
-    # Solo los charts del CAMPEON: los scatters de los descartados duplican
-    # peso del HTML sin sumar a la decision (sus KPIs ya estan en las cards).
     charts = _model_charts(champion, is_winner=True)
     subgroup_block = _build_subgroup_block(X_aligned, abs_errors, real)
     justification = decision.get("justification", "")

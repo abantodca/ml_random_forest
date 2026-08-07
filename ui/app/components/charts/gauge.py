@@ -7,9 +7,6 @@ import plotly.graph_objects as go
 from app.components.charts._common import AXIS_TEXT
 from app.core import TEMA
 
-# Umbrales del medidor de drift (espejan los del backend en
-# `app/services/drift_service.py`). El gauge muestra `score` ∈ [0,1] donde
-# 0=ok perfecto y 1=todo el batch fuera de distribución.
 _DRIFT_OK_LIMIT: float = 0.33
 _DRIFT_WARN_LIMIT: float = 0.66
 

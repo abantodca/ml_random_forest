@@ -20,9 +20,6 @@ import pandas as pd
 
 from app.schemas import ForecastCreate
 
-# Orden EXACTO de columnas de la signature MLflow del modelo entrenado
-# (ver MLmodel.signature.inputs del run mas reciente). Cualquier cambio
-# en el set de columnas raw del entrenamiento debe espejarse aqui.
 MODEL_INPUT_COLUMNS: list[str] = [
     "KG/HA",
     "%INDUS",
@@ -59,9 +56,6 @@ class FeaturePipeline:
                     "DPC": f.dpc,
                     "P/BAYA": f.p_baya,
                     "HA": f.ha,
-                    # DIA_COSECHA en el schema es int pero la signature MLflow
-                    # lo declara double; casteo explicito para que el enforce
-                    # de schema no rechace el batch.
                     "DIA_COSECHA": float(f.dia_cosecha),
                     "FORMATO": f.formato,
                     "FUNDO": f.fundo,

@@ -14,41 +14,29 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class Settings(BaseSettings):
     """Configuración centralizada de la aplicación"""
 
-    # Información del servicio
     app_name: str = "RND Forest Backend"
     app_version: str = "2.0.0"
     debug: bool = False
 
-    # MLflow
     mlflow_tracking_uri: str = "http://localhost:5000"
     mlflow_preload_models: bool = True
-    # Prefijo COMPLETO del registered model. Debe coincidir con
-    # MODEL_REGISTRY_PREFIX del trainer (src/config.py), default 'rnd-forest-'.
     experiment_prefix: str = "rnd-forest-"
 
-    # Base de datos PostgreSQL (obligatorio via DATABASE_URL en .env o entorno)
     database_url: str
 
-    # CORS
-    # NoDecode: evita que pydantic-settings intente parsear el env var como JSON;
-    # delegamos el split por comas al validator parse_cors.
     cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:8501",
         "http://localhost:3000",
     ]
 
-    # Servidor
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
 
-    # Health check
     health_cache_ttl_seconds: int = 30
 
-    # MLflow limits
     mlflow_max_registered_models: int = 1000
 
-    # Excel upload
     max_excel_file_size_mb: int = 10
 
     @field_validator("cors_origins", mode="before")
@@ -107,9 +95,6 @@ class Settings(BaseSettings):
             raise ValueError("log_level inválido")
         return normalized
 
-    # El repositorio comparte `.env` entre trainer, API e infraestructura.
-    # Cada servicio valida sus propias variables e ignora las que pertenecen
-    # a otro componente, evitando que el API falle al arrancar desde la raíz.
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -117,5 +102,4 @@ class Settings(BaseSettings):
     )
 
 
-# Singleton de configuración
 settings = Settings()

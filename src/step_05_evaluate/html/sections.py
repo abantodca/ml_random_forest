@@ -753,8 +753,6 @@ def _extract_row_context(X_aligned, i: int, has_X: bool) -> tuple:
             if "FORMATO" in row.index and pd.notna(row["FORMATO"]):
                 formato = str(row["FORMATO"])
         except Exception as exc:
-            # Metadata best-effort de la tabla de peores errores: la fila
-            # sale con "—" y el reporte sigue completo.
             logger.debug("Contexto de fila %s omitido: %s", i, exc)
     return fecha, fundo, formato
 
@@ -984,7 +982,6 @@ def build_diagnostic_links_section(
             f"</div></a>"
         )
     if residual_candidates:
-        # Mostrar todos los modelos (xgb_v1, lgb_v3, etc.)
         for r in residual_candidates[:5]:
             label = r.stem.replace(f"residuals_{variety}_", "")
             cards.append(

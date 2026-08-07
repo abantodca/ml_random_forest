@@ -76,7 +76,6 @@ def _render_results(result: F.BatchRunResult) -> None:
     vm = F.build_results_vm(result.preds, result.records)
     st.success(f"✅ {vm.n_preds} pronósticos generados y guardados")
 
-    # KPIs ejecutivos
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         kpi_card("Pronósticos", str(vm.n_preds), icon="🔮", variant="primary")
@@ -87,7 +86,6 @@ def _render_results(result: F.BatchRunResult) -> None:
     with k4:
         kpi_card("A revisar 🟡🔴", str(vm.flagged), icon="⚠️", variant=vm.flagged_variant)
 
-    # Alerta visible si hay registros fuera de distribución
     if vm.alert_msg:
         st.error(vm.alert_msg)
     elif vm.warning_msg:
@@ -188,7 +186,7 @@ def _render_upload_section() -> None:
             try:
                 raw = pd.read_csv(up) if up.name.endswith(".csv") else pd.read_excel(up)
                 st.session_state[_SS_GRID] = F.normalize_upload(raw)
-                st.session_state.pop(_EDITOR_KEY, None)  # forzar reseed del editor
+                st.session_state.pop(_EDITOR_KEY, None)
                 st.rerun(scope="fragment")
             except Exception as exc:
                 st.error(f"No se pudo leer el archivo: {exc}")
@@ -263,7 +261,6 @@ def _render_new(all_names: list[str]) -> None:
         key=_EDITOR_KEY,
     )
 
-    # Resumen pre-predicción: n filas y variedades involucradas
     _summary = F.pre_summary_text(edited)
     if _summary:
         st.info(_summary)
@@ -274,7 +271,6 @@ def _render_new(all_names: list[str]) -> None:
     _handle_predict(edited, all_names)
 
 
-# ── Render principal ────────────────────────────────────────────────────
 page_header(
     "Pronosticar",
     "Grilla editable: individual o masivo, con confiabilidad y drift",
@@ -283,10 +279,6 @@ page_header(
 
 _all = get_all_variety_names()
 if not _all:
-    # Lista vacía ⇒ dos causas distintas: backend caído vs. registry sin modelos
-    # (p. ej. entrenamiento en curso). `get_cached_health()` solo es None si el
-    # backend no responde, así que lo usamos para no mostrar un error de conexión
-    # falso cuando en realidad el servicio está OK pero aún no hay modelos.
     if get_cached_health() is None:
         st.error("No se puede conectar al backend. Verifica que el servicio esté corriendo.")
     else:

@@ -53,7 +53,5 @@ def predict_with_halfwidths(target, df: pd.DataFrame):
         return preds, conformal_halfwidths(conformal, df, len(preds))
     if hasattr(target, "predict_with_std"):
         mean, std = target.predict_with_std(df)
-        # ±1.96·std para aproximar el mismo contrato (semiancho de banda)
-        # que el camino conformal entrega directamente.
         return mean, 1.96 * np.asarray(std, dtype=float)
     return target.predict(df), None

@@ -36,27 +36,21 @@ from app.core.logger import logger
 
 __all__ = [
     "API_BATCH_MAX_ROWS",
-    # Configuración
     "Configuracion",
-    # Constantes - red / IO
     "DEFAULT_API_URL",
     "DEFAULT_TIMEOUT_HEALTH",
     "DEFAULT_TIMEOUT_READ",
     "DEFAULT_TIMEOUT_WRITE",
     "DEFAULT_TIMEOUT_BATCH",
-    # Constantes - caché
     "DEFAULT_CACHE_TTL_HEALTH",
     "DEFAULT_CACHE_TTL_VARIETIES",
     "DEFAULT_CACHE_TTL_FORECASTS",
     "CACHE_TTL_DASHBOARD_HTML",
-    # Constantes - logging
     "DEFAULT_LOG_LEVEL",
     "LOGGER_NAME",
-    # Constantes - workers / UI
     "WORKERS_VARIETY_ROOT",
     "WORKERS_VARIETY_DETAIL_MAX",
     "LONGITUD_VISIBLE_API_URL",
-    # Constantes - tema y datos
     "TEMA",
     "PALETA_SERIES",
     "COLUMNAS_REQUERIDAS",
@@ -64,9 +58,7 @@ __all__ = [
     "FORMATOS_FALLBACK",
     "FORMATO_DEFAULT_FALLBACK",
     "FUNDOS_FALLBACK",
-    # Excepciones de dominio
     "ApiConnectionError",
     "ApiResponseError",
-    # Logging
     "logger",
 ]

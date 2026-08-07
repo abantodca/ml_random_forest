@@ -31,10 +31,6 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Features del baseline (compartidas con DriftService)
-# ---------------------------------------------------------------------------
-
 NUMERIC_FEATURES: tuple[str, ...] = (
     "KG/HA",
     "%INDUS",
@@ -46,19 +42,9 @@ NUMERIC_FEATURES: tuple[str, ...] = (
 CATEGORICAL_FEATURES: tuple[str, ...] = ("FORMATO", "FUNDO")
 
 
-# Mínimo de filas históricas para considerar baseline numérico de KG/HA
-# desde history_ (por debajo cae al fallback con scaler_).
 MIN_HISTORY_SAMPLES: int = 30
 
-# Tope de muestras del baseline a guardar en memoria para K-S. Sub-muestreo
-# determinístico cuando history_ tiene >50k filas — K-S converge mucho
-# antes y guardar 50k floats por variedad es suficiente (~400KB).
 _MAX_BASELINE_SAMPLES: int = 50_000
-
-
-# ---------------------------------------------------------------------------
-# Estructuras de baseline
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -71,13 +57,13 @@ class NumericBaseline:
     percentiles. `p25`/`p75` se derivan de IQR cuando vienen del scaler.
     """
 
-    center: float  # = p50 (mediana)
-    scale: float  # = IQR (p75 - p25), siempre > 0
+    center: float
+    scale: float
     p05: float
     p25: float
     p75: float
     p95: float
-    source: str  # "history" | "scaler"
+    source: str
     samples: np.ndarray | None = None
 
 
@@ -90,11 +76,6 @@ class VarietyBaseline:
     date_to: str
     numeric: dict[str, NumericBaseline] = field(default_factory=dict)
     categorical: dict[str, dict[str, float]] = field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# Extractor
-# ---------------------------------------------------------------------------
 
 
 class DriftBaselineExtractor:
@@ -116,12 +97,10 @@ class DriftBaselineExtractor:
         outlier_upper: dict[str, float] | None = None
 
         for step in self._walk_pipeline_steps(pipeline):
-            # LagFeatureTransformer
             history_attr = getattr(step, "history_", None)
             if isinstance(history_attr, pd.DataFrame) and history_df is None:
                 history_df = history_attr
 
-            # CustomKNNImputer (tiene scaler_ con center_ y scale_)
             scaler_attr = getattr(step, "scaler_", None)
             if scaler_attr is not None and scaler is None:
                 center = getattr(scaler_attr, "center_", None)
@@ -134,7 +113,6 @@ class DriftBaselineExtractor:
                         or None
                     )
 
-            # OutlierCapper
             lower_attr = getattr(step, "lower_", None)
             upper_attr = getattr(step, "upper_", None)
             if (
@@ -201,13 +179,10 @@ class DriftBaselineExtractor:
             seen.add(id(obj))
             yield obj
 
-            # OOFEnsembleRegressor.models_ — lista de Pipelines fiteados.
-            # Usamos solo el primer modelo del ensemble (representativo).
             models_ = getattr(obj, "models_", None)
             if isinstance(models_, list) and models_:
                 stack.append(models_[0])
 
-            # Pipeline.named_steps (Bunch) es dict-like, .steps es lista.
             named_steps = getattr(obj, "named_steps", None)
             if isinstance(named_steps, dict):
                 stack.extend(named_steps.values())
@@ -218,14 +193,12 @@ class DriftBaselineExtractor:
                         if isinstance(entry, tuple) and len(entry) >= 2:
                             stack.append(entry[1])
 
-            # ColumnTransformer
             transformers_ = getattr(obj, "transformers_", None)
             if isinstance(transformers_, list):
                 for entry in transformers_:
                     if isinstance(entry, tuple) and len(entry) >= 2:
                         stack.append(entry[1])
 
-            # FeatureUnion
             transformer_list = getattr(obj, "transformer_list", None)
             if isinstance(transformer_list, list):
                 for entry in transformer_list:
@@ -242,7 +215,6 @@ class DriftBaselineExtractor:
     ) -> dict[str, NumericBaseline]:
         baselines: dict[str, NumericBaseline] = {}
 
-        # 1) Desde history_ (datos reales): solo KG/HA está disponible.
         if (
             history_df is not None
             and "KG/HA" in history_df.columns
@@ -252,7 +224,6 @@ class DriftBaselineExtractor:
             if len(values) >= MIN_HISTORY_SAMPLES:
                 p05, p25, p50, p75, p95 = np.percentile(values, [5, 25, 50, 75, 95])
                 iqr = max(float(p75 - p25), 1e-9)
-                # Sub-muestreo determinístico para K-S (cap en 50k filas).
                 if len(values) > _MAX_BASELINE_SAMPLES:
                     rng = np.random.default_rng(42)
                     samples = rng.choice(
@@ -273,8 +244,6 @@ class DriftBaselineExtractor:
                     samples=samples,
                 )
 
-        # 2) Resto de numéricas: derivadas de RobustScaler + OutlierCapper.
-        #    Sin muestras crudas -> K-S no aplica; PSI usa baseline asumido.
         if scaler is not None and scaler_cols:
             center_arr = np.asarray(scaler.center_, dtype=float).ravel()
             scale_arr = np.asarray(scaler.scale_, dtype=float).ravel()
@@ -290,13 +259,10 @@ class DriftBaselineExtractor:
                     iqr = 1e-9
                 p25 = center - iqr / 2.0
                 p75 = center + iqr / 2.0
-                # OutlierCapper bounds son Q1-3*IQR / Q3+3*IQR por defecto;
-                # usamos como p05/p95 aproximados (extremos visibles en
-                # entrenamiento sin ser outliers).
                 if outlier_lower and col in outlier_lower:
                     p05 = float(outlier_lower[col])
                 else:
-                    p05 = center - 1.65 * iqr  # ~p05 en distribución normal
+                    p05 = center - 1.65 * iqr
                 if outlier_upper and col in outlier_upper:
                     p95 = float(outlier_upper[col])
                 else:

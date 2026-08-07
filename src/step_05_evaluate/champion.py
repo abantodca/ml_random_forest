@@ -75,16 +75,11 @@ class ModelResult:
     pipeline_path: str
     elapsed_seconds: float
     business_metrics_oof: dict[str, float] | None = None
-    full_metrics: dict[str, float] | None = None  # KG/JR aplicado a TODO X
+    full_metrics: dict[str, float] | None = None
     business_validation: BusinessValidation | None = None
-    full_metrics_h: dict[str, float] | None = None  # KG/JR_H in-sample
+    full_metrics_h: dict[str, float] | None = None
     oof_y_true: np.ndarray | None = None
     oof_y_pred: np.ndarray | None = None
-    # URI del Logged Model devuelto por mlflow.sklearn.log_model en MLflow 3.x
-    # (formato `models:/m-<id>`). Se pasa a register_model para evitar el
-    # fallback "no artifacts at artifact path 'model_pipeline'". None si el
-    # log_pipeline absorbio el run inactivo o si el resultado se reconstruye
-    # desde variety_summary_*.json (caso post-mortem).
     model_uri: str | None = None
     composite_score: float = field(init=False)
 
@@ -122,10 +117,6 @@ class ModelResult:
         """
         if self.full_metrics and "mape" in self.full_metrics:
             return float(self.full_metrics["mape"])
-        # NOTA: este fallback OOF->full mezcla metricas heterogeneas (in-sample vs
-        # out-of-fold) dentro del lex-order de `_decision_key`. Esta decision esta
-        # BAJO REVISION; se conserva el comportamiento para no romper modelos
-        # antiguos sin `full_metrics`. Logueamos un WARNING para visibilidad.
         if self.business_metrics_oof and "mape" in self.business_metrics_oof:
             logger.warning(
                 "champion: full_mape fallback to OOF for model=%s (full_metrics missing)",
@@ -217,13 +208,8 @@ def select_champion(results: list[ModelResult]) -> ModelResult:
     eligible = passing_gap or list(results)
     best_mape = min(result.oof_mape for result in eligible)
     if math.isfinite(best_mape):
-        # La tolerancia se aplica respecto del mejor valor observado. Esto sí
-        # garantiza que 14.49 y 14.51 empaten; el bucketing anterior podía
-        # separarlos por caer a ambos lados de una frontera arbitraria.
         tied = [
-            result
-            for result in eligible
-            if result.oof_mape <= best_mape + OOF_MAPE_TIE_TOLERANCE
+            result for result in eligible if result.oof_mape <= best_mape + OOF_MAPE_TIE_TOLERANCE
         ]
     else:
         tied = eligible

@@ -23,12 +23,6 @@ logger = logging.getLogger(__name__)
 
 _CDN_URL = "https://cdn.plot.ly/plotly-3.1.0.min.js"
 
-# Loader del bundle comprimido. Plotly inline plano pesa ~4.8 MB; gzip+base64
-# lo baja a ~1.9 MB, pero la descompresion (DecompressionStream) es asincrona
-# y los <script> que genera `fig.to_html` llaman a `Plotly.newPlot` de forma
-# sincrona durante el parseo. El stub captura esas llamadas en una cola y las
-# re-ejecuta cuando el bundle real termina de descomprimirse. Navegadores sin
-# DecompressionStream (o cualquier fallo) caen al CDN.
 _GZ_LOADER_JS = """
 (function () {
   var q = [];
@@ -97,8 +91,6 @@ def plotly_js_tag() -> str:
             f"<script>{_GZ_LOADER_JS}</script>"
         )
     except Exception as exc:
-        # Sin bundle offline el reporte sigue funcionando via CDN (requiere
-        # internet al abrirlo); dejar rastro del porque.
         logger.warning("plotly.js offline no disponible, cayendo a CDN: %s", exc)
         return cdn_tag
 

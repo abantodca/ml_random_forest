@@ -35,8 +35,6 @@ from optuna.trial import TrialState
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.pipeline import Pipeline
 
-# Silenciar warning experimental de optuna ANTES de importar los modulos
-# del proyecto que a su vez disparan llamadas a optuna en tiempo de import.
 warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
 from src.config import (  # noqa: E402  (filterwarnings debe ir antes)
@@ -65,22 +63,12 @@ from src.step_05_evaluate.baselines import (  # noqa: E402
 )
 from src.utils.sklearn_helpers import fit_with_optional_sample_weight  # noqa: E402
 
-# Logger inerte hasta que el caller configure handlers (idem data_loader).
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Factory: delega al BACKEND_REGISTRY (single source of truth)
-# ---------------------------------------------------------------------------
 
 
 def _build_model(model_type: str):
     """Construye el regressor envuelto (TTR + base) para `model_type`."""
     return get_backend(model_type).factory()
-
-
-# ---------------------------------------------------------------------------
-# Optuna study factory + objective
-# ---------------------------------------------------------------------------
 
 
 def _make_study(
@@ -130,7 +118,7 @@ def _make_study(
             study = optuna.create_study(
                 study_name=study_name,
                 storage=OPTUNA_STORAGE_URL,
-                load_if_exists=True,  # RESUME si ya existe
+                load_if_exists=True,
                 **common,
             )
             done = sum(t.state.is_finished() for t in study.get_trials(deepcopy=False))
@@ -140,9 +128,9 @@ def _make_study(
             logger.warning(f"Optuna storage no disponible ({exc}); estudio en memoria (sin resume)")
             study = None
     if study is None:
-        study = optuna.create_study(**common)  # en memoria (default / fallback)
+        study = optuna.create_study(**common)
     if warm_start_params:
-        with contextlib.suppress(Exception):  # siembra best-effort, nunca rompe
+        with contextlib.suppress(Exception):
             study.enqueue_trial(warm_start_params, skip_if_exists=True)
     return study
 
@@ -154,6 +142,45 @@ def _build_pipeline(preprocessor: Pipeline, model_type: str) -> Pipeline:
             ("regressor", _build_model(model_type)),
         ]
     )
+
+
+def _fold_score(y_true, y_pred) -> float:
+    """Metrica que Optuna minimiza en cada inner fold (ver OPTUNA_OBJECTIVE_METRIC).
+
+    "mae" (default) reproduce EXACTAMENTE el comportamiento historico. Las otras
+    dos alinean el tuning con la metrica que decide el campeon (MAPE), porque el
+    optimo de MAE y el de MAPE no coinciden en un target derecho-sesgado.
+
+    Cualquier valor no reconocido cae a "mae" con warning: una env var mal escrita
+    NO debe cambiar en silencio el criterio de seleccion de hiperparametros.
+    """
+    from src.config import OPTUNA_OBJECTIVE_METRIC, TEMPORAL_MAPE_REL_FLOOR
+
+    metric = OPTUNA_OBJECTIVE_METRIC
+    if metric == "mae":
+        return float(mean_absolute_error(y_true, y_pred))
+
+    yt = np.asarray(y_true, dtype=float)
+    yp = np.asarray(y_pred, dtype=float)
+
+    if metric == "mae_log":
+        return float(
+            mean_absolute_error(np.log1p(np.clip(yt, 0.0, None)), np.log1p(np.clip(yp, 0.0, None)))
+        )
+
+    if metric == "mape":
+        from src.step_05_evaluate.metrics import mape_safe
+
+        med = float(np.nanmedian(np.abs(yt))) if len(yt) else 0.0
+        floor = max(1e-9, TEMPORAL_MAPE_REL_FLOOR * med)
+        score = mape_safe(yt, yp, min_denom=floor)
+        return float(score) if np.isfinite(score) else float("inf")
+
+    logger.warning(
+        "OPTUNA_OBJECTIVE_METRIC=%r no reconocido (validos: mae, mape, mae_log); usando 'mae'",
+        metric,
+    )
+    return float(mean_absolute_error(y_true, y_pred))
 
 
 def _objective(
@@ -201,9 +228,6 @@ def _objective(
         yv = y_train.iloc[te_i]
         pipe_local = _build_pipeline(preprocessor, model_type)
         pipe_local.set_params(**params)
-        # Fold-local: las frecuencias/bins de y son estadísticas aprendidas.
-        # Calcularlas con todo el outer-train filtraría la distribución del
-        # inner-validation hacia el fit.
         sw_fold = _maybe_sample_weights(
             yt,
             use_sample_weights,
@@ -214,36 +238,18 @@ def _objective(
             emit_log=False,
         )
         fit_with_optional_sample_weight(pipe_local, Xt, yt, sample_weight=sw_fold)
-        val_mae = float(mean_absolute_error(yv, pipe_local.predict(Xv)))
+        val_mae = _fold_score(yv, pipe_local.predict(Xv))
         scores.append(val_mae)
-        # Pruning: reporta el MAE parcial (media de folds evaluados) y deja que
-        # MedianPruner mate el trial si va peor que la mediana. Con NopPruner
-        # (ENABLE_PRUNER=0) should_prune() es siempre False -> sin efecto.
         trial.report(float(np.mean(scores)), step)
         if trial.should_prune():
             raise optuna.TrialPruned()
         if track_gap:
-            # Costo extra (un predict del train) SOLO si la penalizacion esta
-            # activa: gap = cuanto peor generaliza vs lo que memorizo del train.
-            train_mae = float(mean_absolute_error(yt, pipe_local.predict(Xt)))
+            train_mae = _fold_score(yt, pipe_local.predict(Xt))
             gaps.append(max(0.0, val_mae - train_mae))
-    # Penalizacion opcional por VARIANZA entre inner folds (robustez del
-    # tuning, 2026-06-13): con lambda>0 TPE prefiere configs ESTABLES sobre
-    # configs con buen promedio pero alta dispersion (que generalizan peor).
-    # Default 0.0 = bit-identico al comportamiento historico (solo media).
     penalty = OPTUNA_OBJECTIVE_STD_PENALTY * float(np.std(scores))
-    # Penalizacion opcional por GAP train->val (anti-overfit; ver config). Con
-    # lambda>0 TPE evita configs que memorizan el train aunque tengan buen
-    # MAE_val — las mismas que luego falla el gate del campeon. Default 0.0
-    # (track_gap=False) -> sin costo ni cambio de comportamiento.
     if track_gap and gaps:
         penalty += OPTUNA_OBJECTIVE_GAP_PENALTY * float(np.mean(gaps))
     return float(np.mean(scores)) + penalty
-
-
-# ---------------------------------------------------------------------------
-# Nested CV
-# ---------------------------------------------------------------------------
 
 
 def _data_fingerprint(X: pd.DataFrame) -> str:
@@ -279,12 +285,6 @@ def _format_eta(seconds: float) -> str:
     if seconds < 3600:
         return f"{seconds / 60:.1f}m"
     return f"{seconds / 3600:.1f}h"
-
-
-# ---------------------------------------------------------------------------
-# Helpers privados de Nested CV (extraidos de perform_nested_cv para que el
-# orquestador quede como lectura lineal de ~50 lineas).
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -342,8 +342,6 @@ def _maybe_sample_weights(
         high_season_toggle if high_season_toggle is not None else SAMPLE_WEIGHT_HIGH_SEASON
     )
 
-    # n_bins/weight_cap leidos de src.config para evitar override silencioso
-    # del default de compute_sample_weights (antes hardcoded n_bins=10 aqui).
     sw = compute_sample_weights(
         y,
         n_bins=SAMPLE_WEIGHT_BINS,
@@ -357,7 +355,6 @@ def _maybe_sample_weights(
     if high_season_on and X is not None and DATE_COLUMN in X.columns:
         meses_pico = high_season_months
         if meses_pico is None:
-            # Data-driven (no POP 8,9,10) cuando la variedad no fija meses.
             from src.step_03_features.feature_engineering import FeatureGenerator
 
             alta_d, _ = FeatureGenerator._derive_season_months(X[DATE_COLUMN], y)
@@ -463,8 +460,6 @@ def _run_outer_cv_loop(
         )
         study = _make_study(random_state + fold_idx)
         study.optimize(
-            # Binding por defaults: la lambda se consume dentro de esta
-            # iteracion, pero el binding explicito blinda contra B023.
             lambda trial, X_tr=X_tr, y_tr=y_tr, sw_tr=sw_tr, strat_tr=strat_tr: _objective(
                 trial,
                 X_tr,
@@ -475,17 +470,11 @@ def _run_outer_cv_loop(
                 use_sample_weights=use_sample_weights,
                 variety_cfg=variety_cfg,
                 strat_label_train=strat_tr,
-                # n_rows = n de la VARIEDAD (no del fold): la capacidad se acota
-                # por el tamano del dataset completo, estable entre folds.
                 n_rows=n,
             ),
             n_trials=n_trials,
             show_progress_bar=False,
             gc_after_trial=True,
-            # Robustez (2026-06-13): un trial que crashea (inestabilidad
-            # numerica del backend, OOM puntual) se marca FAILED y el study
-            # sigue — no tira el nested CV completo. Si TODOS los trials
-            # fallan, `study.best_params` levanta igual (correcto).
             catch=(Exception,),
         )
 
@@ -532,12 +521,10 @@ def _aggregate_nested_metrics(res: _OuterFoldResults) -> dict[str, float]:
     model_mae = float(np.mean(res.mae_test))
     baseline_mae = float(np.mean(res.baseline_mae))
     return {
-        # backward-compatible (lo que ya leia el HTML)
         "nested_cv_mae_mean": model_mae,
         "nested_cv_mae_std": float(np.std(res.mae_test)),
         "nested_cv_r2_mean": float(np.mean(res.r2)),
         "nested_cv_r2_std": float(np.std(res.r2)),
-        # detector de overfitting
         "nested_cv_mae_train_mean": float(np.mean(res.mae_train)),
         "nested_cv_mae_train_std": float(np.std(res.mae_train)),
         "nested_cv_gap_mean": float(np.mean(res.gap)),
@@ -587,10 +574,6 @@ def _temporal_honesty_check(
             n_splits=DUAL_CV_FOLDS,
             min_train_years=TEMPORAL_CV_MIN_TRAIN_YEARS,
         )
-        # Guard por años de historia (2026-07-01): con 2 años el splitter da 0
-        # folds (antes: {} SILENCIOSO); con 3 años da 1 fold (una sola ventana,
-        # metricas de alta varianza). Aca solo avisamos el porque; el consumidor
-        # (quality_gate) usa temporal_n_folds para NO warnear drift con <2 folds.
         k_folds = splitter.get_n_splits(X)
         if k_folds <= 0:
             logger.info(
@@ -639,15 +622,9 @@ def _temporal_honesty_check(
             oof_pred[test_idx] = y_pred
             mae_folds.append(float(mean_absolute_error(y_te, y_pred)))
 
-            # El diagnóstico temporal necesita su propio punto de referencia.
-            # Reutilizar el baseline del CV estratificado sería mezclar dos
-            # preguntas distintas y volvería optimista el skill de forecast.
             baseline = HierarchicalMedianRegressor().fit(X_tr, y_tr)
             baseline_pred = baseline.predict(X_te)
             baseline_mae_folds.append(float(mean_absolute_error(y_te, baseline_pred)))
-            # El último test year es un holdout final intocable: no participa
-            # en Optuna, selección de params ni calibración de umbrales dentro
-            # de este run. Se reporta separado del promedio temporal.
             holdout_year = int(pd.to_datetime(X_te["FECHA"]).dt.year.max())
             final_holdout = (
                 np.asarray(y_te, dtype=float),
@@ -658,11 +635,6 @@ def _temporal_honesty_check(
 
         y_arr = np.asarray(y, dtype=float)
         base_mask = np.isfinite(oof_pred) & np.isfinite(y_arr)
-        # Piso RELATIVO para el MAPE (fix 2026-07-01): el umbral viejo 1e-9
-        # dejaba pasar targets casi-cero (artefactos de carga) que explotaban
-        # el APE — ATLAS reporto temporal_MAPE 720% por 8 filas de ~0.0002.
-        # R2/MAE siguen usando base_mask (robustos a escala); solo el MAPE
-        # excluye denominadores implausibles. Ver TEMPORAL_MAPE_REL_FLOOR.
         med = float(np.nanmedian(np.abs(y_arr[base_mask]))) if base_mask.any() else 0.0
         denom_floor = max(1e-9, TEMPORAL_MAPE_REL_FLOOR * med)
         mask = base_mask & _mape_valid_mask(y_arr, denom_floor)
@@ -726,7 +698,8 @@ def _temporal_honesty_check(
         )
         if final_holdout is not None:
             logger.info(
-                f"Holdout final intocable | year={int(metrics['final_holdout_year'])} | "
+                f"Ultimo anio (drift, NO holdout virgen) | "
+                f"year={int(metrics['final_holdout_year'])} | "
                 f"MAPE={metrics['final_holdout_mape']:.2f}% | "
                 f"MAE={metrics['final_holdout_mae']:.4f} | "
                 f"skill_baseline={metrics['final_holdout_baseline_skill_mae']:.3f}"
@@ -766,9 +739,6 @@ def _pick_final_params(
     RESUME (solo corre los trials que faltan).
     """
     if skip_final_tuning:
-        # Fold MEDIANO por MAE_test, no argmin (2026-06-13): el argmin
-        # premiaba al fold con mas suerte (sesgo de seleccion); el mediano
-        # es el representante mas honesto del procedimiento.
         order = np.argsort(fold_results.mae_test)
         best_idx = int(order[len(order) // 2])
         logger.info(
@@ -780,14 +750,12 @@ def _pick_final_params(
     final_study = _make_study(
         random_state, warm_start_params=warm_start_params, study_name=study_name, logger=logger
     )
-    # RESUME: descontar los trials ya terminados (persistidos). Si ya se
-    # completaron todos y hay al menos uno COMPLETE, se salta el optimize.
     trials = final_study.get_trials(deepcopy=False)
     finished = sum(t.state.is_finished() for t in trials)
     completed = sum(t.state == TrialState.COMPLETE for t in trials)
     n_remaining = max(0, final_trials - finished)
     if n_remaining == 0 and completed == 0:
-        n_remaining = final_trials  # estudio sin trials utiles: recomputar
+        n_remaining = final_trials
     logger.info(
         f"Ronda final | trials={final_trials} (ya={finished}, faltan={n_remaining}) "
         f"sobre dataset completo..."
@@ -811,7 +779,7 @@ def _pick_final_params(
         n_trials=n_remaining,
         show_progress_bar=False,
         gc_after_trial=True,
-        catch=(Exception,),  # idem outer loop: trial fallido != run fallido
+        catch=(Exception,),
     )
     return final_study.best_params
 
@@ -892,7 +860,6 @@ def perform_nested_cv(
     inner_folds = inner_folds or INNER_CV_FOLDS
     final_trials = final_trials if final_trials is not None else n_trials
 
-    # Recorte n-adaptativo de folds (variedades chicas): POP queda igual.
     _o0, _i0 = outer_folds, inner_folds
     outer_folds, inner_folds = _adapt_folds_to_n(len(X), outer_folds, inner_folds)
     if (outer_folds, inner_folds) != (_o0, _i0):
@@ -938,8 +905,6 @@ def perform_nested_cv(
             "CV NO estratificado (variedad sin variabilidad util en FUNDO/FORMATO; KFold normal)"
         )
 
-    # El candidato temporal se refitea con la misma ventana usada en cada
-    # outer fold. El dataset original se conserva para OOF y reportes.
     from src.config import DATE_COLUMN
 
     X_final, y_final = X, y
@@ -961,20 +926,12 @@ def perform_nested_cv(
             f"reference={reference_date.date()}"
         )
 
-    # Warm-start (2026-06-25): sembrar la RONDA FINAL con el campeon ya
-    # registrado de esta variedad+backend para que los params de produccion
-    # arranquen desde la zona buena (no a ciegas) y solo mejoren. Los outer
-    # folds NO se siembran (preserva la honestidad del gap/MAPE_oof; ver
-    # _run_outer_cv_loop). None si no hay modelo previo o el flag esta apagado.
     from src.step_04_train.warm_start import build_warm_start_params
 
     warm_start_params = build_warm_start_params(
         getattr(variety_cfg, "variety", None), model_type, logger
     )
 
-    # Nombre del estudio para PERSISTIR + RESUME la ronda final (solo si hay
-    # OPTUNA_STORAGE_URL; si no, None -> estudio en memoria). Incluye fingerprint
-    # de los datos: data nueva -> estudio nuevo (no mezcla valores stale).
     from src.config import OPTUNA_STORAGE_URL
 
     final_study_name = None
@@ -1033,9 +990,6 @@ def perform_nested_cv(
         study_name=final_study_name,
     )
 
-    # Reporte dual (Fase A.2): si el outer fue stratified, anadir el chequeo
-    # temporal honesto con los params finales. Si el outer YA fue temporal,
-    # seria redundante.
     from src.config import CV_OUTER_STRATEGY, DUAL_CV_REPORT
 
     active_outer_strategy = effective_outer_strategy or CV_OUTER_STRATEGY
@@ -1053,8 +1007,6 @@ def perform_nested_cv(
             )
         )
 
-    # El refit normal usa todo el dataset. Un candidato windowed usa solo su
-    # ventana final; en ambos casos los pesos se aprenden sin mirar el test.
     sample_weights = _maybe_sample_weights(
         y_final,
         use_sample_weights,

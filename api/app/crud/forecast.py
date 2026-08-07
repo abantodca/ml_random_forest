@@ -51,11 +51,6 @@ def _to_orm_kwargs(forecast_data: ForecastCreate) -> dict:
     }
 
 
-# ============================================================================
-# READ
-# ============================================================================
-
-
 async def get_forecast_by_id(db: AsyncSession, forecast_id: int) -> Forecast:
     result = await db.execute(select(Forecast).where(Forecast.id == forecast_id))
     forecast = result.scalar_one_or_none()
@@ -93,11 +88,6 @@ async def get_forecasts(
     query = query.order_by(Forecast.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all()), total
-
-
-# ============================================================================
-# CREATE
-# ============================================================================
 
 
 async def create_forecast(
@@ -138,22 +128,10 @@ async def create_forecasts_batch(
     await db.flush()
 
     ids = [f.id for f in db_forecasts]
-    # order_by(id) es OBLIGATORIO: los id son autoincrementales en orden de
-    # inserción, así que ordenar por id devuelve las filas en el mismo orden
-    # que `forecasts_data`/`kghora_preds`. Sin esto, PostgreSQL no garantiza
-    # el orden del IN (...) y el reporte de drift por fila (que el caller
-    # empareja por índice) podría adjuntarse al pronóstico equivocado.
-    # El re-fetch ocurre ANTES del commit para que todo el batch sea una sola
-    # transacción: si algo falla, no quedan filas persistidas a medias.
     result = await db.execute(select(Forecast).where(Forecast.id.in_(ids)).order_by(Forecast.id))
     forecasts = list(result.scalars().all())
     await db.commit()
     return forecasts
-
-
-# ============================================================================
-# UPDATE
-# ============================================================================
 
 
 async def update_forecast(
@@ -177,11 +155,6 @@ async def update_forecast(
     await db.commit()
     await db.refresh(forecast)
     return forecast
-
-
-# ============================================================================
-# DELETE
-# ============================================================================
 
 
 async def delete_forecast(db: AsyncSession, forecast_id: int) -> None:

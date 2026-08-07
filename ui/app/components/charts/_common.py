@@ -12,23 +12,17 @@ import plotly.io as pio
 
 from app.core import TEMA
 
-# Colores derivados de TEMA para garantizar contraste AA.
-GRID_COLOR = "rgba(15,23,42,0.06)"  # casi imperceptible pero visible
-AXIS_TEXT = TEMA["text_tertiary"]  # #475569 — slate-600
-TITLE_TEXT = TEMA["text"]  # #0F172A — slate-900
+GRID_COLOR = "rgba(15,23,42,0.06)"
+AXIS_TEXT = TEMA["text_tertiary"]
+TITLE_TEXT = TEMA["text"]
 
 
 pio.templates["rnd_forest"] = go.layout.Template(
     layout=dict(
-        # Tile blanco a nivel de Plotly: el chart es una superficie blanca
-        # propia (estilo Power BI), no hereda el gris del lienzo. El CSS
-        # del wrapper [data-testid="stPlotlyChart"] aporta borde/sombra/radio.
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
         font=dict(family="Inter, sans-serif", color=TEMA["text_body"], size=12),
-        # Márgenes consistentes y aireados; el título vive arriba a la izquierda.
         margin=dict(l=52, r=24, t=58, b=40),
-        # Título de reporte: alineado a la izquierda, negrita, color de marca.
         title=dict(
             font=dict(family="Inter, sans-serif", size=14, color=TITLE_TEXT),
             x=0.0,
@@ -38,14 +32,12 @@ pio.templates["rnd_forest"] = go.layout.Template(
             yanchor="top",
             pad=dict(l=4, b=8),
         ),
-        # Leyenda limpia: horizontal arriba, sin marco, fuente tenue.
         legend=dict(
             font=dict(size=11, color=TEMA["text_secondary"]),
             bgcolor="rgba(0,0,0,0)",
             bordercolor="rgba(0,0,0,0)",
             borderwidth=0,
         ),
-        # Ejes: gridlines tenues, sin línea de eje ni zeroline (data-ink alto).
         xaxis=dict(
             gridcolor=GRID_COLOR,
             griddash="solid",

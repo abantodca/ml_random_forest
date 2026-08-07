@@ -38,7 +38,6 @@ from app.schemas.historical_observation import (
 from app.schemas.variety import CatalogsResponse, VarietyInfo, VarietyList
 
 __all__ = [
-    # Forecast
     "BatchDriftReport",
     "BatchFeatureDrift",
     "DeletedCountResponse",
@@ -54,17 +53,14 @@ __all__ = [
     "PredictionResponse",
     "RowStatusCounts",
     "TrainingWindow",
-    # Health
     "HealthDetailedResponse",
     "HealthResponse",
     "ModelInfo",
     "ModelReloadResponse",
-    # Historical observation
     "HistoricalObservationCreate",
     "HistoricalObservationListResponse",
     "HistoricalObservationResponse",
     "HistoryImportResponse",
-    # Variety
     "CatalogsResponse",
     "VarietyInfo",
     "VarietyList",

@@ -31,11 +31,6 @@ router = APIRouter(prefix="/varieties", tags=["varieties"])
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Varieties Information
-# ============================================================================
-
-
 @router.get("/catalogs", response_model=CatalogsResponse)
 async def get_catalogs() -> CatalogsResponse:
     """Catálogos cerrados (FORMATO, FUNDO) consumidos por el frontend."""
@@ -100,7 +95,7 @@ def get_variety_info(
     Raises:
         404: Si la variedad no existe en el catálogo
     """
-    info = mlflow.get_model_info(variety)  # {version, model_type, metrics, best_params}
+    info = mlflow.get_model_info(variety)
     best_params = (
         {"model_type": info.get("model_type"), **info.get("best_params", {})} if info else {}
     )
@@ -112,11 +107,6 @@ def get_variety_info(
         version=info.get("version"),
         best_params=best_params,
     )
-
-
-# ============================================================================
-# Winner Dashboard (reporte gerencial HTML del modelo)
-# ============================================================================
 
 
 @router.get(

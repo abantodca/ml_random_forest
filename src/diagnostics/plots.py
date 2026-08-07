@@ -51,14 +51,12 @@ def histogram_with_kde(x: pd.Series, name: str) -> go.Figure:
         )
     )
     if x_clean.std() > 0 and len(x_clean) > 30:
-        # KDE manual (gaussian) sobre 200 puntos
         from scipy.stats import gaussian_kde
 
         try:
             kde = gaussian_kde(x_clean)
             xs = np.linspace(x_clean.min(), x_clean.max(), 200)
             ys = kde(xs)
-            # Reescalar a freq*bin_width (aprox)
             bin_w = (x_clean.max() - x_clean.min()) / 40
             ys_scaled = ys * len(x_clean) * bin_w
             fig.add_trace(
@@ -72,8 +70,6 @@ def histogram_with_kde(x: pd.Series, name: str) -> go.Figure:
                 )
             )
         except Exception as exc:
-            # El overlay KDE es decorativo: si scipy falla (matriz singular,
-            # data degenerada) el histograma sigue siendo valido.
             logger.debug("KDE overlay omitido del histograma: %s", exc)
     fig.add_vline(
         x=float(x_clean.mean()),
@@ -111,7 +107,6 @@ def qq_plot(x: pd.Series, name: str) -> go.Figure:
             hovertemplate="theoretical=%{x:.2f}<br>sample=%{y:.2f}<extra></extra>",
         )
     )
-    # Linea referencia y=x escalada
     lo, hi = osm.min(), osm.max()
     fig.add_trace(
         go.Scatter(
@@ -134,7 +129,7 @@ def boxplot_by_group(df: pd.DataFrame, value_col: str, group_col: str, name: str
         fig.add_annotation(text=f"sin columna {group_col}", showarrow=False, x=0.5, y=0.5)
         return style_fig(fig, title=name)
     groups = sorted(df[group_col].dropna().astype(str).unique().tolist())
-    for g in groups[:30]:  # cap a 30 para no romper layout
+    for g in groups[:30]:
         vals = pd.to_numeric(
             df.loc[df[group_col].astype(str) == g, value_col], errors="coerce"
         ).dropna()
@@ -181,7 +176,6 @@ def correlation_heatmap(
         fig = go.Figure()
         fig.add_annotation(text="sin features numericas suficientes", showarrow=False, x=0.5, y=0.5)
         return style_fig(fig, title="Correlation matrix")
-    # Trim si mas de 40
     cols = corr_cols[:40]
     mat = [row[:40] for row in corr_matrix[:40]]
     fig = go.Figure(

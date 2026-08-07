@@ -32,10 +32,6 @@ class HistoricalObservation(Base):
     kg_ha: Mapped[float] = mapped_column(Float, nullable=False)
     kg_jr_h: Mapped[float] = mapped_column(Float, nullable=False)
 
-    # Features REALES del input al cosechar (opcionales). Espejan los inputs
-    # del pronóstico y permiten la descomposición exacta de error: re-predecir
-    # sobre estos valores reales aísla el error del modelo del error de datos.
-    # NULL cuando el Excel de reales trae solo el formato mínimo (KG/HA+KG/JR_H).
     dpc: Mapped[float | None] = mapped_column(Float, nullable=True)
     indus_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     p_baya: Mapped[float | None] = mapped_column(Float, nullable=True)

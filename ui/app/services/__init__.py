@@ -22,17 +22,14 @@ from app.services.tracking_service import TrackingService, forecast_verdict
 from app.services.variety_service import VarietyService
 
 __all__ = [
-    # Servicios
     "ForecastService",
     "HealthService",
     "TrackingService",
     "VarietyService",
     "forecast_verdict",
-    # Constructores de payload
     "build_forecast_payload",
     "build_prediction_payload",
     "row_to_record",
-    # Validación de lotes
     "BatchValidationError",
     "ValidationIssue",
     "validate_batch_upload",

@@ -24,9 +24,9 @@ class GroupBias:
 
     group_value: str
     n: int
-    mean_signed_bias: float  # mean(pred - real) en KG/JR. >0 = sobreestima
-    bias_pct_of_real_mean: float  # bias / mean(real) * 100 (lectura ejecutiva)
-    direction: str  # 'sobreestima' | 'subestima' | 'neutro'
+    mean_signed_bias: float
+    bias_pct_of_real_mean: float
+    direction: str
 
 
 def residual_bias_by_group(

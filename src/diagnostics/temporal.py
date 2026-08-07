@@ -37,9 +37,9 @@ from src.diagnostics.statistical_tests import (
 @dataclass
 class TemporalProfile:
     name: str
-    acf: list[float]  # autocorrelaciones lag 0..k
-    pacf: list[float]  # parciales
-    significant_lags: list[int]  # lags donde |corr| > 1.96/sqrt(n)
+    acf: list[float]
+    pacf: list[float]
+    significant_lags: list[int]
     durbin_watson: TestResult
     ljung_box_10: TestResult
     adf: TestResult
@@ -55,7 +55,7 @@ class DriftReport:
     psi_values: dict[tuple[int, int], float] = field(default_factory=dict)
     ks_pvalues: dict[tuple[int, int], float] = field(default_factory=dict)
     max_psi: float = 0.0
-    drift_severity: str = "ninguno"  # "ninguno"|"moderado"|"severo"
+    drift_severity: str = "ninguno"
 
 
 def compute_acf_pacf(x: pd.Series, n_lags: int = 20) -> tuple[list[float], list[float], list[int]]:
@@ -128,9 +128,6 @@ def profile_temporal(name: str, x: pd.Series, period: int = 12) -> TemporalProfi
     )
 
 
-# ---------------------------------------------------------------------------
-# Drift entre anios
-# ---------------------------------------------------------------------------
 def population_stability_index(
     expected: pd.Series,
     actual: pd.Series,
@@ -148,7 +145,6 @@ def population_stability_index(
     if len(expected) < 50 or len(actual) < 50:
         return float("nan")
     try:
-        # Bins por quantiles del expected, evitando duplicados
         breakpoints = np.unique(np.quantile(expected.values, np.linspace(0, 1, n_bins + 1)))
         if len(breakpoints) < 3:
             return float("nan")
@@ -158,7 +154,6 @@ def population_stability_index(
         a_counts, _ = np.histogram(actual.values, bins=breakpoints)
         e_pct = e_counts / e_counts.sum()
         a_pct = a_counts / a_counts.sum()
-        # Smoothing: evitar log(0)
         eps = 1e-6
         e_pct = np.clip(e_pct, eps, 1.0)
         a_pct = np.clip(a_pct, eps, 1.0)

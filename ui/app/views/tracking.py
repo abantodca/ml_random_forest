@@ -89,7 +89,6 @@ def _real_column_config() -> dict:
     }
 
 
-# ── Datos reales: SOLO masivo (Excel) + editar/eliminar/reemplazar ──────
 @st.fragment
 def _render_real_upload(variety: str) -> None:
     st.info(
@@ -202,11 +201,9 @@ def _real_editar(variety: str) -> None:
         _commit_ok(f"✅ {n} observaciones reales eliminadas.")
 
 
-# ── Secciones de análisis (renderers delgados sobre los view-models) ─────
 def _render_kpis(points: list[AccuracyPoint]) -> None:
     vm = P.build_kpi_vm(points)
 
-    # ── Veredicto gerencial — primera respuesta: ¿confío? ¿reentrenar? ──────
     {"ok": st.success, "warning": st.warning, "alert": st.error}[vm.verdict_status](vm.verdict_msg)
 
     section_title("📊 PRECISIÓN DEL PRONÓSTICO")
@@ -294,7 +291,6 @@ def _render_weekly(points: list[AccuracyPoint]) -> None:
         return
     section_title("🗓️ CIERRE SEMANAL")
 
-    # ── KPIs de cierre: cumplimiento global + mejor/peor semana ─────────────
     if vm.cumplimiento is not None:
         w1, w2, w3 = st.columns(3)
         with w1:
@@ -333,19 +329,14 @@ def _render_table(points: list[AccuracyPoint]) -> None:
     )
 
 
-# ── Render principal ────────────────────────────────────────────────────
 page_header(
     "Seguimiento / Precisión",
     "Proyectado vs real, error del pronóstico y diagnóstico datos-vs-modelo",
     "🎯",
 )
 
-# Solo variedades con modelo entrenado: el seguimiento compara el pronóstico
-# del modelo contra la cosecha real, así que sin modelo no hay nada que medir.
 _all_names = get_all_variety_names()
 if not _all_names:
-    # Lista vacía ⇒ backend caído vs. registry sin modelos (p. ej. entrenando).
-    # `get_cached_health()` solo es None si el backend no responde.
     if get_cached_health() is None:
         st.error("No se puede conectar al backend. Verifica que el servicio esté corriendo.")
     else:
@@ -364,9 +355,6 @@ _variety = st.selectbox("Variedad", _all_names, label_visibility="collapsed")
 with st.spinner("Comparando proyectado vs real..."):
     _points = get_cached_accuracy(_variety, with_decomposition=True)
 
-# Visión gerencial: la página abre con el INSIGHT (KPIs → diagnóstico →
-# gráficos), no con la tarea operativa de subir archivos. La carga de datos
-# reales vive en un expander al pie (expandido solo si aún no hay datos).
 if _points:
     _filtered = _render_filters(_points)
     if not _filtered:

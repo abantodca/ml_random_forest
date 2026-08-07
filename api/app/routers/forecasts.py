@@ -46,15 +46,6 @@ router = APIRouter(prefix="/forecasts", tags=["forecasts"])
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# CREATE - Crear pronósticos
-# ============================================================================
-#
-# La orquestación (build features → predecir → drift → persistir → ensamblar)
-# vive en `ForecastService` (app/services/forecast_service.py). Estos handlers
-# quedan finos: solo traducen HTTP ⇆ servicio.
-
-
 @router.post("/{variety}", response_model=ForecastResponse, status_code=201)
 async def create_forecast(
     variety: ValidatedVariety,
@@ -138,12 +129,6 @@ async def upload_excel_forecasts(
     """
     logger.info("Upload started: variety=%s file=%s", variety, file.filename)
 
-    # Rechaza archivos sobredimensionados ANTES de leerlos a memoria.
-    # `UploadFile.size` es el Content-Length declarado por el cliente (puede
-    # ser None si no viene en el part multipart). `validate_upload_size` falla
-    # barato cuando el tamaño está disponible; si es None, el chequeo se
-    # posterga a `parse_excel_to_forecasts` → `validate_excel_file`, que opera
-    # sobre los bytes ya leídos (comportamiento anterior intacto).
     validate_upload_size(file.size, file.filename)
 
     contents = await file.read()
@@ -152,11 +137,6 @@ async def upload_excel_forecasts(
     result = await forecasts.create_batch(db, variety, forecasts_data)
     logger.info("Upload completed: variety=%s count=%d", variety, result.total)
     return result
-
-
-# ============================================================================
-# READ - Listar y obtener pronósticos
-# ============================================================================
 
 
 @router.get("", response_model=ForecastListResponse)
@@ -208,11 +188,6 @@ async def get_forecast(
     return ForecastResponse.model_validate(forecast)
 
 
-# ============================================================================
-# UPDATE - Actualizar pronósticos
-# ============================================================================
-
-
 @router.patch("/{forecast_id}", response_model=ForecastResponse)
 async def update_forecast(
     forecast_id: int,
@@ -230,11 +205,6 @@ async def update_forecast(
         404: Si no se encuentra el pronóstico
     """
     return await forecasts.update_one(db, forecast_id, forecast_update)
-
-
-# ============================================================================
-# DELETE - Eliminar pronósticos
-# ============================================================================
 
 
 @router.delete("/fecha/{fecha}", response_model=DeletedCountResponse)

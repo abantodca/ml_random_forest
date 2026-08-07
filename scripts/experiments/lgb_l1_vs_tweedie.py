@@ -1,19 +1,3 @@
-# A/B (2026-06-15): ¿una loss que modela varianza-proporcional-a-la-media
-# (Tweedie/Gamma) bate al campeon actual (L1 + log1p) en la cola de alta
-# magnitud (GRANEL/A9)? El analisis de residuales mostro heterocedasticidad:
-# el error absoluto escala con el target. Tweedie (1<p<2) y Gamma (p=2)
-# modelan justamente Var[y]∝mean^p, sobre el target CRUDO (sin log1p).
-#
-# Harness: 5 folds stratified seed42, mismo
-# preproc por fold, mismo presupuesto (20 trials inner en fold 0), decision
-# por business MAPE (la metrica del campeon). Brazos:
-#   A_l1_log   : LightGBM regression_l1 + log1p+cap  (config del campeon)
-#   B_tweedie  : LightGBM tweedie (var_power tuneado) sobre y CRUDO
-#   C_gamma    : LightGBM gamma sobre y CRUDO
-#
-# Uso:
-#   docker compose run --rm --entrypoint sh trainer -c \
-#     "PYTHONPATH=/app python scripts/experiments/lgb_l1_vs_tweedie.py"
 import json
 import warnings
 
@@ -32,10 +16,6 @@ from src.step_06_track.business_validation import _align_and_clean
 warnings.filterwarnings("ignore")
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# Presupuesto reducido a proposito: este A/B compara LOSS FUNCTIONS, no busca
-# el optimo absoluto de hiperparametros. 12 trials + 700 rondas max bastan para
-# un contraste justo entre brazos (todos comparten el mismo presupuesto) y lo
-# mantienen en ~25 min en vez de horas.
 OUTER_FOLDS, INNER_FOLDS = 5, 3
 N_TRIALS = 12
 MAX_ROUNDS, EARLY_STOP = 700, 50
@@ -69,7 +49,7 @@ fd0 = fold_data[0]
 strat0 = strat_label.iloc[folds[0][0]] if strat_label is not None else None
 inner_splits = list(inner_cv.split(fd0["Xtr"], strat0))
 y0 = fd0["y_tr"]
-kgjr0 = kg_jr[folds[0][0]]  # KG/JR alineado al train del fold 0 (pesos financieros)
+kgjr0 = kg_jr[folds[0][0]]
 COMMON = {"verbosity": -1, "bagging_freq": 1}
 
 
@@ -95,7 +75,6 @@ def _grid(trial):
     }
 
 
-# Funcion de tuning generica por brazo. `use_log` controla el target transform.
 def make_objective(objective_name, use_log, tweedie=False, weighted=False):
     def obj(trial):
         params = {**COMMON, "objective": objective_name, **_grid(trial)}
@@ -191,8 +170,6 @@ for k, r in results.items():
     flag = "  <-- mejora" if d < -0.1 else ("  (peor)" if d > 0.1 else "  (empate)")
     print(f"{k:<12}: {r['business_mape']:.2f}%  ({d:+.2f}pp){flag}")
 
-# Desglose por segmento: ¿el brazo financiero (D) baja el error en A9/GRANEL
-# aunque suba el MAPE global? Ese es el trade-off absoluto vs relativo.
 try:
     fundo = X["FUNDO"].astype(str).to_numpy()
     fmt = X["FORMATO"].astype(str).to_numpy()

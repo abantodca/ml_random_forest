@@ -17,7 +17,7 @@ def _make_table(values: dict[str, list[str]]) -> go.Table:
     return go.Table(
         header=dict(
             values=headers,
-            fill_color="#EEF2FF",  # indigo-50 — sutil, sobre fondo blanco
+            fill_color="#EEF2FF",
             font=dict(
                 color=TEMA["primary"],
                 size=12,

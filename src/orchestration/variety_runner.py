@@ -90,10 +90,6 @@ def train_variety(
     if results:
         champion = select_champion(results)
         champion_decision = champion_summary(results, champion)
-        # Salvaguarda anti-walkover (2026-06-13): si algun backend FALLO, el
-        # "campeon" no gano una competencia completa — gano por default. Se
-        # marca explicitamente (log + decision JSON) para que nadie confunda
-        # un walkover con una victoria; el run tag queda via set_tags abajo.
         walkover = bool(failures)
         if walkover:
             champion_decision["walkover"] = True
@@ -119,23 +115,15 @@ def train_variety(
 
         _delete_loser_runs(results, champion, variety, logger)
 
-        # Cargar (X, y, business_cols) UNA sola vez. Antes se recargaba 2-3
-        # veces (Excel + Dashboard + render). single_run las libera al
-        # terminar; el costo aqui es leer 1 hoja del Excel (~10k filas).
         try:
             X_full, _, business_full = _load_variety_inputs(variety)
-        except Exception:  # defensive: pandas/openpyxl puede lanzar varios tipos en IO
+        except Exception:
             logger.exception(f"[{variety}] no se pudo recargar data para outputs ejecutivos")
             X_full = None
             business_full = None
 
-        # `run_label` con segundos para evitar colision si dos runs corren en
-        # el mismo minuto (smoke tests <60s). Comparte el sufijo entre
-        # Winner_<variety>_<run_label>.html y .xlsx para ligar visualmente
-        # ambos artefactos del mismo training.
         run_label = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-        # ---- Excel del CAMPEON aplicado a la data real ----
         winner_excel_path = _export_winner_excel(
             champion=champion,
             variety=variety,
@@ -145,7 +133,6 @@ def train_variety(
             run_label=run_label,
         )
 
-        # ---- Dashboard ejecutivo por-run (Winner_{variety}_{run_label}.html) ----
         winner_report_path = _render_winner_and_cleanup(
             variety=variety,
             results=results,
@@ -221,9 +208,7 @@ def _run_model_loop(
     for model_type in model_types:
         try:
             results.append(train_model(variety, model_type, args, settings, logger))
-        except (
-            Exception
-        ):  # defensive: train_model envuelve logica heterogenea (model fit, MLflow, IO)
+        except Exception:
             logger.exception(f"[{variety}/{model_type}] FALLO")
             failures.append(model_type)
         finally:
@@ -296,8 +281,6 @@ def _render_winner_and_cleanup(
             run_label=run_label,
         )
         logger.info(f"[{variety}] Winner dashboard: {winner_path}")
-        # Limpia obsoletos (reporte_*, business_export_*) pero mantiene
-        # Winners por-run y residuals: el index global los lista todos.
         keep = [winner_path]
         if winner_excel_path:
             keep.append(winner_excel_path)
@@ -305,7 +288,7 @@ def _render_winner_and_cleanup(
         if deleted:
             logger.info(f"[{variety}] Limpieza reports/: {len(deleted)} archivo(s) borrado(s)")
         return str(winner_path)
-    except Exception:  # defensive: render HTML mezcla plotly, jinja, IO; varios tipos posibles
+    except Exception:
         logger.exception(f"[{variety}] no se pudo construir Winner dashboard")
         return None
 
@@ -324,7 +307,7 @@ def _write_global_dashboard_index(variety: str, logger) -> None:
         from src.diagnostics.dashboard_index import write_dashboard
 
         write_dashboard(REPORTS_DIR)
-    except Exception:  # defensive: write_dashboard mezcla scan FS + jinja + IO
+    except Exception:
         logger.exception(f"[{variety}] no se pudo regenerar reports/index.html")
 
 
@@ -501,7 +484,7 @@ def _tag_champion(
       en MLflow UI. Sin esto, abrir lgb_v20 en MLflow no muestra contra qué
       compitió ni por qué perdió.
     """
-    try:  # defensive: MLflow + IO (set_tag/log_artifact + dump_json_artifact)
+    try:
         client = mlflow.tracking.MlflowClient()
 
         client.set_tag(champion.mlflow_run_id, "is_champion", "true")
@@ -526,16 +509,11 @@ def _tag_champion(
             f"{champion.oof_mape:.4f}",
         )
         if champion_decision.get("walkover"):
-            # Gano porque otros backends FALLARON, no una competencia
-            # completa. Visible en MLflow UI para no confundir el resultado.
             client.set_tag(champion.mlflow_run_id, "champion_walkover", "true")
 
         _tag_drift_summary(client, champion, variety, logger)
 
         for r in results:
-            # r.mlflow_run_id puede estar vacio si el run fue eliminado por
-            # ser loser (cleanup post-quality-gate). En ese caso skip:
-            # ya no existe en MLflow para taggearlo.
             if not r.mlflow_run_id:
                 continue
             if r.mlflow_run_id != champion.mlflow_run_id:
@@ -547,9 +525,6 @@ def _tag_champion(
         )
         summary_path = ARTIFACTS_DIR / f"variety_summary_{variety}.json"
 
-        # Lista (path, mlflow_subpath) de artifacts comparativos. Se filtran
-        # los None (artifacts opcionales que no se generaron) y los
-        # inexistentes en disco. Loop unico evita ifs paralelos por artefacto.
         candidate_artifacts: list[tuple[str | None, str]] = [
             (str(decision_path), "champion"),
             (winner_report_path, "winner_dashboard"),
@@ -557,10 +532,6 @@ def _tag_champion(
             (str(summary_path) if summary_path.exists() else None, "champion"),
         ]
 
-        # EDA mas reciente (HTML + sidecar JSON) adjunto al contexto del
-        # run (fix 2026-06-13, pedido del usuario: el EDA no era visible
-        # en MLflow). Solo si existe un EDA previo en reports/; el
-        # training no genera EDA propio.
         try:
             from src.diagnostics.eda import find_latest_eda_sidecar
 
@@ -570,18 +541,17 @@ def _tag_champion(
                 candidate_artifacts.append((str(sidecar), "eda"))
                 if eda_html.exists():
                     candidate_artifacts.append((str(eda_html), "eda"))
-        except Exception:  # defensive: el EDA es contexto opcional
+        except Exception:
             logger.warning(f"[{variety}] no se pudo adjuntar EDA al run")
 
         artifacts = [(p, sub) for p, sub in candidate_artifacts if p]
 
         for r in results:
-            # Skip losers ya eliminados (mlflow_run_id="" tras cleanup)
             if not r.mlflow_run_id:
                 continue
             for path, sub in artifacts:
                 client.log_artifact(r.mlflow_run_id, path, artifact_path=sub)
-    except Exception:  # defensive: MLflow + IO (set_tag/log_artifact + dump_json_artifact)
+    except Exception:
         logger.exception(f"[{variety}] no se pudo taggear campeon en MLflow")
 
 
@@ -592,7 +562,7 @@ def _tag_drift_summary(client, champion: ModelResult, variety: str, logger) -> N
     severidad para que MLflow UI muestre cuando el data drift se vuelve
     critico run-tras-run sin abrir HTMLs manualmente.
     """
-    try:  # defensive: import dinamico + IO (sidecar) + MLflow set_tag
+    try:
         from src.diagnostics.eda import (
             extract_drift_summary,
             find_latest_eda_sidecar,
@@ -601,10 +571,10 @@ def _tag_drift_summary(client, champion: ModelResult, variety: str, logger) -> N
         sidecar = find_latest_eda_sidecar(variety)
         if sidecar is not None:
             for k, v in extract_drift_summary(sidecar).items():
-                if v:  # skip empty strings
+                if v:
                     client.set_tag(champion.mlflow_run_id, k, v)
             logger.info(f"[{variety}] Drift tags MLflow desde {sidecar.name}")
-    except Exception:  # defensive: import dinamico + IO + MLflow
+    except Exception:
         logger.exception(f"[{variety}] no se pudo taggear drift (no critico)")
 
 
@@ -626,11 +596,6 @@ def _register_champion(
         )
     else:
         report_uri = None
-    # register_model devuelve None cuando el backend es file:// (caso default
-    # del proyecto local). Si MLFLOW_TRACKING_URI apunta a un backend SQL y
-    # algo falla, MlflowException PROPAGA; la capturamos aqui para no
-    # abortar la variedad por un fallo del Registry (el modelo ya esta
-    # entrenado y logueado en el run).
     try:
         registered_name = register_model(
             run_id=champion.mlflow_run_id,
@@ -645,12 +610,6 @@ def _register_champion(
                 "is_champion": "true",
                 "composite_score": f"{champion.composite_score:.6f}",
             },
-            # MLflow 3.x: pasamos el URI del Logged Model (`models:/m-<id>`)
-            # capturado en single_run para que register_model NO caiga al URI
-            # legacy `runs:/{run_id}/model_pipeline`, que el server resuelve
-            # con un warning "no artifacts at artifact path". Si el log
-            # absorbio un run inactivo `model_uri` es None y register_model
-            # cae al fallback legacy por compatibilidad.
             model_uri=champion.model_uri,
         )
     except MlflowException:

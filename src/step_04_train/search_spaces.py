@@ -21,33 +21,9 @@ import os
 
 import optuna
 
-# ---------------------------------------------------------------------------
-# Topes de capacidad del arbol (anti-overfit directo, 2026-06-25)
-# ---------------------------------------------------------------------------
-# Profundidad y nº de hojas/ramas son las palancas mas directas de overfitting
-# en boosting de arboles. El run prod_xl 2026-06-25 mostro que las variedades
-# con gap alto eligieron justo el extremo de la grilla (BEAUTY/VENTURA depth=8;
-# VENTURA num_leaves=54), mientras las limpias se quedaron holgadas dentro
-# (JUPITER depth=5/leaves=29; BIANCA depth=7/leaves=36).
-#
-# Bajar el tope 8->7 (depth) y 64->40 (hojas) es QUIRURGICO: deja intactas a
-# JUPITER y BIANCA (sus configs ganadoras siguen DENTRO de la grilla) y solo
-# recorta el extremo memorizador de BEAUTY/VENTURA. NO es el subajuste de rev.6
-# (depth<=5/leaves<=18): a depth 7 / 40 hojas hay capacidad de sobra para ~1.6-4.6k
-# filas. Env-overridable: para volver a la grilla vieja exportar
-# TREE_MAX_DEPTH=8 TREE_MAX_LEAVES=64 (sin rebuild).
 TREE_MAX_DEPTH: int = int(os.environ.get("TREE_MAX_DEPTH", "7"))
 TREE_MAX_LEAVES: int = int(os.environ.get("TREE_MAX_LEAVES", "40"))
 
-# Capacidad ADAPTATIVA por nº de filas (fix multi-variedad 2026-07-01).
-# La grilla se calibro con POP (9990 filas): depth 7 / 40 hojas es holgado para
-# ~10k filas pero MEMORIZA sobre 300-600 (ROSITA n=588 eligio el extremo y el
-# gate de gap descarto su XGB). El control de overfit "vive fuera de la grilla"
-# (early stopping + CV + gate) ASUME que esos mecanismos son fiables — y en n
-# chico se degradan (folds diminutos, early stopping se apaga <200 filas). Por
-# eso aca RECORTAMOS la capacidad de la grilla segun n: solo TIGHTEN para
-# variedades chicas; n >= 1500 (POP, VENTURA, BEAUTY, BIANCA, ATLAS, MAGICA...)
-# usa los caps globales -> bit-identico. ADAPT_CAPACITY_TO_N=0 lo desactiva (A/B).
 ADAPT_CAPACITY_TO_N: bool = bool(int(os.environ.get("ADAPT_CAPACITY_TO_N", "1")))
 
 
@@ -69,7 +45,7 @@ def caps_for_n(n_rows: int | None) -> tuple[int, int, int]:
         return TREE_MAX_DEPTH, TREE_MAX_LEAVES, 5
     if n_rows < 400:
         depth, leaves, frac = 5, 24, 0.02
-    else:  # 400..899
+    else:
         depth, leaves, frac = 6, 32, 0.015
     return (
         min(depth, TREE_MAX_DEPTH),
@@ -89,14 +65,9 @@ def leaves_bounds(model_type: str, max_depth: int, leaves_cap: int) -> tuple[int
     """
     if model_type == "lgb":
         lo, ceiling = 7, 2**max_depth - 1
-    else:  # xgb
+    else:
         lo, ceiling = 8, 2**max_depth
     return lo, max(lo, min(ceiling, leaves_cap))
-
-
-# ---------------------------------------------------------------------------
-# Preprocesador (compartido para todos los backends)
-# ---------------------------------------------------------------------------
 
 
 def suggest_preprocessor_params(trial: optuna.Trial) -> dict[str, object]:
@@ -129,9 +100,6 @@ def suggest_preprocessor_params(trial: optuna.Trial) -> dict[str, object]:
             "preprocessor__outliers__factor", 1.5, 5.0
         )
     else:
-        # Antes Optuna gastaba una dimensión tuneando ``factor`` aunque el
-        # método percentile la ignoraba. Ahora explora los cuantiles que sí
-        # cambian el capping.
         params["preprocessor__outliers__lower_q"] = trial.suggest_float(
             "preprocessor__outliers__lower_q", 0.001, 0.03, log=True
         )
@@ -139,11 +107,6 @@ def suggest_preprocessor_params(trial: optuna.Trial) -> dict[str, object]:
             "preprocessor__outliers__upper_q", 0.97, 0.999
         )
     return params
-
-
-# ---------------------------------------------------------------------------
-# XGBoost
-# ---------------------------------------------------------------------------
 
 
 def suggest_xgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[str, object]:
@@ -184,18 +147,10 @@ def suggest_xgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
         "regressor__regressor__grow_policy", ["depthwise", "lossguide"]
     )
     max_depth = trial.suggest_int("regressor__regressor__max_depth", 3, depth_cap)
-    # max_leaves acoplado a depth y SIEMPRE tuneado (ver leaves_bounds). En depth
-    # bajos la formula acota sola; el cap (anti-overfit 2026-06-25, 64->40; y
-    # n-adaptativo 2026-07-01) evita arboles anchos memorizadores.
     leaves_lo, max_leaves_max = leaves_bounds("xgb", max_depth, leaves_cap)
     params = {
         "regressor__regressor__max_depth": max_depth,
         "regressor__regressor__learning_rate": trial.suggest_float(
-            # Piso subido 3e-3 -> 1e-2 (2026-06-23): un LR < 1e-2 con
-            # N_ESTIMATORS_MAX + early stopping crece cientos/miles de arboles
-            # por fit (tiempo) y ajusta ruido sin ganar MAPE. El XGB elegido en
-            # prod_xl 2026-06-22 ya uso lr=0.0179 (> 1e-2): el piso viejo solo
-            # gastaba trials del TPE en una region lenta y sobreajustada.
             "regressor__regressor__learning_rate",
             1e-2,
             0.3,
@@ -225,11 +180,6 @@ def suggest_xgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
         ),
     }
     return params
-
-
-# ---------------------------------------------------------------------------
-# LightGBM
-# ---------------------------------------------------------------------------
 
 
 def suggest_lgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[str, object]:
@@ -266,9 +216,6 @@ def suggest_lgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
             "regressor__regressor__num_leaves", leaves_lo, num_leaves_max
         ),
         "regressor__regressor__learning_rate": trial.suggest_float(
-            # Piso subido 3e-3 -> 1e-2 (2026-06-23): ver nota en suggest_xgb_params.
-            # El LGB campeon de prod_xl 2026-06-22 uso lr=0.0128 (> 1e-2), asi que
-            # el piso no excluye la zona buena, solo la lenta/sobreajustada.
             "regressor__regressor__learning_rate",
             1e-2,
             0.3,
@@ -281,9 +228,6 @@ def suggest_lgb_params(trial: optuna.Trial, n_rows: int | None = None) -> dict[s
             "regressor__regressor__colsample_bytree", 0.5, 1.0
         ),
         "regressor__regressor__min_child_samples": trial.suggest_int(
-            # Piso n-adaptativo (2026-07-01): en variedades chicas cada hoja debe
-            # cubrir mas filas (>=~2% de n) para no memorizar; n>=1500 -> piso 5
-            # (POP identico). Ver caps_for_n.
             "regressor__regressor__min_child_samples",
             min_child_floor,
             100,
@@ -332,16 +276,6 @@ def suggest_mixed_params(
     }
 
 
-# ---------------------------------------------------------------------------
-# `suggest_full_params`: combina preprocesador + backend.
-#
-# El registry de backends vive en `step_04_train/registry.py` (single source
-# of truth para factory + search_space). Aqui lo importamos LAZY para evitar
-# import circular: registry.py importa `suggest_xgb_params` y
-# `suggest_lgb_params` de este modulo.
-# ---------------------------------------------------------------------------
-
-
 def suggest_full_params(
     trial: optuna.Trial, model_type: str, n_rows: int | None = None
 ) -> dict[str, object]:
@@ -350,7 +284,7 @@ def suggest_full_params(
     `n_rows` (nº de filas de la variedad) recorta la capacidad del arbol en
     variedades chicas (ver caps_for_n). None -> caps globales (POP/tests).
     """
-    from src.step_04_train.registry import get_backend  # lazy: rompe ciclo
+    from src.step_04_train.registry import get_backend
 
     backend = get_backend(model_type)
     return {

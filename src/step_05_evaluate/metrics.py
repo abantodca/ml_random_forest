@@ -72,9 +72,7 @@ def calculate_regression_metrics(
     smape = (
         float(
             np.mean(
-                2.0
-                * np.abs(y_true[smape_valid] - y_pred[smape_valid])
-                / smape_denom[smape_valid]
+                2.0 * np.abs(y_true[smape_valid] - y_pred[smape_valid]) / smape_denom[smape_valid]
             )
             * 100.0
         )

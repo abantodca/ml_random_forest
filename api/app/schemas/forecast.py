@@ -30,11 +30,6 @@ from app.core import (
 DriftStatus = Literal["ok", "warning", "alert"]
 
 
-# ============================================================================
-# Request Schemas (Input)
-# ============================================================================
-
-
 class ForecastCreate(BaseModel):
     """Schema para crear un pronostico individual."""
 
@@ -200,11 +195,6 @@ class ForecastUpdate(BaseModel):
     )
 
 
-# ============================================================================
-# Response Schemas (Output)
-# ============================================================================
-
-
 class DriftPerFeature(BaseModel):
     """Drift de una sola feature en una sola fila.
 
@@ -271,14 +261,7 @@ class ForecastResponse(BaseModel):
     kgjn_pred: float | None
     created_at: datetime
     updated_at: datetime
-    # Metadata opcional, no persistida en DB. Se inyecta en el router
-    # después de model_validate(forecast). Default None preserva la
-    # respuesta legacy para clientes que no entienden el campo.
     drift: DriftReport | None = None
-    # Incertidumbre del ensemble (std entre los K=5 pipelines internos del
-    # OOFEnsembleRegressor). No persistida. None con modelos legacy.
-    # kghora_lo/hi = banda ±1.96·std; confidence por std relativa:
-    # alta (<10%), media (10-20%), baja (>20% -> revisar manualmente).
     kghora_std: float | None = None
     kghora_lo: float | None = None
     kghora_hi: float | None = None
@@ -299,7 +282,6 @@ class PredictionResponse(BaseModel):
     kghora_pred: float
     kgjn_pred: float | None = None
     drift: DriftReport | None = None
-    # Banda de confianza del ensemble (ver ForecastResponse).
     kghora_std: float | None = None
     kghora_lo: float | None = None
     kghora_hi: float | None = None
@@ -370,8 +352,6 @@ class ForecastListResponse(BaseModel):
     total: int
     limit: int
     offset: int
-    # Drift agregado del lote: presente solo en endpoints batch/upload
-    # con N>=30. None en endpoints de lectura (GET /forecasts).
     batch_drift: BatchDriftReport | None = None
 
 

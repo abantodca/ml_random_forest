@@ -62,7 +62,6 @@ def _split_by_variety(
         if len(sub) < min_rows:
             continue
         sheet = _sanitize_sheet_name(variety)
-        # evita colisiones tras sanitizar (extremadamente raro)
         suffix = 1
         base = sheet
         while sheet in seen:
@@ -108,14 +107,6 @@ def split_workbook(
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         for sheet, sub in _split_by_variety(df, min_rows=min_rows, variety_col=variety_col):
-            # Dedup estructural AGUAS ARRIBA (2026-06-15): elimina filas 100%
-            # identicas una sola vez, para que DB-HISTORICA.xlsx quede canonico
-            # y limpio. Antes el unico dedup vivia en data_loader._load_sheet_aligned
-            # y corria 1x por backend (lgb/xgb releen la misma hoja) -> el
-            # warning "N duplicados estructurales" se repetia 3-4x por training.
-            # keep="first": orden Excel = orden temporal (mismo criterio que el
-            # loader). El min_rows ya se evaluo en _split_by_variety sobre el
-            # conteo crudo, asi que la seleccion de variedades NO cambia.
             n_pre = len(sub)
             sub = sub.drop_duplicates(keep="first").reset_index(drop=True)
             n_dup = n_pre - len(sub)

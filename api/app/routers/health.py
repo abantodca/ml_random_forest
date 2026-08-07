@@ -31,11 +31,6 @@ router = APIRouter(prefix="/health", tags=["health"])
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Health Checks
-# ============================================================================
-
-
 @router.get("", response_model=HealthResponse)
 async def health_check(
     db: DbSession,
@@ -56,8 +51,6 @@ async def health_check(
     else:
         mlflow_ok = await mlflow.check_connection()
         db_ok, _ = await check_database(db)
-        # get_available_models() es una llamada de red BLOQUEANTE a MLflow;
-        # se ejecuta en el threadpool para no congelar el event loop.
         loop = asyncio.get_running_loop()
         available = await loop.run_in_executor(None, mlflow.get_available_models)
         models_available = len(available)
@@ -90,8 +83,6 @@ async def health_check_detailed(
     db_ok, db_error = await check_database(db)
     mlflow_ok = await mlflow.check_connection()
 
-    # Red bloqueante → threadpool (ver health_check). is_loaded() es lookup
-    # en memoria, no necesita offload.
     loop = asyncio.get_running_loop()
     available_models = await loop.run_in_executor(None, mlflow.get_available_models)
     loaded_models = [v.value for v in Variety if mlflow.is_loaded(v)]
@@ -112,11 +103,6 @@ async def health_check_detailed(
             "total_varieties": len(Variety),
         },
     )
-
-
-# ============================================================================
-# Model Management
-# ============================================================================
 
 
 @router.post("/models/reload", response_model=ModelReloadResponse, tags=["models"])

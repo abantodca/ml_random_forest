@@ -63,10 +63,6 @@ class WinnerKit:
     context: TrainingContext
     actions: list[Action]
     fundo_bias: list[GroupBias]
-    # Diagnostico estadistico (IC bootstrap + heteroscedasticity + calibration).
-    # Permiten al lector saber si las metricas puntuales son estables o ruidosas,
-    # y si los intervalos del modelo son validos uniformemente. None cuando la
-    # muestra es insuficiente para el calculo (e.g. <20 filas).
     mae_oof_ci: MetricCI | None = None
     mape_oof_ci: MetricCI | None = None
     r2_oof_ci: MetricCI | None = None
@@ -138,8 +134,6 @@ def build_winner_kit(
         col="FUNDO",
     )
 
-    # Diagnostico estadistico (defensivo: si la muestra es chica o algo falla,
-    # se omite la seccion en lugar de romper el dashboard completo).
     mae_ci = mape_ci = r2_ci = None
     hetero = None
     calib = None
@@ -153,7 +147,6 @@ def build_winner_kit(
             hetero = breusch_pagan_residuals(residuals=(pred - real), predictions=pred)
             calib = calibration_bins(real, pred, n_bins=10)
         except Exception:
-            # Falla de algun calculo no debe tumbar el dashboard.
             pass
 
     return WinnerKit(

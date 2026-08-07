@@ -34,7 +34,6 @@ class Base(DeclarativeBase):
     pass
 
 
-# Variables globales de motor y sesión
 _engine: AsyncEngine | None = None
 _async_session_maker: async_sessionmaker[AsyncSession] | None = None
 
@@ -78,8 +77,6 @@ async def ensure_database(database_url: str) -> None:
     try:
         exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", target_db)
         if not exists:
-            # CREATE DATABASE no admite parámetros y no puede ir en transacción;
-            # el nombre proviene de nuestra config, no de input externo.
             await conn.execute(f"CREATE DATABASE {_quote_pg_identifier(target_db)}")
             logger.info("✅ Base de datos '%s' creada", target_db)
     finally:
@@ -99,47 +96,35 @@ async def init_db(database_url: str) -> None:
     global _engine, _async_session_maker
 
     try:
-        # Crea la DB destino si falta (no-op si ya existe).
         await ensure_database(database_url)
 
-        # Convertir postgresql:// a postgresql+asyncpg://
         if database_url.startswith("postgresql://"):
             database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-        # Crear motor async
         _engine = create_async_engine(
             database_url,
-            echo=False,  # Cambia a True para debug SQL
-            pool_pre_ping=True,  # Verifica conexión antes de usar
+            echo=False,
+            pool_pre_ping=True,
             pool_size=5,
             max_overflow=10,
         )
 
-        # Crear session maker
         _async_session_maker = async_sessionmaker(
             _engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
 
-        # Verificar conexión
         async with _engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
 
         logger.info("✅ Conexión a PostgreSQL establecida")
 
-        # Crear tablas si no existen — el import explicito registra los
-        # mapeos en Base.metadata antes del create_all.
         from app.models.forecast import Forecast  # noqa: F401
         from app.models.historical_observation import HistoricalObservation  # noqa: F401
 
         async with _engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            # Migración aditiva idempotente: create_all NO agrega columnas a
-            # tablas ya existentes. Para DBs creadas antes de enriquecer
-            # historical_observations con las features reales, las añadimos con
-            # ADD COLUMN IF NOT EXISTS (no-op en DBs nuevas). Nombres/tipos son
-            # literales fijos del código, no input externo.
             for _col, _ddl_type in (
                 ("dpc", "DOUBLE PRECISION"),
                 ("indus_pct", "DOUBLE PRECISION"),

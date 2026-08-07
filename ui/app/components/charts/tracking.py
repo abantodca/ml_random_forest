@@ -75,7 +75,6 @@ def build_pred_vs_real_line(
     El hover unificado muestra también el error absoluto (proyectado − real)
     para que el usuario no tenga que calcularlo mentalmente.
     """
-    # Calcular error para enriquecer el hover (customdata[0])
     errors = (
         [p - r for p, r in zip(proyectado, real, strict=True)]
         if len(proyectado) == len(real)
@@ -152,14 +151,12 @@ def build_parity_plot(
         r2 = mape = mae = 0.0
         lo, hi = 0.0, 1.0
 
-    # Errors for customdata hover
     errors = [p - r for r, p in zip(real, proyectado, strict=True)]
     pct_errors = [(p - r) / r * 100.0 if r else None for r, p in zip(real, proyectado, strict=True)]
     customdata = [[e, pe] for e, pe in zip(errors, pct_errors, strict=True)]
 
     fig = go.Figure()
 
-    # Banda ±MAE alrededor de y=x: zona de "error típico aceptable"
     if n and mae > 0:
         band_rgb = hex_to_rgb(TEMA["success"])
         fig.add_trace(
@@ -245,7 +242,6 @@ def build_residual_bars(
         bias = sum(residuals) / len(residuals)
         sd = (sum((r - bias) ** 2 for r in residuals) / len(residuals)) ** 0.5
 
-        # Banda ±1σ alrededor del sesgo: dónde cae el ~68% de los errores.
         fig.add_hrect(
             y0=bias - sd, y1=bias + sd, fillcolor=TEMA["accent"], opacity=0.08, line_width=0
         )
@@ -257,12 +253,10 @@ def build_residual_bars(
             annotation_font=dict(size=10, color=TEMA["accent"]),
         )
 
-        # Media móvil: revela tendencia sistemática de los errores
         n = len(residuals)
         win = rolling_window if rolling_window is not None else (min(7, n // 3) if n >= 6 else 0)
         if win >= 3:
             ma = _moving_average(residuals, win)
-            # Filtrar None (no deberían aparecer con _moving_average actual)
             ma_clean = [v if v is not None else float("nan") for v in ma]
             fig.add_trace(
                 go.Scatter(
@@ -302,22 +296,19 @@ def build_decomp_scatter(
     sin necesidad de interpretar signos: Q1 (++, ambos sobreestiman),
     Q2 (−+, datos subestiman/modelo sobreestima), etc.
     """
-    # Magnitudes para calcular error total en hover (customdata)
     err_total = [d + m for d, m in zip(err_data, err_model, strict=True)]
     customdata = [[et] for et in err_total]
 
     fig = go.Figure()
 
-    # Sombreado de cuadrantes (muy tenue)
     if err_data and err_model:
         x_range = max(abs(v) for v in err_data) * 1.2 or 1.0
         y_range = max(abs(v) for v in err_model) * 1.2 or 1.0
         warning_rgb = hex_to_rgb(TEMA["warning"])
         info_rgb = hex_to_rgb(TEMA["info"])
-        # Q1(++)/Q3(--): ambos sesgados en el mismo sentido → más grave (warning)
         for x0, x1, y0, y1 in [
-            (0, x_range, 0, y_range),  # Q1
-            (-x_range, 0, -y_range, 0),  # Q3
+            (0, x_range, 0, y_range),
+            (-x_range, 0, -y_range, 0),
         ]:
             fig.add_shape(
                 type="rect",
@@ -329,10 +320,9 @@ def build_decomp_scatter(
                 line_width=0,
                 layer="below",
             )
-        # Q2/Q4: sesgos opuestos se cancelan parcialmente → info
         for x0, x1, y0, y1 in [
-            (-x_range, 0, 0, y_range),  # Q2
-            (0, x_range, -y_range, 0),  # Q4
+            (-x_range, 0, 0, y_range),
+            (0, x_range, -y_range, 0),
         ]:
             fig.add_shape(
                 type="rect",
@@ -393,13 +383,10 @@ def build_weekly_bars(
     El hover incluye el Δ% (desvío porcentual de la semana) para que el
     responsable no tenga que calcularlo fuera del gráfico.
     """
-    # Δ% por semana para customdata
     pct = [((p - r) / r * 100.0) if r else None for p, r in zip(proyectado, real, strict=True)]
     cd_proj = [[p, pt] for p, pt in zip(proyectado, pct, strict=True)]
     cd_real = [[r, pt] for r, pt in zip(real, pct, strict=True)]
 
-    # Peor semana = mayor |Δ%| entre las que tienen real → contorno rojo en
-    # ambas barras para que salte a la vista cuál cerró peor.
     _valid = [(i, abs(p)) for i, p in enumerate(pct) if p is not None]
     _worst = max(_valid, key=lambda t: t[1])[0] if _valid else -1
     _line_w = [2.8 if i == _worst else 0 for i in range(len(weeks))]

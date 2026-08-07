@@ -53,7 +53,6 @@ def export_business_excel(
     fname = filename or f"business_export_{variety}_{model_type}_{ts}.xlsx"
     out_path = out_dir / fname
 
-    # ---- DataFrames ----
     df_oof = build_predictions_df(
         X_raw=X_raw,
         business_cols=business_cols,
@@ -61,15 +60,11 @@ def export_business_excel(
         y_h_pred=oof["y_pred"],
         fold_id=oof.get("fold_id"),
     )
-    # Si el final_pipeline es OOFEnsembleRegressor (caso normal con K>=1),
-    # usamos predict_with_std para obtener bandas. Si el pipeline es legacy
-    # (sklearn Pipeline simple sin K-ensemble), cae a predict() y bandas=None.
     y_h_pred_full = np.full(len(X_raw), np.nan)
     y_h_std_full: np.ndarray | None = None
     try:
         if hasattr(final_pipeline, "predict_with_std"):
             y_h_pred_full, y_h_std_full = final_pipeline.predict_with_std(X_raw)
-            # std==0 todo (n_models=1) -> no aporta banda, descartamos.
             if y_h_std_full is not None and not np.any(y_h_std_full > 0):
                 y_h_std_full = None
         else:
@@ -81,10 +76,6 @@ def export_business_excel(
             exc_info=True,
         )
 
-    # Residuals OOF para calibrar Conformal Prediction (preferido sobre la
-    # heuristica `mean +/- 1.96*std`). Se filtran NaN del OOF (folds no
-    # cubiertos). Conformal devuelve bandas con cobertura garantizada al
-    # 95% (split conformal, ver statistical_tests.conformal_intervals).
     oof_y_true = np.asarray(oof["y_true"], dtype=float)
     oof_y_pred = np.asarray(oof["y_pred"], dtype=float)
     oof_residuals = oof_y_true - oof_y_pred
@@ -113,12 +104,10 @@ def export_business_excel(
         n_insample=len(df_total),
     )
 
-    # Veredicto + acciones usan OOF (honesto). abs_gap viene de nested CV.
     abs_gap = abs(float(nested_metrics.get("nested_cv_gap_mean", 0.0)))
     oof_metrics = (business_validation.metrics_oof or {}) if business_validation else {}
     oof_mape = float(oof_metrics.get("mape", float("nan")))
 
-    # X alineado con OOF (para subgroups en Acciones)
     X_aligned: pd.DataFrame | None = None
     bv_mask = getattr(business_validation, "oof_mask", None)
     if bv_mask is not None:
@@ -143,7 +132,6 @@ def export_business_excel(
     )
     df_glosario = build_glosario_df()
 
-    # ---- Escritura ordenada (de simple a detallado) ----
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         df_inicio.to_excel(writer, sheet_name="Inicio", index=False)
         df_acciones.to_excel(writer, sheet_name="Acciones", index=False)

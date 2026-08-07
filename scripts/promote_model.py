@@ -26,9 +26,6 @@ import sys
 
 from mlflow.tracking import MlflowClient
 
-# Nombre real que loguea el trainer: `business_oof_mape` (ver
-# BusinessValidation.to_mlflow_metrics, prefijo business_oof_). Los otros dos
-# quedan como fallback para runs antiguos con la convencion vieja.
 METRIC_KEYS = ("business_oof_mape", "mape_oof", "mape")
 
 

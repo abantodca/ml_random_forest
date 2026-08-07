@@ -76,7 +76,6 @@ def sync_to_s3(
     try:
         s3 = boto3.client("s3")
 
-        # artifacts/: JSONs + joblibsn
         n_artifacts = _upload_dir(
             s3,
             artifacts_dir,
@@ -84,7 +83,6 @@ def sync_to_s3(
             artifacts_prefix,
             extensions=(".json", ".joblib"),
         )
-        # reports/: HTMLs y Excels del dashboard ejecutivo
         n_reports = _upload_dir(
             s3,
             reports_dir,

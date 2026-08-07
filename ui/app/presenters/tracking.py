@@ -20,7 +20,6 @@ from app.services import TrackingService, forecast_verdict
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-# Orden de columnas de la grilla de datos REALES (= inputs del pronóstico + KG/JR_H).
 REAL_COLS = [
     "FUNDO",
     "FORMATO",
@@ -48,7 +47,6 @@ def iso_week(fecha: str) -> str:
         return "—"
 
 
-# ── Filtros (la UI multiselect vive en la vista; acá solo opciones + criba) ──
 def filter_options(points: list[AccuracyPoint]) -> tuple[list[str], list[str]]:
     """Valores únicos de FUNDO y SEMANA ISO presentes en los puntos."""
     fundos = sorted({p.fundo for p in points})
@@ -62,7 +60,6 @@ def apply_filters(
     return [p for p in points if p.fundo in sel_fundos and iso_week(p.fecha) in sel_weeks]
 
 
-# ── Grilla / plantilla de datos reales (lógica pura, sin st) ─────────────────
 def build_real_template_xlsx() -> bytes:
     """Plantilla del Excel de datos REALES (= inputs del pronóstico + KG/JR_H)."""
     cat = get_cached_catalogs()
@@ -74,8 +71,8 @@ def build_real_template_xlsx() -> bytes:
             "FUNDO": [fundo],
             "FORMATO": [fmt],
             "KG/HA": [4800.0],
-            "KG/JR_H": [3.9],  # ← productividad REAL realizada (obligatoria)
-            "DPC": [118.0],  # opcionales: habilitan descomposición exacta
+            "KG/JR_H": [3.9],
+            "DPC": [118.0],
             "HA": [9.0],
             "DIA_COSECHA": [32],
             "%INDUS": [5.0],
@@ -110,7 +107,6 @@ def real_grid_from_history(variety: str) -> pd.DataFrame:
             for o in obs
         ]
     )[REAL_COLS]
-    # DateColumn del data_editor exige dtype fecha/datetime, no string.
     df["FECHA"] = pd.to_datetime(df["FECHA"], errors="coerce")
     return df
 
@@ -132,7 +128,6 @@ def coerce_real(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-# ── View-models de análisis ──────────────────────────────────────────────────
 @dataclass(frozen=True)
 class KpiVM:
     n_points: int
@@ -140,9 +135,9 @@ class KpiVM:
     mape: float
     has_mape: bool
     bias: float
-    verdict_status: str  # ok / warning / alert
+    verdict_status: str
     verdict_msg: str
-    sesgo_dir: str  # sobreestima / subestima
+    sesgo_dir: str
     mape_variant: str
     bias_variant: str
 
@@ -152,7 +147,7 @@ class DecompVM:
     available: bool
     mean_data: float = 0.0
     mean_model: float = 0.0
-    predominant: str = "data"  # data / model
+    predominant: str = "data"
     data_variant: str = "primary"
     model_variant: str = "primary"
 
@@ -176,7 +171,6 @@ class WeeklyVM:
     proj_sums: list[float] = field(default_factory=list)
     real_sums: list[float] = field(default_factory=list)
     table_rows: list[dict] = field(default_factory=list)
-    # KPIs de cierre (None cuando no hay semanas con real > 0)
     cumplimiento: float | None = None
     cumpl_variant: str = "success"
     mejor_week: str = ""

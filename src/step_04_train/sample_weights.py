@@ -54,14 +54,8 @@ def compute_sample_weights(
     y_arr = np.asarray(y, dtype=float)
     n = len(y_arr)
 
-    # Recorte de bins por n: cada bin apunta a >= min_rows_per_bin filas.
     n_bins_eff = min(n_bins, max(3, n // max(1, min_rows_per_bin)))
 
-    # `pd.cut` puede devolver NaN cuando y contiene NaN o en casos borde
-    # (ej: valores fuera del rango de bins por float-precision). Mapear NaN
-    # a un bin sentinel -1 antes de indexar evita ValueError al hacer
-    # int(NaN). Las filas con bin=-1 reciben weight neutral (1.0) y por
-    # tanto no contribuyen al re-balanceo.
     bins = pd.cut(y_arr, bins=n_bins_eff, labels=False, include_lowest=True)
     bins = pd.Series(bins).fillna(-1).astype(int).to_numpy()
     counts = pd.Series(bins).value_counts().to_dict()

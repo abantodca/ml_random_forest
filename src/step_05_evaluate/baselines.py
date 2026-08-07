@@ -55,9 +55,11 @@ class HierarchicalMedianRegressor(BaseEstimator, RegressorMixin):
             if not all(column in X_fit.columns for column in columns):
                 continue
             keys = self._keys(X_fit, columns)
-            stats = pd.DataFrame({"key": keys, "target": y_fit}).groupby("key")[
-                "target"
-            ].agg(["median", "count"])
+            stats = (
+                pd.DataFrame({"key": keys, "target": y_fit})
+                .groupby("key")["target"]
+                .agg(["median", "count"])
+            )
             valid = stats[stats["count"] >= self.min_group_size]["median"]
             self.level_maps_.append(
                 (columns, {str(key): float(value) for key, value in valid.items()})

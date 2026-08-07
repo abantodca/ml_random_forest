@@ -23,7 +23,6 @@ from app.services import ValidationIssue, row_to_record
 
 DRIFT_BADGE = {"ok": "🟢 OK", "warning": "🟡 Atención", "alert": "🔴 Alerta"}
 
-# Orden de columnas = requeridas + opcionales del validador de lotes.
 COLS = [
     "VARIEDAD",
     "FECHA",
@@ -59,7 +58,6 @@ def seed_row(variety: str, fundo: str, formato: str) -> dict:
 
 def empty_grid(variety: str, fundo: str, formato: str) -> pd.DataFrame:
     df = pd.DataFrame([seed_row(variety, fundo, formato)], columns=COLS)
-    # DateColumn exige dtype fecha/datetime (no string ni object mixto).
     df["FECHA"] = pd.to_datetime(df["FECHA"], errors="coerce")
     return df
 
@@ -88,7 +86,6 @@ def normalize_upload(raw: pd.DataFrame) -> pd.DataFrame:
     for c in COLS:
         if c not in raw.columns:
             raw[c] = None
-    # FECHA en texto (CSV) rompería el DateColumn → a datetime.
     raw["FECHA"] = pd.to_datetime(raw["FECHA"], errors="coerce")
     return raw[COLS]
 
@@ -194,7 +191,6 @@ class ResultsVM:
     hist_df: pd.DataFrame
 
 
-# Prioridad de columnas en la tabla de resultados (Confiabilidad primero).
 _RESULT_PRIORITY = [
     "Confiabilidad",
     "Variedad",

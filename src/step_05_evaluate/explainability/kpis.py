@@ -29,11 +29,11 @@ from src.config import (
 class PlainKPI:
     """KPI ejecutivo: titulo de la pregunta + respuesta en una frase."""
 
-    question: str  # "¿Qué tan preciso es?"
-    headline: str  # "8 de 10 cosechas con error ≤ 7 kg/jornal"
-    detail: str  # "Mediana del error: 4.2 kg/jornal..."
-    technical: str  # "MAPE OOF = 17.5% (KG/JR)"
-    score_label: str  # "ALTO" | "MEDIO" | "BAJO" — semaforo opcional
+    question: str
+    headline: str
+    detail: str
+    technical: str
+    score_label: str
 
 
 def kpi_precision(abs_errors: np.ndarray, mape_pct: float) -> PlainKPI:

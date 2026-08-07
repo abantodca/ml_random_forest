@@ -29,9 +29,6 @@ class VarietyService:
             logger.error("Error al obtener variedades: %s", exc)
             return []
 
-        # Solo las variedades con modelo entrenado (presentes en el registry,
-        # vía /available) deben aparecer en la UI. Las del catálogo sin modelo
-        # se descartan: no se pueden pronosticar ni tienen reporte/dashboard.
         names_with_model = [n for n in all_names if n in available_names]
         detail_map = self._fetch_details(names_with_model)
         return [detail_map[name] for name in names_with_model if name in detail_map]
@@ -55,8 +52,6 @@ class VarietyService:
         if status != 200:
             raise ApiResponseError(self._extract_text_detail(text), status)
         return text
-
-    # ---- helpers privados -----------------------------------------------
 
     def _fetch_root_lists(self) -> tuple[list[str], set[str]]:
         with ThreadPoolExecutor(max_workers=WORKERS_VARIETY_ROOT) as executor:
@@ -96,11 +91,6 @@ class VarietyService:
             logger.warning("No se pudo obtener el detalle de la variedad %s: %s", name, exc)
             return VarietyViewModel(name=name, model_loaded=True, metrics={})
         vm = to_variety(data, fallback_name=name)
-        # `name` viene de los disponibles en el REGISTRY → TIENE modelo. El
-        # `model_loaded` del backend es estado in-memory (lazy-load): tras un
-        # reinicio queda False aunque el modelo exista, lo que vaciaba el
-        # dashboard y hacía que Seguimiento abriera en una variedad sin datos.
-        # Para el dashboard, "tiene modelo" = está en el registry → forzamos True.
         return vm if vm.model_loaded else vm.model_copy(update={"model_loaded": True})
 
     @staticmethod

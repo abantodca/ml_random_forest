@@ -46,7 +46,7 @@ class LiveDataVM:
     has_points: bool
     mape_variant: str
     bias_variant: str
-    verdict_status: str | None = None  # ok / warning / alert
+    verdict_status: str | None = None
     verdict_msg: str | None = None
     top_variety: str | None = None
     n_top: int = 0
@@ -97,9 +97,6 @@ def build_live_data_vm() -> LiveDataVM:
 
     points: list[AccuracyPoint] = []
     for name in get_loaded_variety_names():
-        # Una variedad que falle (modelo recién registrado, backend ocupado)
-        # no debe tumbar el resumen de las demás. Se loguea a debug para no
-        # ensuciar la consola pero dejar rastro diagnosticable.
         try:
             points.extend(get_cached_accuracy(name, with_decomposition=False))
         except Exception as exc:

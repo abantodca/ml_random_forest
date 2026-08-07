@@ -115,9 +115,6 @@ class OOFEnsembleRegressor(BaseEstimator, RegressorMixin):
         no tiene varianza interna). En ese caso usar `predict()` directo.
         """
         preds = self._stacked_preds(X)
-        # ddof=1 (sample std). Con K=1 devuelve NaN -> reemplazo a 0 para no
-        # propagar NaN al consumer (es honesto: 1 modelo => 0 incertidumbre
-        # entre modelos, que es trivialmente cierto).
         if preds.shape[1] <= 1:
             return preds.mean(axis=1), np.zeros(preds.shape[0])
         return preds.mean(axis=1), preds.std(axis=1, ddof=1)

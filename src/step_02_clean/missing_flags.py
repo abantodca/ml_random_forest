@@ -55,8 +55,6 @@ class MissingFlagger(BaseEstimator, TransformerMixin):
             flag_name = f"{c}{SUFFIX}"
             X[flag_name] = X[c].isna().astype(int)
             flag_cols.append(flag_name)
-        # Agregada: cuantas raw cols tenian NaN en esta fila. Si no hay
-        # flags (cols_ vacia), N_MISS_RAW=0 por construccion.
         if flag_cols:
             X[AGG_COL] = X[flag_cols].sum(axis=1).astype(int)
         else:

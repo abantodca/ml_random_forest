@@ -24,14 +24,9 @@ import numpy as np
 
 from src.step_05_evaluate.html.helpers import plotly_div
 
-# Paleta corporativa
 _PRIMARY = "#0F766E"
 _DANGER = "#B91C1C"
 
-# Tope de puntos por scatter embebido en el HTML. Por encima de esto el
-# scatter no gana legibilidad y si infla el archivo (cada punto son ~2
-# floats en JSON); se muestrea de forma DETERMINISTA (paso uniforme, sin
-# RNG) para que el mismo run produzca el mismo HTML.
 _SCATTER_MAX_POINTS = 2500
 
 
@@ -49,10 +44,6 @@ _PLOTLY_LAYOUT_DEFAULTS = dict(
     margin=dict(l=60, r=20, t=50, b=50),
     hoverlabel=dict(bgcolor="white", font_size=12, bordercolor=_PRIMARY),
 )
-
-# Alias retro-compatible para callers internos de este modulo. La fuente
-# de verdad es `html.helpers.plotly_div`.
-
 
 
 def plot_pred_vs_actual_plotly(
@@ -137,7 +128,6 @@ def plot_calibration_plotly(calibration_df) -> str:
     hi = float(max(bin_pred.max(), bin_real.max()))
 
     fig = go.Figure()
-    # Diagonal ideal
     fig.add_trace(
         go.Scatter(
             x=[lo, hi],
@@ -148,7 +138,6 @@ def plot_calibration_plotly(calibration_df) -> str:
             hoverinfo="skip",
         )
     )
-    # Puntos por bin (size proporcional a count)
     fig.add_trace(
         go.Scatter(
             x=bin_pred,
@@ -203,8 +192,6 @@ def plot_error_histogram_plotly(
     if abs_errors.size == 0:
         return ""
 
-    # Pre-binnear en Python (np.histogram) en vez de embeber el array
-    # completo en el HTML: 60 barras pesan ~1 KB; el array crudo, cientos.
     counts, edges = np.histogram(abs_errors, bins=60)
     centers = np.round((edges[:-1] + edges[1:]) / 2, 3)
     width = float(edges[1] - edges[0])
@@ -219,7 +206,6 @@ def plot_error_histogram_plotly(
             name="Distribución",
         )
     )
-    # Lineas verticales para percentiles clave
     for _pct, val, color, label in [
         (50, p50, "#2ca02c", f"p50: {p50:.2f}"),
         (90, p90, "#f59e0b", f"p90: {p90:.2f}"),
@@ -333,10 +319,6 @@ def plot_error_over_time_plotly(
     except Exception:
         return ""
 
-    # La media movil se calcula sobre TODA la serie; solo los marcadores
-    # individuales se muestrean para no inflar el HTML. Las fechas van como
-    # 'YYYY-MM-DD' (los Timestamp se serializan como ISO completo con hora,
-    # el doble de bytes sin informacion extra: el dato es diario).
     idx = _sample_step(s.size)
     s_pts = s.iloc[idx].round(3)
 
@@ -408,15 +390,12 @@ def plot_partial_dependence_plotly(
     except ImportError:
         return ""
 
-    # Resolver el modelo final dentro del wrapper (OOFEnsemble -> Pipeline -> TTR -> regressor)
     try:
         if hasattr(pipeline, "models_") and len(pipeline.models_) > 0:
-            inner = pipeline.models_[0]  # primero del ensemble
+            inner = pipeline.models_[0]
         else:
             inner = pipeline
-        # Top-k features por importance (LGB/XGB lo exponen)
         regressor = inner.named_steps.get("regressor") if hasattr(inner, "named_steps") else inner
-        # TransformedTargetRegressor wrapping
         actual = getattr(regressor, "regressor_", regressor)
         importances = getattr(actual, "feature_importances_", None)
         if importances is None or len(importances) == 0:
@@ -425,9 +404,6 @@ def plot_partial_dependence_plotly(
     except Exception:
         return ""
 
-    # X_sample debe estar PRE-PROCESADO (mismo space que vio el regressor).
-    # Si X_sample es raw, sklearn.inspection.partial_dependence puede fallar.
-    # Aqui asumimos que el caller ya pasa X transformado.
     fig = go.Figure()
     palette = ["#1f4e8a", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
 

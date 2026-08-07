@@ -30,9 +30,6 @@ from src.config import (
 )
 from src.step_01_load.validation import validate_dataset
 
-# Logger inerte hasta que el caller (main.py) configure handlers via
-# `setup_logging()`. Usar `getLogger(__name__)` evita side-effects al
-# importar este modulo desde tests u otros entrypoints.
 logger = logging.getLogger(__name__)
 
 
@@ -61,8 +58,6 @@ def _resolve_default_sheet() -> str:
     """
     raw = (DEFAULT_VARIETIES or "").strip()
     if not raw or raw.lower() == "all":
-        # Sin info concreta: el caller debe pasar sheet=. Si no, pandas
-        # explotara con un mensaje claro al intentar leer la hoja vacia.
         return raw
     return raw.split(",", 1)[0].strip()
 
@@ -99,12 +94,6 @@ def _load_sheet_aligned(
     n_dropped_target = n_before - len(df)
     if n_dropped_target:
         logger.warning(f"{n_dropped_target} filas descartadas por target NaN ({sheet_name})")
-    # KG/JR_H = KG/JR / H-EF es kg por jornal-hora: fisicamente > 0. Un target
-    # <= 0 es IMPOSIBLE (visto 2026-07-01: 1 fila en MAGICA con KG/JR=-393.59,
-    # H-EF=8 -> ratio=-49.2; error de carga en origen, kilos negativos). Ademas
-    # rompe el log1p del target transform (log1p(<=-1)=NaN, que se propaga al y
-    # del fold y envenena el fit). Se descarta aca, en el filtro CANONICO, para
-    # no desalinear KG/JR/H-EF con (X, y). Validation solo AVISA; el drop va aca.
     target_num = pd.to_numeric(df[TARGET], errors="coerce")
     invalid_numeric = target_num.isna()
     n_invalid_numeric = int(invalid_numeric.sum())
@@ -125,41 +114,26 @@ def _load_sheet_aligned(
             f"- KG/JR_H imposible <= 0; ejemplos={ejemplos}"
         )
         df = df.loc[~impossible].reset_index(drop=True)
-    # EDA POP 2026-05-09: duplicados estructurales (mismas filas) inflaban CV
-    # metrics. Detecta filas identicas sobre TODAS las columnas; mantiene el
-    # PRIMERO (orden Excel = orden temporal en POP). Desde 2026-06-15 el dedup
-    # CANONICO vive en scripts/prepare_data.split_workbook (1x al generar
-    # DB-HISTORICA.xlsx); este queda DEFENSIVO: no-op si la data entra limpia,
-    # pero protege recargas directas del Excel crudo. Si dispara el WARNING de
-    # abajo, es senal de que alguien salteo el split.
     n_pre_dedup = len(df)
     df = df.drop_duplicates(keep="first").reset_index(drop=True)
     n_dropped_dup = n_pre_dedup - len(df)
     if n_dropped_dup:
         logger.warning(f"{n_dropped_dup} duplicados estructurales descartados ({sheet_name})")
 
-    # Una fila sin fecha no puede ubicarse en validación temporal ni construir
-    # lags honestos. Se descarta en el helper compartido para conservar la
-    # alineación exacta entre features y columnas de negocio.
     if DATE_COLUMN in df.columns:
         parsed_dates = pd.to_datetime(df[DATE_COLUMN], errors="coerce")
         invalid_dates = parsed_dates.isna()
         if invalid_dates.any():
             logger.warning(
-                f"{int(invalid_dates.sum())} fila(s) sin fecha válida descartadas "
-                f"({sheet_name})"
+                f"{int(invalid_dates.sum())} fila(s) sin fecha válida descartadas ({sheet_name})"
             )
             df = df.loc[~invalid_dates].copy()
             parsed_dates = parsed_dates.loc[~invalid_dates]
         df[DATE_COLUMN] = parsed_dates.to_numpy()
 
-    # Orden canónico estable. Los lags ordenan internamente, pero mantener el
-    # dataset cronológico también vuelve honesto el holdout de early stopping
-    # y garantiza que cualquier splitter posicional respete el tiempo.
     if DATE_COLUMN in df.columns:
-        df = (
-            df.sort_values(DATE_COLUMN, kind="mergesort", na_position="last")
-            .reset_index(drop=True)
+        df = df.sort_values(DATE_COLUMN, kind="mergesort", na_position="last").reset_index(
+            drop=True
         )
     return df, file_path, sheet_name
 
@@ -202,12 +176,6 @@ def load_data(
 
     useless_present = [c for c in USELESS_COLUMNS if c in df.columns]
     if useless_present:
-        # MES se descarta como columna raw; su informacion se reinyecta como
-        # ciclicas (MES_SIN/COS, MES_SIN2/COS2, MES_SIN3/COS3) y SEMANA_SIN/COS
-        # que FeatureGenerator deriva de FECHA durante el fit del Pipeline.
-        # DIA_SEM se descarta sin reemplazo (auditoria 2026-05-05: corr ~0
-        # con target, η²=0.0014). VARIEDAD se elimina del todo: ya entrenamos
-        # un modelo por variedad.
         logger.info(
             f"Descartadas como raw {useless_present} "
             f"(MES se reinyecta como ciclicas desde FECHA en FeatureGenerator)"
@@ -218,17 +186,10 @@ def load_data(
     for col in CATEGORICAL_FEATURES:
         df[col] = df[col].astype(str).str.strip()
 
-    # Agrupa categorias raras en 'OTROS' para evitar one-hot con n insuficiente.
-    # En POP, CLAMSHELL 6 OZ tiene n=27 y MAPE=40.7%: el modelo no puede
-    # aprender un dummy con tan poca muestra y solo introduce ruido.
-    # Umbrales en config.py (RARE_MIN_COUNT, RARE_GROUP_COLS) salvo
-    # override por variedad (parametro rare_min_count, P0.2).
     if collapse_rare_categories:
         if rare_min_count is not None:
-            min_count = rare_min_count  # override explicito de VarietyConfig
+            min_count = rare_min_count
         elif ADAPT_RARE_MIN_COUNT:
-            # Escala con n: n grande -> 50 (POP identico); n chico -> baja al piso
-            # para no colapsar todo FORMATO a 'OTROS'. Ver ADAPT_RARE_MIN_COUNT.
             min_count = min(
                 RARE_MIN_COUNT,
                 max(RARE_MIN_COUNT_FLOOR, round(RARE_MIN_COUNT_FRAC * len(df))),
@@ -256,18 +217,7 @@ def load_data(
     if n_no_date:
         logger.warning(f"{n_no_date} filas sin fecha valida (se imputaran al transformar)")
 
-    # Validacion de schema antes de pasar al Pipeline. Detecta tipos
-    # incorrectos, rangos imposibles, duplicados estructurales, etc.
-    # Solo loguea warnings (las columnas requeridas ya se validaron
-    # arriba con `needed`/`missing`).
     validate_dataset(df)
-
-    # NOTA: las lag features se calculan AHORA dentro del Pipeline via
-    # `LagFeatureTransformer` (step 0 de `build_preprocessing_pipeline`).
-    # Esto elimina el leakage moderado que existia cuando los lags se
-    # calculaban aqui sobre el dataset completo antes del CV split.
-    # `data_loader` deja X con las 9 columnas raw; el transformer las
-    # expande a ~38 dentro del fold de cada modelo.
 
     X = df.drop(columns=[TARGET])
     y = df[TARGET].astype(float)
@@ -305,6 +255,6 @@ def load_business_columns(
     df, _, _ = _load_sheet_aligned(path, sheet)
 
     out = pd.DataFrame(index=df.index)
-    for col in LEAKAGE_COLUMNS:  # ['KG/JR', 'H-EF']
+    for col in LEAKAGE_COLUMNS:
         out[col] = pd.to_numeric(df[col], errors="coerce") if col in df.columns else float("nan")
     return out

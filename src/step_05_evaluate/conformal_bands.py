@@ -28,14 +28,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# Minimo de residuos OOF para calibrar el cuantil de un fundo; bajo esto
-# cae al global (cuantil sobre n chico = ruidoso).
 MIN_GROUP = 100
-# Minimo de observaciones de un FUNDO__FORMATO en train para NO considerarlo
-# cold-start en inferencia (alineado con MIN_PERIODS=3 de los lags, con
-# margen: bajo ~10 obs los lags siguen mayormente en sentinel).
 MIN_FF_KNOWN = 10
-# Factor de ensanche para filas cold-start: error medido ~2x el normal.
 COLD_FACTOR = 2.0
 RECENT_FRACTION = 0.25
 MIN_RECENT = 100
@@ -79,9 +73,7 @@ def build_conformal_metadata(
     backtest_coverage = float("nan")
     backtest_n = 0
     if dates is not None:
-        date_values = pd.to_datetime(
-            dates.reset_index(drop=True), errors="coerce"
-        ).to_numpy()[mask]
+        date_values = pd.to_datetime(dates.reset_index(drop=True), errors="coerce").to_numpy()[mask]
         valid_date_pos = np.flatnonzero(~pd.isna(date_values))
         if len(valid_date_pos) >= MIN_RECENT:
             ordered_pos = valid_date_pos[np.argsort(date_values[valid_date_pos])]

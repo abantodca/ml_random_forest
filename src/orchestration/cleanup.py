@@ -19,10 +19,6 @@ from src.config import REPORTS_DIR
 
 _logger = logging.getLogger(__name__)
 
-# matplotlib backend ya esta forzado a 'Agg' en src/__init__.py (side-effect
-# del paquete raiz). Importar pyplot aqui es seguro porque cualquier
-# `import src.*` carga primero el __init__ del paquete.
-
 
 def cleanup_state(logger, label: str) -> None:
     """Cierra figuras, termina runs MLflow huerfanos y forza GC.
@@ -72,7 +68,5 @@ def cleanup_residual_reports(
                 f.unlink()
                 deleted.append(f)
             except OSError as exc:
-                # Limpieza best-effort: un residuo que no se pudo borrar no
-                # debe abortar el run, pero conviene dejar rastro.
                 _logger.warning("No se pudo borrar el residuo %s: %s", f, exc)
     return deleted

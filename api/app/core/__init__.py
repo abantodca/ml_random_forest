@@ -39,10 +39,8 @@ from app.core.middleware import RequestLoggingMiddleware
 from app.core.varieties import Variety, validate_variety
 
 __all__ = [
-    # Config
     "Settings",
     "settings",
-    # Catálogos (StrEnum + helpers)
     "Formato",
     "Fundo",
     "Variety",
@@ -50,24 +48,20 @@ __all__ = [
     "normalize_formato",
     "normalize_fundo",
     "validate_variety",
-    # Excel helpers
     "parse_date_value",
     "read_excel_dataframe",
     "validate_excel_file",
     "validate_upload_size",
-    # Excepciones de dominio
     "ForecastNotFoundError",
     "ModelNotAvailableError",
     "PredictionError",
     "VarietyNotFoundError",
-    # Handlers FastAPI
     "forecast_not_found_handler",
     "generic_exception_handler",
     "model_not_available_handler",
     "validation_exception_handler",
     "value_error_handler",
     "variety_not_found_handler",
-    # Logging y middleware
     "setup_logger",
     "RequestLoggingMiddleware",
 ]

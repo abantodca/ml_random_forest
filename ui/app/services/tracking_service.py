@@ -69,8 +69,6 @@ class TrackingService:
         self._client = client
         self._forecasts = ForecastService(client)
 
-    # ---- lectura de reales ----------------------------------------------
-
     def list_history(self, variety: str, *, limit: int = 5000) -> list[HistoricalObservation]:
         data = self._client.get(
             endpoints.history_list(variety),
@@ -132,8 +130,6 @@ class TrackingService:
             replace=True,
         )
 
-    # ---- emparejamiento proyectado ↔ real --------------------------------
-
     def build_accuracy(
         self,
         variety: str,
@@ -158,7 +154,6 @@ class TrackingService:
         ).items
         real_map = {(h.fundo, h.formato, h.fecha[:10]): h for h in self.list_history(variety)}
 
-        # Dedupe de pronósticos por clave, conservando el más reciente.
         latest: dict[tuple[str, str, str], ForecastRecord] = {}
         for fc in forecasts:
             key = (fc.fundo, fc.formato, fc.fecha[:10])
@@ -176,10 +171,7 @@ class TrackingService:
         if with_decomposition:
             for start in range(0, len(matched), API_BATCH_MAX_ROWS):
                 chunk = matched[start : start + API_BATCH_MAX_ROWS]
-                payloads = [
-                    self._prediction_payload_on_real(fc, hist)
-                    for fc, hist in chunk
-                ]
+                payloads = [self._prediction_payload_on_real(fc, hist) for fc, hist in chunk]
                 try:
                     predictions = self._forecasts.predict_batch_dry(variety, payloads)
                 except (ApiConnectionError, ApiResponseError) as exc:
@@ -234,8 +226,6 @@ class TrackingService:
             indus_pct=hist.indus_pct if hist.indus_pct is not None else fc.indus_pct,
             p_baya=hist.p_baya if hist.p_baya is not None else fc.p_baya,
         )
-
-    # ---- agregación semanal (cierre de semana) ---------------------------
 
     @staticmethod
     def weekly_aggregate(points: list[AccuracyPoint]) -> list[WeekAggregate]:

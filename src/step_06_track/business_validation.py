@@ -58,9 +58,6 @@ class BusinessValidation:
     kg_jr_pred_oof: np.ndarray | None = None
     kg_jr_real_insample: np.ndarray | None = None
     kg_jr_pred_insample: np.ndarray | None = None
-    # Mascara boolean (sobre el dataset original) de las filas que sobrevivieron
-    # al filtro NaN en OOF. Permite alinear X_raw con kg_jr_*_oof aguas abajo
-    # (boxplot por subgrupo, etc).
     oof_mask: np.ndarray | None = None
 
     def to_mlflow_metrics(self) -> dict[str, float]:
@@ -121,13 +118,11 @@ def validate_against_business_unit(
     result = BusinessValidation()
 
     if h_ef_col not in business_cols.columns or target_col_real not in business_cols.columns:
-        # data sin las columnas de negocio: no hay nada que validar
         return result
 
     h_ef = business_cols[h_ef_col].to_numpy(dtype=float)
     kg_jr = business_cols[target_col_real].to_numpy(dtype=float)
 
-    # ---- OOF (honesto) ----
     kg_jr_pred_oof, kg_jr_real_oof, mask_oof, n_drop_oof = _align_and_clean(
         oof["y_pred"], h_ef, kg_jr
     )
@@ -138,10 +133,6 @@ def validate_against_business_unit(
         result.kg_jr_pred_oof = kg_jr_pred_oof
         result.oof_mask = mask_oof
 
-    # ---- In-sample (modelo final aplicado a todo el dataset) ----
-    # In-sample falla rara vez (mismo X que se uso en fit). Si pasa, log
-    # con traceback para diagnosticar; el caller obtiene metrics_insample
-    # vacio (BusinessValidation tolera ausencia in-sample sin romper).
     try:
         y_pred_h_full = final_pipeline.predict(X_full)
     except Exception:
@@ -162,5 +153,5 @@ def validate_against_business_unit(
             result.kg_jr_real_insample = kg_jr_real_in
             result.kg_jr_pred_insample = kg_jr_pred_in
 
-    result.n_dropped_business = n_drop_oof  # OOF es la referencia
+    result.n_dropped_business = n_drop_oof
     return result

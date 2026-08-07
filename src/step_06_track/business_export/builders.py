@@ -30,13 +30,6 @@ from src.step_05_evaluate.explainability import (
     recommended_actions,
 )
 
-# ---------------------------------------------------------------------------
-# Renombrado de columnas (modelo/error -> lenguaje claro)
-# ---------------------------------------------------------------------------
-
-# Mapeo aplicado a las hojas Predicciones_*. Solo renombramos columnas
-# tecnicas del modelo; las del dominio (FORMATO, FUNDO, FECHA, KG/HA, ...)
-# se quedan como estan porque el negocio ya las conoce con esos nombres.
 _PRETTY_COLUMNS: dict[str, str] = {
     "row_id": "ID fila",
     "KG/JR_H_real": "Productividad real (kg/jornal-hora)",
@@ -92,9 +85,6 @@ def build_predictions_df(
 
     finite_mask = np.isfinite(y_h_pred) & np.isfinite(h_ef) & np.isfinite(kg_jr_real)
 
-    # Bandas: prefiere Conformal (con sustento estadistico) sobre heuristica.
-    # Se calculan en KG/JR_H (espacio del modelo) y luego se multiplican por
-    # H-EF para llevar a KG/JR (transformacion lineal -> linealidad).
     if conformal_residuals is not None:
         from src.step_05_evaluate.statistical_tests import conformal_intervals
 
@@ -119,7 +109,6 @@ def build_predictions_df(
 
     df = df.loc[finite_mask].reset_index(drop=True)
 
-    # Renombrado a lenguaje claro
     return df.rename(columns=_PRETTY_COLUMNS)
 
 
@@ -239,8 +228,6 @@ def build_inicio_df(
         if real_oof is not None and pred_oof is not None and len(real_oof) > 0
         else np.array([])
     )
-    # Veredicto + KPIs en lenguaje natural usan SIEMPRE metricas OOF
-    # (honestas, sobre datos no vistos). In-sample seria optimista.
     oof_mape = float(moof.get("mape", float("nan")))
     oof_r2 = moof.get("r2")
 

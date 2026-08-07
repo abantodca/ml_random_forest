@@ -80,20 +80,9 @@ class VarietyConfig:
     min_temporal_folds: int | None = None
 
 
-# Meses de temporada de POP (EDA 2026-05: ALTA=jun-oct, BAJA=dic-abr). UNICA
-# fuente del literal: lo consumen el pin de POP abajo y el fallback legacy de
-# FeatureGenerator._date_features (cuando llega None y el autodetect no aplica).
 POP_HIGH_SEASON_MONTHS: tuple[int, ...] = (6, 7, 8, 9, 10)
 POP_LOW_SEASON_MONTHS: tuple[int, ...] = (12, 1, 2, 3, 4)
 
-# Overrides explicitos por hoja del Excel. Variedad sin entrada = defaults
-# globales (hoy DATA-DRIVEN: temporada autodetectada, capacidad/folds por n).
-#
-# POP fija sus meses de temporada EXPLICITAMENTE (2026-07-01): son los valores
-# historicos validados con su EDA. Sin este pin, SEASON_AUTODETECT derivaria
-# (7,8,9,10)/(1,2,3,4) — parecido pero NO identico al literal (6-10)/(12-4) —
-# y cambiaria silenciosamente el comportamiento de la variedad de referencia.
-# Exactamente el escenario que el comentario original de este dict advertia.
 VARIETY_OVERRIDES: dict[str, dict[str, object]] = {
     "POP": {
         "high_season_months": POP_HIGH_SEASON_MONTHS,
@@ -101,14 +90,6 @@ VARIETY_OVERRIDES: dict[str, dict[str, object]] = {
     },
 }
 
-# Candidatos que superaron el experimento temporal anidado y pueden ejecutarse
-# en SOMBRA. No se mezclan con VARIETY_OVERRIDES: el entrenamiento normal debe
-# seguir bit-identico hasta observar etiquetas futuras y aprobar la promocion.
-#
-# BEAUTY, LightGBM, 20 trials/fold (2026-07-23):
-#   MAE temporal full-history=2.1622 -> window365=1.7128 (-20.8%)
-#   MAPE temporal              32.33 -> 27.08 (-5.26 pp)
-#   gano 2/3 folds; el fold restante retrocedio 3.4% en MAE y <1 pp en MAPE.
 SHADOW_TEMPORAL_OVERRIDES: dict[str, dict[str, object]] = {
     "BEAUTY": {
         "cv_outer_strategy": "temporal_year",

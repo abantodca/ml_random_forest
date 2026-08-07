@@ -29,12 +29,12 @@ def _train_variety_worker(
 ) -> dict:
     """Entry-point del subproceso. Top-level (picklable)."""
     args = argparse.Namespace(**args_dict)
-    init_dirs()  # subproceso fresco -> garantizar dirs antes de loguear
+    init_dirs()
     var_logger = setup_logging(
         name=f"variety.{variety}",
         log_file=f"variety_{variety}.log",
     )
-    init_mlflow()  # cada worker setea su tracking URI propio
+    init_mlflow()
     return train_variety(variety, model_types, args, settings, var_logger)
 
 

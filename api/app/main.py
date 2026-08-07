@@ -14,11 +14,9 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
-# Suprimir warnings de MLflow antes de cualquier importación
 warnings.filterwarnings("ignore", category=FutureWarning, module="mlflow")
 warnings.filterwarnings("ignore", message=".*Python.*differs.*")
 
-# Configurar logging ANTES de importar otros módulos
 from app.core import settings, setup_logger
 
 setup_logger("rnd-forest-backend", level=settings.log_level)
@@ -42,17 +40,11 @@ from app.services import DriftService, MLflowService
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Lifecycle Management
-# ============================================================================
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestiona el ciclo de vida de la aplicación (startup y shutdown)."""
     logger.info("🚀 Iniciando RND Forest Backend...")
 
-    # 1. Conexión a PostgreSQL
     try:
         await init_db(settings.database_url)
     except ConnectionError:
@@ -63,7 +55,6 @@ async def lifespan(app: FastAPI):
         logger.error("═" * 60)
         raise
 
-    # 2. Inicializar servicio MLflow y almacenarlo en app.state
     mlflow_service = MLflowService(
         tracking_uri=settings.mlflow_tracking_uri,
         experiment_prefix=settings.experiment_prefix,
@@ -82,25 +73,16 @@ async def lifespan(app: FastAPI):
         logger.error("❌ Error al conectar con MLflow: %s", exc)
         logger.warning("   El backend iniciará sin modelos precargados.")
 
-    # 3. DriftService: comparte MLflowService (reutiliza versiones y cache).
-    #    Lazy build de baselines: la primera predicción de cada variedad
-    #    paga el costo de leer history_/scaler una vez.
     app.state.drift_service = DriftService(mlflow_service)
 
     logger.info("✅ Backend iniciado | Docs: /docs | Health: /api/health")
 
     yield
 
-    # Shutdown
     logger.info("⏹️  Deteniendo backend...")
     mlflow_service.shutdown()
     await dispose_engine()
     logger.info("✅ Backend detenido correctamente")
-
-
-# ============================================================================
-# Application Factory
-# ============================================================================
 
 
 def create_app() -> FastAPI:
@@ -116,7 +98,6 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
     )
 
-    # Middlewares (el último registrado se ejecuta primero en el pipeline)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -126,7 +107,6 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestLoggingMiddleware)
 
-    # Exception handlers (orden importa: más específico primero)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(VarietyNotFoundError, variety_not_found_handler)
     app.add_exception_handler(ModelNotAvailableError, model_not_available_handler)
@@ -134,7 +114,6 @@ def create_app() -> FastAPI:
     app.add_exception_handler(ValueError, value_error_handler)
     app.add_exception_handler(Exception, generic_exception_handler)
 
-    # Routers
     app.include_router(health.router, prefix="/api")
     app.include_router(varieties.router, prefix="/api")
     app.include_router(forecasts.router, prefix="/api")
@@ -153,11 +132,4 @@ def create_app() -> FastAPI:
     return app
 
 
-# ============================================================================
-# App Instance (para ASGI servers)
-# ============================================================================
-
 app = create_app()
-
-# Para desarrollo: fastapi dev app/main.py
-# Para producción: uvicorn app.main:app --host 0.0.0.0 --port 8000

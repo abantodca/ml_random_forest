@@ -13,9 +13,6 @@ _FALLBACK_CSS = (
     "BlinkMacSystemFont,'Segoe UI',sans-serif;background:#F8FAFC;}"
 )
 
-# Pre-CSS que pinta el fondo correcto en el PRIMER paint, antes de que
-# la hoja completa se aplique. Sumado a `.streamlit/config.toml`, evita
-# el flash entre el tema por defecto y el oficial.
 _PREPAINT = (
     "html,body,.stApp,[data-testid='stAppViewContainer']"
     "{background:#F4F5FB !important;}"
@@ -47,9 +44,6 @@ def inject_css() -> None:
     """Inyecta el CSS personalizado desde assets/css/style.css."""
     css = _load_css()
     version = _css_version()
-    # El comentario con la versión obliga al browser/Streamlit a tratar
-    # cada cambio del archivo como una hoja distinta — ningún cache viejo
-    # persiste tras un edit.
     st.markdown(
         f"<style data-rnd-css='{version}'>/* rnd-forest css v{version} */{_PREPAINT}{css}</style>",
         unsafe_allow_html=True,

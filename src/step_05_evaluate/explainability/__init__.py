@@ -58,26 +58,19 @@ from src.step_05_evaluate.explainability.verdict import (
 )
 
 __all__ = [
-    # verdict
     "Verdict",
     "compute_verdict",
-    # kpis
     "PlainKPI",
     "kpi_precision",
     "kpi_explanatory_power",
     "kpi_vs_baseline",
-    # bias
     "GroupBias",
     "residual_bias_by_group",
-    # actions
     "Action",
     "recommended_actions",
-    # context
     "TrainingContext",
     "build_context",
-    # glossary
     "glossary_terms",
-    # kit
     "WinnerKit",
     "build_winner_kit",
 ]

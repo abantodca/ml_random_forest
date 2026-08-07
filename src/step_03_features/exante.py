@@ -40,11 +40,8 @@ from src.config import EXANTE_MODE
 
 logger = logging.getLogger(__name__)
 
-# Nombres exactos (no cubiertos limpiamente por prefijo).
 _CONCURRENT_EXACT: frozenset[str] = frozenset({"KG/HA", "%INDUS", "%INDUS__MISS"})
 
-# Prefijos: cubren la columna base y sus variantes skew (_LOG1P/_SQRT).
-# OJO: "KG/HA" (con slash) NO matchea los lags "KG_HA_lag_*" (underscore).
 _CONCURRENT_PREFIXES: tuple[str, ...] = (
     "KG/HA",
     "%INDUS",
@@ -72,8 +69,6 @@ class ConcurrentFeatureDropper(BaseEstimator, TransformerMixin):
         self.exante_ = EXANTE_MODE
         self.cols_to_drop_ = [c for c in X.columns if _es_concurrente(c)] if self.exante_ else []
         if self.cols_to_drop_:
-            # DEBUG: se dispara en cada pipeline.fit del nested CV (~4500
-            # veces en prod) — mismo criterio que LagFeatureTransformer.
             logger.debug(
                 f"EXANTE_MODE: eliminando {len(self.cols_to_drop_)} features "
                 f"concurrentes: {self.cols_to_drop_}"

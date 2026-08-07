@@ -56,7 +56,6 @@ def _render_live_data() -> None:
         )
         return
 
-    # ── Veredicto gerencial — primera respuesta: ¿confío en el pronóstico? ──
     {"ok": st.success, "warning": st.warning, "alert": st.error}[vm.verdict_status](vm.verdict_msg)
 
     st.markdown(f"**Proyectado vs Real — {vm.top_variety}** · {vm.n_top} pronósticos comparados")
@@ -87,7 +86,6 @@ if not _overview.is_online:
         "⚠️ Backend desconectado — los indicadores pueden estar incompletos. Verifica la conexión."
     )
 
-# ── Estado general ──────────────────────────────────────────────────────
 section_title("📊 Estado general")
 _k1, _k2, _k3, _k4 = st.columns(4)
 with _k1:
@@ -114,10 +112,8 @@ with _k4:
         variant="success" if _overview.mlflow_ok else "danger",
     )
 
-# ── Precisión en producción (data viva, por defecto) ────────────────────
 _render_live_data()
 
-# ── Calidad de modelos (métricas reales out-of-fold) ────────────────────
 _quality = build_quality_vm(_overview.loaded)
 if _quality.has_models:
     section_title("🏅 Calidad de modelos")
@@ -146,7 +142,6 @@ if _quality.has_models:
             "warning",
         )
 
-    # Un solo gráfico: ranking por R² (el detalle comparativo va en "Modelos").
     section_title("📋 Ranking de variedades")
     st.plotly_chart(
         build_table_with_bars(
@@ -170,7 +165,6 @@ else:
         icon="🤖",
     )
 
-# ── Accesos directos (orientado al flujo de pronósticos) ────────────────
 section_title("🚀 Accesos directos")
 _n1, _n2, _n3 = st.columns(3)
 with _n1:

@@ -28,7 +28,7 @@ from src.config import CORRELATION_HIGH_THRESHOLD
 class VIFResult:
     feature: str
     vif: float
-    severity: str  # "ok"|"watch"|"high"
+    severity: str
 
 
 @dataclass
@@ -40,10 +40,10 @@ class MutualInfoResult:
 
 @dataclass
 class CorrelationMatrix:
-    method: str  # "pearson" o "spearman"
+    method: str
     columns: list[str]
-    matrix: list[list[float]]  # row-major
-    high_pairs: list[tuple]  # (col_a, col_b, corr) con |corr| > CORRELATION_HIGH_THRESHOLD
+    matrix: list[list[float]]
+    high_pairs: list[tuple]
 
 
 def compute_vif(
@@ -59,7 +59,6 @@ def compute_vif(
     if numeric.shape[0] < 30 or numeric.shape[1] < 2:
         return []
 
-    # Drop columnas con varianza cero (VIF indefinido)
     nonconst = [c for c in numeric.columns if numeric[c].std() > 1e-12]
     if len(nonconst) < 2:
         return []
@@ -69,12 +68,8 @@ def compute_vif(
     cols = numeric.columns.tolist()
     X_arr = numeric.values
 
-    # Computacion via correlation matrix inversa (mas estable que regresiones
-    # individuales para muchas columnas):
-    #     VIF_i = (X.corr())^-1 [i, i]
     try:
         corr = np.corrcoef(X_arr.T)
-        # pinv en vez de inv para tolerar singularidades
         inv_corr = np.linalg.pinv(corr)
         for i, c in enumerate(cols):
             vif = float(inv_corr[i, i])
@@ -118,9 +113,9 @@ def compute_mutual_information(
         if pd.api.types.is_datetime64_any_dtype(series):
             dates = pd.to_datetime(series, errors="coerce")
             fill = dates.dropna().median() if dates.notna().any() else pd.Timestamp("1970-01-01")
-            prepared[column] = (
-                dates.fillna(fill).astype("int64") / 86_400_000_000_000
-            ).astype(float)
+            prepared[column] = (dates.fillna(fill).astype("int64") / 86_400_000_000_000).astype(
+                float
+            )
             discrete_mask.append(False)
         elif pd.api.types.is_numeric_dtype(series):
             numeric = pd.to_numeric(series, errors="coerce")

@@ -32,18 +32,16 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 
-# Rangos sanos por columna. Si un valor cae fuera, lo marcamos como
-# violacion de schema. None = sin chequeo de rango.
 _NUMERIC_RANGES: dict = {
-    TARGET: (0.0, None),  # KG/JR_H > 0; sin techo (puede haber outliers altos)
-    "KG/HA": (0.0, None),  # productividad por hectarea > 0
-    "%INDUS": (0.0, 100.0),  # porcentaje
-    "DPC": (0.0, None),  # dias post cosecha; tipicamente 0-180
-    "P/BAYA": (0.0, None),  # peso por baya en gramos
-    "HA": (0.0, None),  # hectareas cosechadas
-    "DIA_COSECHA": (1, 366),  # dia desde inicio de campana (no DOY); cap >365 generoso
-    "H-EF": (0.0, 24.0),  # horas efectivas en una jornada (validacion solo)
-    "KG/JR": (0.0, None),  # kilos por jornal (validacion solo)
+    TARGET: (0.0, None),
+    "KG/HA": (0.0, None),
+    "%INDUS": (0.0, 100.0),
+    "DPC": (0.0, None),
+    "P/BAYA": (0.0, None),
+    "HA": (0.0, None),
+    "DIA_COSECHA": (1, 366),
+    "H-EF": (0.0, 24.0),
+    "KG/JR": (0.0, None),
 }
 
 
@@ -59,7 +57,6 @@ def _check_dtypes(df: pd.DataFrame) -> list[str]:
                     f"que se convertiran a NaN"
                 )
     if DATE_COLUMN in df.columns and not pd.api.types.is_datetime64_any_dtype(df[DATE_COLUMN]):
-        # Permitimos string si parsea bien; lo flaggeamos como info.
         try:
             pd.to_datetime(df[DATE_COLUMN], errors="raise")
         except Exception as exc:
@@ -124,9 +121,6 @@ def validate_dataset(df: pd.DataFrame) -> list[str]:
     issues: list[str] = []
     issues.extend(_check_dtypes(df))
     issues.extend(_check_numeric_ranges(df))
-    # Filas exactamente duplicadas: warning (sobre-pesan al training pero
-    # no lo corrompen). Duplicados en (FUNDO+FORMATO+FECHA) NO se
-    # chequean: son cosechas distintas legitimas el mismo dia.
     issues.extend(_check_full_row_duplicates(df))
     issues.extend(_check_zero_variance(df))
 

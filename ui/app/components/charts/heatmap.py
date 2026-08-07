@@ -18,8 +18,6 @@ def build_metrics_heatmap(
     empty_message: str | None = None,
 ) -> go.Figure:
     is_empty = not names
-    # MAPE es opcional (3ra fila). Las escalas difieren entre filas; el color
-    # es indicativo y el valor exacto va en la etiqueta de cada celda.
     if not is_empty:
         z = [mae_vals, r2_vals] + ([mape_vals] if mape_vals is not None else [])
         yl = ["MAE", "R²"] + (["MAPE %"] if mape_vals is not None else [])
@@ -33,14 +31,12 @@ def build_metrics_heatmap(
             z=z,
             x=xl,
             y=yl,
-            # Escala continua perceptual (claro→oscuro) con buen contraste
-            # de los números negros en cualquier celda.
             colorscale=[
-                [0.00, "#EEF2FF"],  # indigo-50
-                [0.25, "#C7D2FE"],  # indigo-200
-                [0.50, "#A5B4FC"],  # indigo-300
-                [0.75, "#818CF8"],  # indigo-400
-                [1.00, "#6366F1"],  # indigo-500
+                [0.00, "#EEF2FF"],
+                [0.25, "#C7D2FE"],
+                [0.50, "#A5B4FC"],
+                [0.75, "#818CF8"],
+                [1.00, "#6366F1"],
             ],
             text=z,
             texttemplate="<b>%{text:.2f}</b>" if not is_empty else "",

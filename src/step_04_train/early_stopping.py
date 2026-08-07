@@ -37,7 +37,9 @@ from xgboost import XGBRegressor
 
 from src.config import (
     EARLY_STOPPING_MIN_ROWS,
+    EARLY_STOPPING_REFIT_FULL,
     EARLY_STOPPING_ROUNDS,
+    N_ESTIMATORS_MAX,
     RANDOM_STATE,
 )
 from src.step_04_train.validation_split import temporal_tail_holdout_indices
@@ -113,6 +115,61 @@ def _seed_of(estimator) -> int:
     return int(seed) if seed is not None else RANDOM_STATE
 
 
+def _best_n_trees(est, n_total: int, n_train: int) -> int | None:
+    """Nº de arboles a usar en el refit full, o None si no se pudo determinar.
+
+    Lee el corte real del early stopping y lo escala por `n_total / n_train`:
+    el corte se descubrio entrenando sobre `n_train` filas y el refit vera
+    `n_total`, que admiten algo mas de arboles antes de memorizar. Capado a
+    N_ESTIMATORS_MAX (el mismo fusible que usa el fit normal).
+
+    LGBM expone `best_iteration_` (1-based, nº de iteraciones). XGB expone
+    `best_iteration` (0-based, indice) -> +1. Cualquier valor no positivo
+    significa "early stopping no llego a cortar": devolvemos None y el caller
+    deja el fit con holdout tal cual (conservador).
+    """
+    best = getattr(est, "best_iteration_", None)
+    if best is None:
+        best = getattr(est, "best_iteration", None)
+        if best is not None:
+            best = int(best) + 1
+    if best is None:
+        return None
+    best = int(best)
+    if best <= 0 or n_train <= 0:
+        return None
+    scaled = int(round(best * (n_total / n_train)))
+    return max(1, min(scaled, N_ESTIMATORS_MAX))
+
+
+def _refit_on_full(estimator, parent, name, X, y, sample_weight, n_total, n_train, kwargs):
+    """Refit sobre el 100% de las filas fijando el nº de arboles ya descubierto.
+
+    Devuelve el estimador refiteado, o `estimator` sin tocar si no se pudo
+    determinar el corte. `n_estimators` se restaura despues del fit para que
+    `get_params`/`clone` sigan devolviendo la config original (el booster ya
+    fiteado conserva sus arboles; predict no consulta `n_estimators`).
+    """
+    n_trees = _best_n_trees(estimator, n_total, n_train)
+    if n_trees is None:
+        logger.debug("%s refit-full omitido: early stopping no reporto corte", name)
+        return estimator
+    original = estimator.n_estimators
+    try:
+        estimator.n_estimators = n_trees
+        refitted = parent.fit(estimator, X, y, sample_weight=sample_weight, **kwargs)
+    finally:
+        estimator.n_estimators = original
+    logger.debug(
+        "%s refit-full: n_trees=%d sobre %d filas (corte hallado con %d)",
+        name,
+        n_trees,
+        n_total,
+        n_train,
+    )
+    return refitted
+
+
 class EarlyStoppingLGBMRegressor(LGBMRegressor):
     """LGBMRegressor que corta arboles con early stopping interno."""
 
@@ -137,6 +194,18 @@ class EarlyStoppingLGBMRegressor(LGBMRegressor):
             **kwargs,
         )
         _log_overfit(fitted, "lgb", X_tr, y_tr, X_va, y_va)
+        if EARLY_STOPPING_REFIT_FULL:
+            fitted = _refit_on_full(
+                self,
+                LGBMRegressor,
+                "lgb",
+                X,
+                y,
+                sample_weight,
+                n_rows,
+                len(np.asarray(y_tr)),
+                kwargs,
+            )
         return fitted
 
 
@@ -170,4 +239,17 @@ class EarlyStoppingXGBRegressor(XGBRegressor):
             **kwargs,
         )
         _log_overfit(fitted, "xgb", X_tr, y_tr, X_va, y_va)
+        if EARLY_STOPPING_REFIT_FULL:
+            self.early_stopping_rounds = None
+            fitted = _refit_on_full(
+                self,
+                XGBRegressor,
+                "xgb",
+                X,
+                y,
+                sample_weight,
+                n_rows,
+                len(np.asarray(y_tr)),
+                kwargs,
+            )
         return fitted

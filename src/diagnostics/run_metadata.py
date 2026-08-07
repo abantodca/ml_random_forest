@@ -37,7 +37,6 @@ def _git_info(repo_root: Path | None = None) -> dict[str, str]:
     Esto resuelve el caso "container sin .git montado" sin necesidad de
     bind-mount del .git (ahorra I/O en Windows + Docker Desktop).
     """
-    # 1) Env var explicita gana
     env_sha = os.environ.get("GIT_SHA", "").strip()
     if env_sha and env_sha != "unknown":
         return {
@@ -45,7 +44,6 @@ def _git_info(repo_root: Path | None = None) -> dict[str, str]:
             "git_dirty": os.environ.get("GIT_DIRTY", "unknown"),
         }
 
-    # 2) git binary contra repo en disco
     cwd = repo_root or Path.cwd()
     try:
         sha = (
@@ -77,7 +75,7 @@ def _dataset_hash(file_path: Path, chunk: int = 1024 * 1024) -> str:
             if not block:
                 break
             h.update(block)
-    return h.hexdigest()[:16]  # 16 chars suficientes para identificar
+    return h.hexdigest()[:16]
 
 
 def collect_run_metadata(
@@ -97,7 +95,6 @@ def collect_run_metadata(
     tags["dataset_path"] = str(training_file.name)
     tags["dataset_n_rows"] = str(n_rows)
     tags["dataset_n_cols"] = str(n_cols)
-    # Image tag desde build args (Dockerfile expone GIT_SHA / VERSION)
     if "IMAGE_TAG" in os.environ:
         tags["docker_image_tag"] = os.environ["IMAGE_TAG"]
     if "GIT_SHA" in os.environ:

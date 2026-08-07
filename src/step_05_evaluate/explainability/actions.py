@@ -27,7 +27,7 @@ from src.step_05_evaluate.metrics import mape_safe
 class Action:
     """Recomendacion accionable auto-generada."""
 
-    severity: str  # 'critical' | 'warning' | 'info'
+    severity: str
     icon: str
     title: str
     body: str
@@ -45,7 +45,6 @@ def recommended_actions(
     """Genera 0-5 acciones a partir de subgroups y metricas globales."""
     actions: list[Action] = []
 
-    # Globales
     if full_mape > FULL_MAPE_CRITICAL_PCT:
         actions.append(
             Action(
@@ -75,7 +74,6 @@ def recommended_actions(
             )
         )
 
-    # Subgrupos
     if X_aligned is not None and len(X_aligned) == abs_errors.size and global_mape > 0:
         warn_thr = global_mape * REPORT_SUBGROUP_WARN_RATIO
         for col in ("FORMATO", "FUNDO"):
@@ -86,15 +84,13 @@ def recommended_actions(
                 if pd.isna(cat) or cat == "":
                     continue
                 mask = (groups == cat).to_numpy()
-                if mask.sum() < REPORT_SUBGROUP_MIN_N:  # ignora subgrupos diminutos
+                if mask.sum() < REPORT_SUBGROUP_MIN_N:
                     continue
                 cat_real = real[mask]
                 cat_err = abs_errors[mask]
                 nonzero = cat_real != 0
                 if nonzero.sum() == 0:
                     continue
-                # `cat_err = |pred - real|`, asi que `mape_safe(real, real - |err|)`
-                # reproduce el MAPE original sin necesidad de propagar `pred`.
                 cat_mape = mape_safe(cat_real, cat_real - cat_err)
                 if cat_mape >= warn_thr:
                     ratio = cat_mape / global_mape if global_mape > 0 else float("inf")

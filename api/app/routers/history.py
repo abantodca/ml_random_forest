@@ -43,11 +43,6 @@ REQUIRED_HISTORY_COLUMNS: frozenset[str] = frozenset(
 )
 
 
-# ============================================================================
-# Helpers
-# ============================================================================
-
-
 def _opt_float(row: pd.Series, col: str) -> float | None:
     """Lee una columna numérica opcional; None si falta o es NaN."""
     if col not in row.index:
@@ -106,11 +101,6 @@ def _parse_history_excel(
     return rows, skipped
 
 
-# ============================================================================
-# Endpoints
-# ============================================================================
-
-
 @router.post(
     "/{variety}/upload",
     response_model=HistoryImportResponse,
@@ -135,8 +125,6 @@ async def upload_history(
         400: archivo invalido o sin columnas requeridas.
         404: variedad inexistente.
     """
-    # Rechaza archivos sobredimensionados ANTES de leerlos a memoria
-    # (mismo patrón que forecasts/upload). Ver excel_helpers.validate_upload_size.
     validate_upload_size(file.size, file.filename)
 
     contents = await file.read()

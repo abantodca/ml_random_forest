@@ -61,14 +61,9 @@ def setup_logging(
         file_path = LOGS_DIR / file_path
 
     target_root = name == _DEFAULT_NAME
-    # Cuando es el target principal, los handlers viven en el ROOT para que
-    # cualquier `logging.getLogger(__name__)` los herede sin tocar nada.
     target = logging.getLogger() if target_root else logging.getLogger(name)
     target.setLevel(level)
 
-    # Idempotencia: si ya hay un handler de archivo con la misma ruta, no
-    # agregamos otro. Esto deja al usuario re-llamar setup_logging() sin
-    # duplicar lineas.
     have_file = any(
         isinstance(h, logging.FileHandler) and Path(getattr(h, "baseFilename", "")) == file_path
         for h in target.handlers
@@ -90,14 +85,9 @@ def setup_logging(
         target.addHandler(sh)
 
     if not target_root:
-        # logger nombrado para workers paralelos: NO propagar al root para
-        # evitar que sus eventos se escriban tambien en pipeline_run.log.
         target.propagate = False
         return target
 
-    # Para el caso default devolvemos el logger nombrado (no el root) para
-    # que los logs aparezcan con `name=ml_pipeline` y no `name=root`. Los
-    # handlers viven en root y se heredan por propagacion.
     return logging.getLogger(_DEFAULT_NAME)
 
 

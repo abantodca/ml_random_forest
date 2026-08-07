@@ -23,8 +23,6 @@ def emit_mape_metric(variety: str, mape_value: float) -> None:
     No falla el training si la publicacion falla (best-effort).
     """
     if not os.environ.get("AWS_BATCH_JOB_ID"):
-        # Local (docker compose): skip silencioso.
-        # AWS_BATCH_JOB_ID lo inyecta el servicio Batch automaticamente.
         return
 
     try:

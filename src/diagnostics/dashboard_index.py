@@ -52,22 +52,17 @@ from src.diagnostics._dashboard_assets import JS as _JS
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Modelo de datos
-# ---------------------------------------------------------------------------
 @dataclass
 class ReportFile:
     filename: str
-    kind: str  # "winner" | "eda" | "resid" | "excel" | "json" | "other"
+    kind: str
     variety: str | None
-    label: str  # texto principal (timestamp o nombre humano)
-    sub: str  # texto secundario (modelo, etc.)
+    label: str
+    sub: str
     ext: str
     mtime: datetime
 
 
-# Regex compartidos. `.+?` non-greedy para tolerar variedades con `_`
-# (ej. POP_HASS); el ancla del timestamp `\d{4}-\d{2}-\d{2}` desambigua.
 _RE_EDA = re.compile(r"^EDA_(.+?)_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})$")
 _RE_WINNER_TS = re.compile(r"^Winner_(.+?)_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})(?:-(\d{2}))?$")
 _RE_WINNER_LEGACY = re.compile(r"^Winner_(.+?)$")
@@ -86,7 +81,6 @@ def _classify(path: Path) -> ReportFile | None:
     ext = path.suffix.lstrip(".").lower()
     mtime = datetime.fromtimestamp(path.stat().st_mtime)
 
-    # EDA
     if name.startswith("EDA_") and ext == "html":
         m = _RE_EDA.match(base)
         if m:
@@ -94,15 +88,12 @@ def _classify(path: Path) -> ReportFile | None:
             return ReportFile(name, "eda", m.group(1), label, "", ext, mtime)
         return ReportFile(name, "eda", None, base, "", ext, mtime)
 
-    # Winner HTML (por-run o legacy)
     if name.startswith("Winner_") and ext == "html":
         m = _RE_WINNER_TS.match(base)
         if m:
             secs = m.group(5) or "00"
             label = f"{m.group(2)} {m.group(3)}:{m.group(4)}:{secs}"
             return ReportFile(name, "winner", m.group(1), label, "", ext, mtime)
-        # Legacy: Winner_<variety>.html sin timestamp. Usamos mtime como
-        # label asi se ordena cronologicamente junto a los Winners por-run.
         m = _RE_WINNER_LEGACY.match(base)
         if m:
             return ReportFile(
@@ -115,9 +106,7 @@ def _classify(path: Path) -> ReportFile | None:
                 mtime,
             )
 
-    # Winner Excel
     if name.startswith("Winner_") and ext == "xlsx":
-        # Reusa los mismos regex pero adapta el label
         m = _RE_WINNER_TS.match(base)
         if m:
             secs = m.group(5) or "00"
@@ -135,7 +124,6 @@ def _classify(path: Path) -> ReportFile | None:
                 mtime,
             )
 
-    # Residuals
     if name.startswith("residuals_") and ext == "html":
         m = _RE_RESID.match(base)
         if m:
@@ -143,17 +131,9 @@ def _classify(path: Path) -> ReportFile | None:
                 name, "resid", m.group(1), m.group(2), "Diagnostico residuales", ext, mtime
             )
 
-    # Sin variedad reconocible -> descartar del indice. El dashboard solo
-    # lista archivos cuya variedad sale del filename; los huerfanos
-    # (JSON sidecars, xlsx sueltos, html ad-hoc) quedan accesibles
-    # directamente via http://localhost:8080/reports/<file> pero no
-    # ensucian el sidebar.
     return None
 
 
-# ---------------------------------------------------------------------------
-# Scan + organizacion
-# ---------------------------------------------------------------------------
 @dataclass
 class VarietyBucket:
     variety: str
@@ -196,17 +176,11 @@ def scan_reports(reports_dir: Path) -> ScanResult:
         elif rf.kind == "excel":
             bucket.excels.append(rf)
 
-    # Sort: mas reciente primero
     for b in by_var.values():
         for items in (b.winners, b.edas, b.resids, b.excels):
             items.sort(key=lambda x: x.mtime, reverse=True)
 
     return ScanResult(by_var)
-
-
-# ---------------------------------------------------------------------------
-# Render
-# ---------------------------------------------------------------------------
 
 
 def _render_item(rf: ReportFile, *, hidden: bool = False) -> str:
@@ -309,7 +283,6 @@ def render_dashboard(scan: ScanResult) -> str:
     ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     initial = _initial_href(scan)
 
-    # Sidebar
     if scan.total == 0:
         sidebar_body = (
             '<div class="empty-sidebar">No hay reportes aun.<br><br>'
@@ -317,7 +290,7 @@ def render_dashboard(scan: ScanResult) -> str:
             "para generar.</div>"
         )
     else:
-        # Variedades ordenadas por mas reciente Winner (o EDA si no hay)
+
         def _sort_key(b: VarietyBucket) -> datetime:
             for items in (b.winners, b.edas, b.resids, b.excels):
                 if items:
@@ -381,10 +354,6 @@ def write_dashboard(reports_dir: Path, *, filename: str = "index.html") -> Path:
     scan = scan_reports(reports_dir)
     html = render_dashboard(scan)
     out = reports_dir / filename
-    # Atomic write-then-rename para evitar race condition cuando multiples
-    # procesos paralelos (variety_runner) regeneran el mismo index.html. El
-    # tmp es per-PID para que escrituras concurrentes no se pisen entre si;
-    # os.replace es atomico en POSIX y Windows.
     tmp = reports_dir / f"{filename}.tmp.{os.getpid()}"
     tmp.write_text(html, encoding="utf-8")
     os.replace(tmp, out)
@@ -392,9 +361,6 @@ def write_dashboard(reports_dir: Path, *, filename: str = "index.html") -> Path:
     return out
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 def _main() -> int:
     parser = argparse.ArgumentParser(description="Genera reports/index.html")
     parser.add_argument(
@@ -412,7 +378,7 @@ def _main() -> int:
     if args.reports_dir:
         reports_dir = Path(args.reports_dir)
     else:
-        from src.config import REPORTS_DIR  # lazy import
+        from src.config import REPORTS_DIR
 
         reports_dir = REPORTS_DIR
 

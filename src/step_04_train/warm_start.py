@@ -34,14 +34,10 @@ from __future__ import annotations
 
 from src import config
 
-# Clave EXCLUSIVA de cada backend en el search space: si no esta presente en
-# los params del campeon registrado, ese campeon es de OTRO backend -> no se
-# siembra (evita mezclar espacios).
 _SIGNATURE_KEY: dict[str, str] = {
     "lgb": "regressor__regressor__num_leaves",
     "xgb": "regressor__regressor__grow_policy",
 }
-# Clave del nº de hojas/ramas por backend (se clipa contra TREE_MAX_LEAVES).
 _LEAVES_KEY: dict[str, str] = {
     "lgb": "regressor__regressor__num_leaves",
     "xgb": "regressor__regressor__max_leaves",

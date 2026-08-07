@@ -25,32 +25,24 @@ class Forecast(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    # Identificadores
     variety: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     fecha: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     external_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
-    # Datos de entrada (features RAW que el pipeline MLflow espera)
     kg_ha: Mapped[float] = mapped_column(Float, nullable=False)
     indus_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     dpc: Mapped[float] = mapped_column(Float, nullable=False)
     p_baya: Mapped[float | None] = mapped_column(Float, nullable=True)
     ha: Mapped[float] = mapped_column(Float, nullable=False)
     dia_cosecha: Mapped[int] = mapped_column(Integer, nullable=False)
-    # default alineado al catálogo (FORMATO_DEFAULT). En la práctica el schema
-    # Pydantic siempre provee formato validado antes de llegar al ORM, pero el
-    # valor anterior ("FRESCO") no era un miembro válido de Formato y confundía.
     formato: Mapped[str] = mapped_column(String(40), nullable=False, default=FORMATO_DEFAULT.value)
     fundo: Mapped[str] = mapped_column(String(80), nullable=False)
 
-    # Metadato del request (no entra al modelo)
     horas_efectivas: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    # Predicciones
     kghora_pred: Mapped[float] = mapped_column(Float, nullable=False)
     kgjn_pred: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    # Metadatos
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

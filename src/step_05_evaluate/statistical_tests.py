@@ -28,9 +28,9 @@ import pandas as pd
 class MetricCI:
     """Estimador puntual + IC bootstrap de una metrica."""
 
-    point: float  # estimador sobre la muestra completa
-    ci_low: float  # percentil alpha/2 de los resamples
-    ci_high: float  # percentil 1-alpha/2 de los resamples
+    point: float
+    ci_low: float
+    ci_high: float
     n_resamples: int
     alpha: float
 
@@ -108,7 +108,6 @@ def conformal_intervals(
     predictions = np.asarray(predictions, dtype=float)
 
     if n < 20:
-        # Muestra insuficiente para calibrar: devuelve bandas vacias (lo=hi=pred).
         return predictions.copy(), predictions.copy()
 
     level = min(1.0, (1 - alpha) * (n + 1) / n)

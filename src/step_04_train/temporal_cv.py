@@ -65,9 +65,7 @@ def recent_training_window(
     cutoff = reference - pd.Timedelta(days=window_days)
     keep = dates >= cutoff
     if not keep.any():
-        raise ValueError(
-            f"Ventana de {window_days} dias no deja filas antes de {reference.date()}"
-        )
+        raise ValueError(f"Ventana de {window_days} dias no deja filas antes de {reference.date()}")
     return X_train.loc[keep], y_train.loc[keep], keep
 
 
@@ -95,9 +93,6 @@ class TemporalYearSplit(BaseCrossValidator):
         self.n_splits = n_splits
         self.min_train_years = min_train_years
 
-    # -----------------------------------------------------------
-    # API sklearn (BaseCrossValidator)
-    # -----------------------------------------------------------
     def get_n_splits(self, X=None, y=None, groups=None) -> int:
         if X is None:
             return self.n_splits
@@ -106,17 +101,11 @@ class TemporalYearSplit(BaseCrossValidator):
         return min(self.n_splits, max(0, n_years - self.min_train_years))
 
     def _iter_test_indices(self, X=None, y=None, groups=None):
-        # BaseCrossValidator delega aqui desde split(); produce solo indices
-        # de test, BaseCrossValidator construye el train por diferencia.
-        # Pero queremos expanding window (no leave-one-out), asi que
-        # OVERRIDE split() directamente y dejamos _iter_test_indices solo
-        # para satisfacer el contrato.
         years = self._extract_years(X)
         unique_years = np.array(sorted(np.unique(years)))
         k = self.get_n_splits(X)
         if k <= 0:
             return
-        # Test years son los ultimos k anios; cada uno es UN fold de test.
         for test_year in unique_years[-k:]:
             test_idx = np.where(years == test_year)[0]
             yield test_idx
@@ -127,8 +116,6 @@ class TemporalYearSplit(BaseCrossValidator):
         k = self.get_n_splits(X)
         if k <= 0:
             return
-        # Test years son los ultimos k. Train fold = todos los años ANTES
-        # del test year (expanding window).
         for test_year in unique_years[-k:]:
             train_mask = years < test_year
             test_mask = years == test_year
@@ -138,14 +125,10 @@ class TemporalYearSplit(BaseCrossValidator):
                 continue
             yield train_idx, test_idx
 
-    # -----------------------------------------------------------
-    # Helpers
-    # -----------------------------------------------------------
     def _extract_years(self, X) -> np.ndarray:
         if isinstance(X, pd.DataFrame):
             if self.year_col in X.columns:
                 return X[self.year_col].astype(int).to_numpy()
-            # Fallback: derivar de FECHA si la columna ANIO no esta presente
             if DATE_COLUMN in X.columns:
                 return pd.to_datetime(X[DATE_COLUMN]).dt.year.to_numpy()
         raise ValueError(

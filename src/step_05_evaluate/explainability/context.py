@@ -20,9 +20,9 @@ class TrainingContext:
     date_min: str | None
     date_max: str | None
     n_fundos: int
-    fundos_top: list[str]  # primeros 5 alfabeticamente
+    fundos_top: list[str]
     n_formatos: int
-    formatos_top: list[str]  # primeros 5 alfabeticamente
+    formatos_top: list[str]
 
 
 def build_context(
@@ -44,8 +44,6 @@ def build_context(
                     date_min = d.min().strftime("%Y-%m")
                     date_max = d.max().strftime("%Y-%m")
             except Exception as exc:
-                # Contexto descriptivo best-effort: sin rango de fechas el
-                # reporte sigue siendo valido (date_min/max quedan None).
                 logger.debug("Rango de fechas del contexto omitido: %s", exc)
         if "FUNDO" in X_raw.columns:
             uniq = sorted(X_raw["FUNDO"].dropna().astype(str).unique())

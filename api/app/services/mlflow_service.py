@@ -21,12 +21,6 @@ import mlflow.exceptions
 import mlflow.pyfunc
 import pandas as pd
 
-# `src.*` es un paquete a la raiz del backend (sibling de `app/`) que espeja
-# los transformers de `ml_training`. Los modelos serializados en MLflow
-# referencian rutas tipo `src.step_03_features.lag_features.LagFeatureTransformer`
-# y pickle las resuelve via `import src.step_03_features.lag_features` al
-# cargar. La importacion explicita aqui asegura el side-effect de registro
-# en sys.modules antes de cualquier `mlflow.pyfunc.load_model`.
 import src  # noqa: F401
 from app.core import (
     ModelNotAvailableError,
@@ -78,30 +72,14 @@ class MLflowService:
         self.experiment_prefix = experiment_prefix
         self.preload = preload
 
-        # Cache de modelos y versiones
         self._model_cache: dict[str, Any] = {}
         self._model_versions: dict[str, str] = {}
         self._info_cache: dict[str, dict] = {}
-        # Cache de Winner_<VARIETY>.html: variety -> (run_id, html_content)
         self._dashboard_cache: dict[str, tuple[str, str]] = {}
 
-        # Las mutaciones de los caches anteriores ocurren cross-thread: el
-        # reload (`reload_models`) y el lazy-load (`predict` -> `_get_or_load`)
-        # corren en el threadpool de Starlette (`run_in_executor`), así que un
-        # reload concurrente con una predicción puede entrelazar el
-        # read-modify-write de `_model_cache`/`_model_versions`/`_info_cache`.
-        # Un RLock serializa esas secciones críticas (carga + actualización de
-        # versión + invalidación de info) manteniéndolas atómicas entre sí.
-        # Es reentrante porque `_load_model_if_new_version` -> `_load_version_if_needed`
-        # anidan tomas del mismo lock.
         self._cache_lock = threading.RLock()
 
-        # Configurar MLflow
         mlflow.set_tracking_uri(tracking_uri)
-
-    # ========================================================================
-    # Inicialización y Shutdown
-    # ========================================================================
 
     def startup(self) -> None:
         """Precarga modelos si está habilitado."""
@@ -144,10 +122,6 @@ class MLflowService:
             self._dashboard_cache.clear()
         logger.info("MLflow service shut down")
 
-    # ========================================================================
-    # Gestión de Modelos
-    # ========================================================================
-
     def get_available_models(self) -> list[str]:
         """
         Obtiene la lista de modelos registrados en MLflow.
@@ -163,8 +137,6 @@ class MLflowService:
 
             available = []
             for model in registered_models:
-                # `experiment_prefix` debe incluir el separador final.
-                # Ej: prefix="productivity_" → "productivity_POP" -> "POP"
                 if model.name.startswith(self.experiment_prefix):
                     variety = model.name[len(self.experiment_prefix) :]
                     available.append(variety)
@@ -241,10 +213,6 @@ class MLflowService:
             "models": sorted(models_info, key=lambda x: x["variety"]),
         }
 
-    # ========================================================================
-    # Predicciones
-    # ========================================================================
-
     async def predict_with_std(
         self,
         variety: str,
@@ -296,15 +264,9 @@ class MLflowService:
         skl = getattr(impl, "sklearn_model", None) if impl is not None else None
         target = skl if skl is not None else model
         try:
-            # Logica de incertidumbre extraida a uncertainty.py (P1.3):
-            # conformal por fundo+cold-start -> ±1.96·std legacy -> None.
             return predict_with_halfwidths(target, df)
         except Exception as exc:
             raise PredictionError(variety, str(exc)) from exc
-
-    # ========================================================================
-    # Información de Modelos
-    # ========================================================================
 
     def get_model_info(self, variety: str) -> dict:
         """Obtiene información y métricas del modelo.
@@ -324,13 +286,7 @@ class MLflowService:
 
         info = self._fetch_model_info(variety)
         with self._cache_lock:
-            # Otro thread pudo poblarlo mientras hacíamos el fetch; respetamos
-            # el primero que llegó para no pisar una versión más nueva.
             return self._info_cache.setdefault(variety, info)
-
-    # ========================================================================
-    # Winner dashboard (artifact HTML)
-    # ========================================================================
 
     def get_winner_dashboard_html(self, variety: str) -> str:
         """Devuelve el HTML del reporte gerencial `Winner_<VARIETY>.html`.
@@ -354,10 +310,6 @@ class MLflowService:
         if cache and cache[0] == run_id:
             return cache[1]
 
-        # El nombre del HTML incluye un timestamp (Winner_<VAR>_<fecha>.html),
-        # así que NO se puede asumir un nombre fijo: listamos el directorio
-        # `winner_dashboard` del run y tomamos el .html (preferimos el que
-        # contiene la variedad). Robusto a cualquier sufijo del trainer.
         try:
             client = mlflow.tracking.MlflowClient()
             entries = client.list_artifacts(run_id, "winner_dashboard")
@@ -382,10 +334,6 @@ class MLflowService:
         with self._cache_lock:
             self._dashboard_cache[variety] = (run_id, html)
         return html
-
-    # ========================================================================
-    # Métodos Privados
-    # ========================================================================
 
     def _get_or_load(self, variety: str) -> Any:
         """Obtiene modelo del cache o lo carga si no existe.
@@ -449,23 +397,12 @@ class MLflowService:
             run_metrics = run.data.metrics
             run_params = run.data.params
 
-            # Hiperparametros del pipeline entrenado: cualquier param con
-            # prefix `regressor__` o `preprocessor__` (formato sklearn) o
-            # con prefijo legacy `best_`. Se preserva el nombre completo
-            # para que el consumidor sepa a que step pertenece.
             best_params = {
                 k.replace("best_", ""): v
                 for k, v in run_params.items()
                 if k.startswith(("regressor__", "preprocessor__", "best_"))
             }
 
-            # Mapeo de metricas al schema del frontend. Origenes:
-            #   - mae/r2 modelo (KG/JR_H, target original):
-            #     test  -> nested_cv_*_mean (out-of-fold honesto)
-            #     train -> nested_cv_mae_train_mean / full_model_r2
-            #   - mape (KG/JR, escala de negocio):
-            #     test  -> business_oof_mape
-            #     train -> business_insample_mape
             params = {
                 "version": latest.version,
                 "run_id": run.info.run_id,
@@ -521,9 +458,6 @@ class MLflowService:
         Raises:
             ModelNotAvailableError: Si falla la carga desde MLflow
         """
-        # RLock reentrante: `_get_or_load` ya puede tenerlo tomado. Serializa
-        # la comparación de versión + carga + escritura de los tres caches
-        # para que queden consistentes entre sí frente a un reload concurrente.
         with self._cache_lock:
             cached_version = self._model_versions.get(variety)
 
@@ -547,10 +481,6 @@ class MLflowService:
                 model = mlflow.pyfunc.load_model(uri)
                 self._model_cache[variety] = model
                 self._model_versions[variety] = latest_version
-                # La info cacheada (métricas/best_params/version) corresponde a
-                # la versión anterior: se invalida para que el próximo
-                # `get_model_info` la recompute desde el registry. Sin esto,
-                # `/varieties/{v}` serviría métricas obsoletas tras un reload.
                 self._info_cache.pop(variety, None)
 
                 return True

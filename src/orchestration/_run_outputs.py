@@ -41,10 +41,6 @@ def full_dataset_metrics(
     try:
         pred_h_full = np.asarray(final_pipeline.predict(X), dtype=float)
     except Exception:
-        # Predict puede fallar por dtype mismatch (sklearn), feature-name
-        # mismatch (xgboost/lightgbm), o ValueError numerico. La jerarquia
-        # exacta varia por libreria; mantenemos Exception y logueamos
-        # traceback para diagnostico.
         if logger is not None:
             logger.warning(
                 "full_metrics: final_pipeline.predict(X) fallo; "
@@ -60,8 +56,7 @@ def full_dataset_metrics(
         relative_floor = (
             max(
                 1e-9,
-                TEMPORAL_MAPE_REL_FLOOR
-                * float(np.median(np.abs(y_arr[finite]))),
+                TEMPORAL_MAPE_REL_FLOOR * float(np.median(np.abs(y_arr[finite]))),
             )
             if finite.any()
             else 1e-9
@@ -72,8 +67,6 @@ def full_dataset_metrics(
             min_denom=relative_floor,
         )
 
-    # KG/JR (business): reusamos las metricas in-sample que ya calcula
-    # validate_against_business_unit (refit + predict all + multiplicar por H-EF).
     full_metrics_business = dict(business_validation.metrics_insample or {})
 
     return full_metrics_business, full_metrics_h, pred_h_full
@@ -97,12 +90,6 @@ def persist_pipeline_and_oof_locally(
     para GAMM Phase 0 (corrector de residuos) y post-mortems sin
     re-entrenamiento.
     """
-    # unlink primero (2026-06-13): los nombres `_vN` pueden COLISIONAR con
-    # archivos de corridas previas (la version se recalcula tras borrar runs
-    # perdedores) y el bind-mount puede tener archivos de OTRO uid (task
-    # train --user vs docker compose run directo como mluser). Sobrescribir
-    # un archivo ajeno da PermissionError; desvincularlo del directorio
-    # (escribible) y crear uno propio no.
     local_pipeline = ARTIFACTS_DIR / f"final_pipeline_{variety}_{run_name}.joblib"
     local_pipeline.unlink(missing_ok=True)
     joblib.dump(final_pipeline, local_pipeline)

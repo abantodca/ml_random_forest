@@ -40,10 +40,6 @@ def _warn_temporal_generalization(champion: ModelResult, variety: str, logger) -
     t_r2 = champion.metrics.get("temporal_r2_oof")
     if t_mape is None and t_r2 is None:
         return
-    # Con <2 folds temporales (3 anios de historia) las metricas son UNA sola
-    # ventana: demasiado ruidosas para acusar drift. El chequeo ya lo loguea
-    # como indicativo; aqui NO warneamos (2026-07-01). Runs viejos sin
-    # temporal_n_folds conservan el comportamiento historico (warnean).
     n_folds = champion.metrics.get("temporal_n_folds")
     if n_folds is not None and n_folds < 2:
         return
@@ -106,9 +102,6 @@ def apply_quality_gate(
         )
         return False
 
-    # Guard de registro (incidente 2026-06-13: un dev EXANTE_MODE=1 paso el
-    # gate y registro v2 experimental — la API sirve la ULTIMA version).
-    # Releemos el modulo (no import top-level) para honrar el env del run.
     from src import config as _cfg
 
     if not _cfg.REGISTER_ENABLED:
@@ -126,10 +119,6 @@ def apply_quality_gate(
         )
         return False
 
-    # Gap RELATIVO (unificado 2026-07-01): select_champion decide con gap_rel
-    # (adimensional, comparable entre variedades); este warning usaba el gap
-    # absoluto viejo (kilos*100 llamado "pp", ver caveat en config) — dos
-    # definiciones conviviendo confundian el log. Ahora ambos hablan gap_rel.
     mape_ok = champion.oof_mape <= CHAMPION_MAX_MAPE
     gap_ok = champion.gap_rel <= CHAMPION_MAX_GAP_REL
     baseline_skill = champion.metrics.get("baseline_skill_mae")
@@ -155,9 +144,6 @@ def apply_quality_gate(
         )
         return False
 
-    # Política estricta para uso realmente predictivo. Se lee en runtime para
-    # que tests, CLI y jobs que inyectan env compartan una única fuente de
-    # verdad. El modo legacy permanece idéntico con REQUIRE_TEMPORAL_GATE=0.
     if _cfg.REQUIRE_TEMPORAL_GATE:
         from src.variety_config import for_variety
 
@@ -209,10 +195,6 @@ def apply_quality_gate(
             )
             return False
 
-    # Aviso temporal NO bloqueante (2026-06-25): el gate de arriba usa el MAPE
-    # stratified (interpolacion, optimista). Si el chequeo honesto temporal
-    # (forecast de anio no visto) salio pobre, lo avisamos para visibilidad de
-    # drift — sin tocar la decision de registro (no rompe campeones existentes).
     _warn_temporal_generalization(champion, variety, logger)
 
     if not gap_ok:

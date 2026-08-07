@@ -91,7 +91,7 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
             iqr = q3 - q1
             lower = q1 - self.factor * iqr
             upper = q3 + self.factor * iqr
-        else:  # percentile
+        else:
             lower = X[cols].quantile(self.lower_q)
             upper = X[cols].quantile(self.upper_q)
         return {"lower": lower.to_dict(), "upper": upper.to_dict()}
@@ -111,7 +111,6 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
             return []
         if isinstance(self.group_col, str):
             return [self.group_col] if self.group_col in X.columns else []
-        # Lista/tuple: filtra a las que existen, preservando orden
         return [c for c in self.group_col if c in X.columns]
 
     def fit(self, X: pd.DataFrame, y=None) -> OutlierCapper:
@@ -121,22 +120,17 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
         cols = self._resolve_cols(X)
         self.numeric_cols_ = cols
 
-        # Bounds GLOBALES (siempre, fallback final del cascade).
         global_bounds = self._compute_bounds(X, cols)
         self.lower_ = global_bounds["lower"]
         self.upper_ = global_bounds["upper"]
 
-        # Cascade: lista de niveles ordenados de mas especifico a menos.
-        # Para group_col=['FUNDO','FORMATO']: niveles = [['FUNDO','FORMATO'],
-        # ['FUNDO']]. Cada nivel guarda bounds por su key composite.
         self.group_cols_ = self._normalize_group_col(X)
         self.cascade_: list[
             tuple[list[str], dict[str, dict[str, float]], dict[str, dict[str, float]]]
         ] = []
-        self.small_groups_: dict[str, list[str]] = {}  # informativo, debug
+        self.small_groups_: dict[str, list[str]] = {}
 
         if self.group_cols_:
-            # Niveles: [primeros n], [primeros n-1], ..., [primeros 1]
             for n_level in range(len(self.group_cols_), 0, -1):
                 level_cols = self.group_cols_[:n_level]
                 level_label = "_".join(level_cols)
@@ -160,31 +154,20 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
 
-        # Path legacy: sin cascade -> cap global (fila a fila igual para todos).
         if not self.cascade_:
             for c in self.numeric_cols_:
                 X[c] = np.clip(X[c].astype(float), self.lower_[c], self.upper_[c])
             return X
 
-        # Path cascade: para cada fila buscar el nivel mas especifico que
-        # tenga bounds; las que no matchean en NINGUN nivel caen al global.
-        # Trabajamos en arrays POSICIONALES (np) para evitar overhead de
-        # .loc / index alignment cuando el dataset es grande.
         n = len(X)
-        # Inicializar bounds posicionales con los GLOBALES (fallback).
         pos_lower = {c: np.full(n, self.lower_[c], dtype=float) for c in self.numeric_cols_}
         pos_upper = {c: np.full(n, self.upper_[c], dtype=float) for c in self.numeric_cols_}
         matched = np.zeros(n, dtype=bool)
 
-        # Recorre cascade del mas especifico al menos. Filas ya 'matched' en
-        # un nivel anterior NO se sobreescriben por niveles menos especificos.
         for level_cols, level_lower, level_upper in self.cascade_:
             if matched.all():
                 break
             keys = self._composite_keys(X, level_cols).reset_index(drop=True)
-            # `.indices` retorna dict[key, ndarray-posicional] directamente:
-            # mas eficiente que `.groups.items()` (que daria pd.Index requiriendo
-            # conversion a posicional con np.asarray).
             for k, idx in keys.groupby(keys, sort=False).indices.items():
                 k_str = str(k)
                 if k_str not in level_lower:
@@ -201,7 +184,6 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
                     pos_upper[c][apply_mask] = upper[c]
                 matched |= apply_mask
 
-        # Aplicar el clip vectorizado por columna.
         for c in self.numeric_cols_:
             col_vals = X[c].astype(float).to_numpy()
             X[c] = np.clip(col_vals, pos_lower[c], pos_upper[c])

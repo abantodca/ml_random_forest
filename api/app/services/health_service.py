@@ -75,5 +75,4 @@ def determine_status(mlflow_ok: bool, db_ok: bool) -> str:
     return "unhealthy"
 
 
-# Instancia compartida del cache (por proceso/worker)
 health_cache = HealthCache()

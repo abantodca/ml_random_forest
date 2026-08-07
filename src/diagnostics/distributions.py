@@ -71,7 +71,6 @@ def _outliers_mad(x: pd.Series, threshold: float = 3.5) -> int:
     mad = (x - median).abs().median()
     if mad == 0:
         return 0
-    # 0.6745 = 75-percentile de la dist normal estandar -> escala MAD a sigma
     z_robust = 0.6745 * (x - median) / mad
     return int((z_robust.abs() > threshold).sum())
 

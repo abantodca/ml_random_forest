@@ -37,13 +37,9 @@ class TestResult:
     p_value: float | None = None
     rejects_h0: bool | None = None
     h0_meaning: str = ""
-    is_finding: bool = False  # True si rechazar H0 = "problema a remediar"
+    is_finding: bool = False
     notes: str = ""
     extra: dict = field(default_factory=dict)
-    # Campos opcionales para compatibilidad con consumers que esperaban
-    # `HeteroscedasticityTest` (HTML report del step_05). `note` (sin 's')
-    # almacena la interpretacion en lenguaje natural; `is_heteroscedastic`
-    # es un alias semantico de `rejects_h0` para tests de heterocedasticidad.
     note: str | None = None
     is_heteroscedastic: bool | None = None
 
@@ -71,9 +67,6 @@ def _safe_test(name: str, h0: str, is_finding: bool) -> TestResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# Normalidad (univariado)
-# ---------------------------------------------------------------------------
 def shapiro_wilk(x: pd.Series, alpha: float = 0.05) -> TestResult:
     """Shapiro-Wilk normality test. H0: sample viene de distribucion normal.
 
@@ -122,7 +115,6 @@ def anderson_darling(x: pd.Series, alpha: float = 0.05) -> TestResult:
     if len(x_clean) < 8:
         return _safe_test(name, h0, is_finding=True)
     try:
-        # API nueva (scipy >= 1.15): da pvalue directo, mas preciso
         try:
             result = anderson(x_clean, dist="norm", method="interpolate")
             stat = float(result.statistic)
@@ -138,12 +130,10 @@ def anderson_darling(x: pd.Series, alpha: float = 0.05) -> TestResult:
                     notes=f"n={len(x_clean)}",
                 )
         except TypeError:
-            # scipy < 1.15: method param no existe, cae al legacy abajo
             pass
 
-        # API legacy (scipy < 1.15): critical_values + significance_level
         result = anderson(x_clean, dist="norm")
-        sig_levels = list(result.significance_level)  # [15.0, 10.0, 5.0, 2.5, 1.0]
+        sig_levels = list(result.significance_level)
         crit_at_alpha = result.critical_values[sig_levels.index(alpha * 100)]
         rejects = result.statistic > crit_at_alpha
         return TestResult(
@@ -191,9 +181,6 @@ def jarque_bera(x: pd.Series, alpha: float = 0.05) -> TestResult:
         return out
 
 
-# ---------------------------------------------------------------------------
-# Heterocedasticidad
-# ---------------------------------------------------------------------------
 def breusch_pagan(y: pd.Series, X: pd.DataFrame, alpha: float = 0.05) -> TestResult:
     """Breusch-Pagan test. H0: var(residuos|X) = constante (homocedasticidad).
 
@@ -283,7 +270,6 @@ def breusch_pagan_residuals(
         return out
 
     try:
-        # OLS auxiliar: residuals ~ predictions (1 regresor)
         exog = add_constant(predictions)
         model = OLS(residuals, exog).fit()
         lm_stat, p_val, _, _ = het_breuschpagan(model.resid, exog)
@@ -328,7 +314,6 @@ def white_test(y: pd.Series, X: pd.DataFrame, alpha: float = 0.05) -> TestResult
     name = "White (heteroscedasticity)"
     h0 = "varianza de residuos es constante (homocedasticidad)"
     df = pd.concat([y, X], axis=1).dropna()
-    # White requiere n > k(k+3)/2 + 1, conservador: n >= 50
     if len(df) < 50:
         return _safe_test(name, h0, is_finding=True)
     try:
@@ -352,9 +337,6 @@ def white_test(y: pd.Series, X: pd.DataFrame, alpha: float = 0.05) -> TestResult
         return out
 
 
-# ---------------------------------------------------------------------------
-# Autocorrelacion
-# ---------------------------------------------------------------------------
 def durbin_watson(residuals: pd.Series) -> TestResult:
     """Durbin-Watson sobre residuos.
 
@@ -423,9 +405,6 @@ def ljung_box(residuals: pd.Series, lags: int = 10, alpha: float = 0.05) -> Test
         return out
 
 
-# ---------------------------------------------------------------------------
-# Estacionariedad
-# ---------------------------------------------------------------------------
 def adf_test(x: pd.Series, alpha: float = 0.05) -> TestResult:
     """Augmented Dickey-Fuller. H0: existe raiz unitaria (NO estacionaria).
 
@@ -467,7 +446,6 @@ def kpss_test(x: pd.Series, alpha: float = 0.05) -> TestResult:
     if len(x_clean) < 30:
         return _safe_test(name, h0, is_finding=True)
     try:
-        # warning suppression: KPSS ruidoso si p fuera de tabla
         import warnings
 
         with warnings.catch_warnings():

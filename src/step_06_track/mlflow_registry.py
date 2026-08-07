@@ -151,7 +151,6 @@ def log_business_metrics(business_validation) -> None:
         return
     metrics = business_validation.to_mlflow_metrics()
     log_metrics(metrics)
-    # Tags resumen filtrables
     summary_tags: dict[str, str] = {}
     if "r2" in business_validation.metrics_oof:
         summary_tags["business_oof_r2"] = f"{business_validation.metrics_oof['r2']:.4f}"
@@ -220,7 +219,6 @@ def log_pipeline(
                 X_sample.head(3) if hasattr(X_sample, "head") else X_sample[:3]
             )
         except Exception:
-            # signature no es critico; preferimos loguear que abortar
             pass
     return _safe_artifact_call(
         lambda: mlflow.sklearn.log_model(pipeline, name=name, **kwargs),
@@ -286,7 +284,6 @@ def register_model(
         mv = mlflow.register_model(model_uri=model_uri, name=model_name)
         client = mlflow.tracking.MlflowClient()
 
-        # ---- Description humana ----
         m = metrics or {}
         description = (
             f"Modelo de productividad para variedad '{variety}'.\n"
@@ -303,7 +300,6 @@ def register_model(
             description=description,
         )
 
-        # ---- Tags en la version (filtrables) ----
         tags: dict[str, str] = {
             "variety": variety,
             "r2_mean": f"{m.get('nested_cv_r2_mean', float('nan')):.4f}",
@@ -319,12 +315,6 @@ def register_model(
         for k, v in tags.items():
             client.set_model_version_tag(model_name, mv.version, k, v)
 
-        # ---- Promocion via alias (MLflow 3.x) ----
-        # `transition_model_version_stage` fue deprecado en 2.9 y eliminado
-        # de la API publica en 3.x. `set_registered_model_alias` reasigna el
-        # alias atomicamente: la version anterior pierde el alias automatico
-        # (mismo efecto que `archive_existing_versions` del flujo legacy).
-        # "Archived" en el modelo aliases = no setear alias activo.
         if stage in ("Staging", "Production"):
             client.set_registered_model_alias(
                 name=model_name,
@@ -334,9 +324,6 @@ def register_model(
 
         return f"{model_name} v{mv.version}"
     except mlflow.exceptions.MlflowException:
-        # file://: no soporta Registry, retorno silencioso esperado (caso
-        # local-only default). Backend SQL: error real (auth/red/schema)
-        # -> propagar para que variety_runner lo capture y logue.
         if is_file_backend:
             return None
         raise

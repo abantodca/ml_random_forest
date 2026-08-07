@@ -44,11 +44,6 @@ def parse_excel_to_forecasts(contents: bytes, filename: str) -> list[ForecastCre
     return forecasts
 
 
-# ============================================================================
-# Helpers privados
-# ============================================================================
-
-
 def _safe_float(row: pd.Series, col: str) -> float | None:
     if col not in row.index:
         return None

@@ -39,12 +39,8 @@ def set_initial_run_tags(variety: str, model_type: str, version: int, args) -> N
             "model_type": model_type,
             "version": f"v{version}",
             "trained_at": datetime.now().isoformat(timespec="seconds"),
-            "shadow_temporal": str(
-                bool(getattr(args, "shadow_temporal_window", False))
-            ).lower(),
-            "promotion_blocked": str(
-                bool(getattr(args, "shadow_temporal_window", False))
-            ).lower(),
+            "shadow_temporal": str(bool(getattr(args, "shadow_temporal_window", False))).lower(),
+            "promotion_blocked": str(bool(getattr(args, "shadow_temporal_window", False))).lower(),
         }
     )
 
@@ -121,11 +117,6 @@ def log_run_metadata_and_params(
         )
         set_tags(metadata_tags)
     except (OSError, ValueError):
-        # OSError: training file / git dir inaccesible.
-        # ValueError: hash o parsing fallido.
-        # Otros errores (e.g. ImportError) deberian propagar -> NO los
-        # tragamos. Trazabilidad rota es un finding de auditoria; loggear
-        # con traceback para que el siguiente sysadmin sepa que arreglar.
         log.warning("collect_run_metadata fallo (no aborta training)", exc_info=True)
     log_params(
         {
@@ -139,9 +130,7 @@ def log_run_metadata_and_params(
             "skip_final_tuning": settings["skip_final_tuning"],
             "n_rows": int(X.shape[0]),
             "n_features_input": int(X.shape[1]),
-            "shadow_temporal_window": bool(
-                getattr(args, "shadow_temporal_window", False)
-            ),
+            "shadow_temporal_window": bool(getattr(args, "shadow_temporal_window", False)),
         }
     )
 
@@ -228,9 +217,4 @@ def write_residual_diagnostics(
         log_artifact(str(residual_html), artifact_path="residuals")
         log.info(f"Residual diagnostics: {residual_html.name}")
     except Exception:
-        # write_residual_report engloba IO (HTML), statsmodels (tests
-        # estadisticos) y matplotlib (plots). Cualquier libreria puede
-        # lanzar errores propios (LinAlgError, ConvergenceWarning como
-        # error, etc.). Mantenemos Exception broad: el diagnostico es
-        # opcional y nunca debe bloquear el modelo de produccion.
         log.warning("Residual diagnostics fallo (no aborta training)", exc_info=True)

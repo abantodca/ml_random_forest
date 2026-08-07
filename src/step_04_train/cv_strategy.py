@@ -95,7 +95,6 @@ def build_cv_splitters(
     )
     strat_label, strat_strategy = build_strat_label(X, min_count=strat_min_count)
 
-    # Outer
     if strategy == "temporal_year":
         from src.step_04_train.temporal_cv import PurgedDateSplit, TemporalYearSplit
 
@@ -114,8 +113,7 @@ def build_cv_splitters(
     else:
         if strategy != "stratified":
             raise ValueError(
-                "CV_OUTER_STRATEGY debe ser 'temporal_year' o 'stratified', "
-                f"recibido {strategy!r}"
+                f"CV_OUTER_STRATEGY debe ser 'temporal_year' o 'stratified', recibido {strategy!r}"
             )
         outer_splitter_cls = StratifiedKFold if strat_label is not None else KFold
         outer_cv = outer_splitter_cls(

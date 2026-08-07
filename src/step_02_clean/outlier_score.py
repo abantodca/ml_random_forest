@@ -84,19 +84,12 @@ class LOFOutlierScorer(BaseEstimator, TransformerMixin):
         self.numeric_cols_ = cols
 
         X_num = X[cols].copy()
-        # Si hay NaN al fit, imputamos con mediana inline (defensivo).
-        # En el pipeline real este transformer va DESPUES del imputer, asi
-        # que el path NaN no deberia activarse. Pero si alguien lo usa
-        # standalone, no rompe.
         if X_num.isna().any().any():
             X_num = X_num.fillna(X_num.median(numeric_only=True))
 
         self.scaler_ = RobustScaler()
         X_scaled = self.scaler_.fit_transform(X_num)
 
-        # novelty=True permite usar `score_samples` en transform sobre data
-        # nueva. novelty=False solo permite scoring durante fit (no util en
-        # pipeline sklearn).
         n_samples = len(X_scaled)
         n_neigh = min(int(self.n_neighbors), max(2, n_samples - 1))
         self.lof_ = LocalOutlierFactor(
@@ -116,8 +109,6 @@ class LOFOutlierScorer(BaseEstimator, TransformerMixin):
             X_num = X_num.fillna(X_num.median(numeric_only=True))
         X_scaled = self.scaler_.transform(X_num)
 
-        # score_samples devuelve LOF scores: mas negativo => mas outlier.
-        # Negamos para que mas alto => mas outlier.
         scores = self.lof_.score_samples(X_scaled)
         X[self.output_col] = -np.asarray(scores, dtype=float)
         return X

@@ -17,7 +17,7 @@ from app.services import build_forecast_payload
 _SS_ITEMS = "fc_items"
 _SS_TOTAL = "fc_total"
 _SS_LAST_CRITERIA = "fc_last_criteria"
-_SS_ACTION = "fc_action"  # "detail" | "edit" | "delete" | None
+_SS_ACTION = "fc_action"
 
 _FORMATO_EMOJI = {"FRESCO": "🥬", "PROCESO": "⚙️"}
 
@@ -125,9 +125,6 @@ def _render_edit_form(item: ForecastRecord) -> None:
             with ec2:
                 new_ha = st.number_input("HA", 0.1, 10_000.0, value=float(item.ha))
                 new_dia = st.number_input("DIA_COSECHA", 0, 365, value=int(item.dia_cosecha))
-                # `value=None` cuando el item no tenía valor preserva la
-                # semántica "campo vacío = no enviar al PATCH". Sólo se manda
-                # si el usuario explícitamente escribe un número aquí.
                 new_ind = st.number_input(
                     "%INDUS",
                     0.0,

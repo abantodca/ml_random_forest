@@ -19,7 +19,7 @@ from app.core import API_BATCH_MAX_ROWS, COLUMNAS_OPCIONALES, COLUMNAS_REQUERIDA
 
 @dataclass(frozen=True)
 class ValidationIssue:
-    fila: int  # 1-indexed (encabezado = 1)
+    fila: int
     columna: str
     valor: str
     motivo: str
@@ -33,9 +33,6 @@ class BatchValidationError(Exception):
         super().__init__(f"{len(issues)} errores de validación")
 
 
-# ---------------------------------------------------------------------------
-# Normalización (uppercase, strip, NA)
-# ---------------------------------------------------------------------------
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -52,9 +49,6 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ---------------------------------------------------------------------------
-# Schema (declarativo)
-# ---------------------------------------------------------------------------
 def _is_valid_date(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce").notna()
 
@@ -140,12 +134,8 @@ def _build_schema(
     return pa.DataFrameSchema(columns, strict="filter")
 
 
-# ---------------------------------------------------------------------------
-# Traducción failure_cases → ValidationIssue
-# ---------------------------------------------------------------------------
 def _failure_to_issue(row: pd.Series) -> ValidationIssue:
     raw_idx = row.get("index")
-    # +2: pandas 0-indexed + header
     fila = int(raw_idx) + 2 if pd.notna(raw_idx) else 0
     valor_raw = row.get("failure_case")
     valor = (
@@ -161,9 +151,6 @@ def _failure_to_issue(row: pd.Series) -> ValidationIssue:
     )
 
 
-# ---------------------------------------------------------------------------
-# API pública
-# ---------------------------------------------------------------------------
 def validate_batch_upload(
     df: pd.DataFrame, *, valid_varieties: list[str] | None = None
 ) -> pd.DataFrame:
@@ -197,17 +184,13 @@ def validate_batch_upload(
                     columna="VARIEDAD",
                     valor=str(variety),
                     motivo=(
-                        f"{int(count)} filas exceden el máximo de "
-                        f"{API_BATCH_MAX_ROWS} por lote"
+                        f"{int(count)} filas exceden el máximo de {API_BATCH_MAX_ROWS} por lote"
                     ),
                 )
                 for variety, count in oversized.items()
             ]
         )
 
-    # Import local: rompe el ciclo app.services ⇄ app.dependencies
-    # (dependencies importa los servicios; este es el único servicio que
-    # necesita el composition root, y solo en runtime, no en import).
     from app.dependencies import get_cached_catalogs
 
     catalogs = get_cached_catalogs()

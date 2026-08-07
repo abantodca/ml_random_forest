@@ -160,8 +160,6 @@ def resolve_varieties(arg: str) -> list[str]:
     try:
         available = list_varieties()
     except FileNotFoundError:
-        # Sin Excel no podemos validar; dejamos pasar y que el worker
-        # reporte el error de I/O con su contexto.
         return requested
     available_set = set(available)
     unknown = [v for v in requested if v not in available_set]

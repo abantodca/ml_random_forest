@@ -18,11 +18,13 @@ Modulos:
     eda               : entrypoint `run_eda(variety) -> Path`
 """
 
+
 def run_eda(*args, **kwargs):
     """Import diferido para que ``python -m src.diagnostics.eda`` sea limpio."""
 
     from src.diagnostics.eda import run_eda as _run_eda
 
     return _run_eda(*args, **kwargs)
+
 
 __all__ = ["run_eda"]

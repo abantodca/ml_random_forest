@@ -55,12 +55,6 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
         Columnas a imputar; si None usa `config.NUMERIC_FEATURES`.
     """
 
-    # Default de fallback_threshold, sobreescribible por env var sin tocar
-    # codigo. Benchmark mask&recover 2026-06-11 (POP, 20% enmascarado):
-    # P/BAYA (39.2% NaN, hoy capturada por el umbral 0.30 -> mediana global)
-    # se recupera con 20.5% de error via mediana global vs 12.9% via KNN.
-    # Subir IMPUTER_KNN_THRESHOLD a 0.45 mete P/BAYA al KNN (-37% error de
-    # imputacion). Default 0.30 = legacy hasta validar en A/B.
     _DEFAULT_FALLBACK_THRESHOLD = float(os.environ.get("IMPUTER_KNN_THRESHOLD", "0.30"))
 
     def __init__(
@@ -80,9 +74,6 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
     def _resolve_cols(self, X: pd.DataFrame) -> list[str]:
         return resolve_cols(X, self.numeric_cols, NUMERIC_FEATURES, "CustomKNNImputer")
 
-    # Minimo de observaciones NO-nulas para confiar en la mediana de un
-    # grupo (IMPUTER_GROUP_MEDIAN). Bajo este umbral el estrato cae al
-    # siguiente nivel del cascade (FUNDO -> global).
     _GROUP_MEDIAN_MIN_OBS = 10
 
     def fit(self, X: pd.DataFrame, y=None) -> CustomKNNImputer:
@@ -102,12 +93,6 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
             self.median_imputer_ = SimpleImputer(strategy="median")
             self.median_imputer_.fit(X[self.median_cols_])
 
-        # Mediana jerarquica (IMPUTER_GROUP_MEDIAN): para las columnas de
-        # fallback (>30% missing, e.g. P/BAYA con 39.2% NaN) memoriza
-        # medianas por (FUNDO, FORMATO) y por FUNDO. En transform se imputa
-        # cascade FF -> F -> global (mismo patron que OutlierCapper).
-        # Motivacion: P/BAYA tiene ACF intra-FF = 0.74 y drift por estrato;
-        # la mediana GLOBAL aplasta esas diferencias en 4 de cada 10 filas.
         self.group_medians_: dict = {}
         self.fundo_medians_: dict = {}
         if (
@@ -133,16 +118,10 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
                 n_neighbors=int(self.n_neighbors),
                 weights=self.weights,
             )
-            # Entrenamos KNN sobre TODAS las numericas para mejor distancia,
-            # pero solo aplicamos transform a las knn_cols_.
             self._knn_fit_cols_ = cols
             X_knn = X[cols].copy()
             if self.median_cols_:
                 X_knn[self.median_cols_] = self.median_imputer_.transform(X[self.median_cols_])
-            # RobustScaler INTERNO: balancea las escalas para que la distancia
-            # euclidiana del KNN no sea dominada por la columna de mayor rango
-            # (KG/HA). El scaler ignora NaN al fit y mantiene NaN al transform,
-            # asi el KNN sigue identificando los huecos a imputar.
             self.scaler_ = RobustScaler()
             X_knn_scaled = self.scaler_.fit_transform(X_knn)
             self.knn_imputer_.fit(X_knn_scaled)
@@ -153,9 +132,6 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
         X = X.copy()
         cols = self.numeric_cols_
 
-        # Cascade jerarquica primero (si fue memorizada en fit): rellena con
-        # mediana del (FUNDO, FORMATO), luego FUNDO. Lo que quede NaN cae al
-        # SimpleImputer global de siempre (fallback final, sin cambio).
         if getattr(self, "group_medians_", None):
             ff_keys = (
                 X["FUNDO"].astype(str) + "__" + X["FORMATO"].astype(str)
@@ -179,20 +155,13 @@ class CustomKNNImputer(BaseEstimator, TransformerMixin):
 
         if self.knn_cols_:
             X_knn_in = X[cols].copy()
-            # Aplicamos el mismo scaler del fit antes de pedir vecinos. El KNN
-            # opera en espacio escalado; al volver hacemos inverse_transform
-            # para recuperar la escala original, asi el output de imputer
-            # mantiene unidades comparables a las que vienen de fit con
-            # filas sin NaN (el modelo aguas abajo no nota la diferencia).
             X_knn_scaled = self.scaler_.transform(X_knn_in)
             X_knn_imputed_scaled = self.knn_imputer_.transform(X_knn_scaled)
             X_knn_out = self.scaler_.inverse_transform(X_knn_imputed_scaled)
-            # Solo escribimos las columnas que delegamos al KNN
             knn_idx = [cols.index(c) for c in self.knn_cols_]
             for i, col in zip(knn_idx, self.knn_cols_, strict=True):
                 X[col] = X_knn_out[:, i]
 
-        # Garantia: no debe quedar NaN en numericas
         for c in cols:
             if X[c].isna().any():
                 X[c] = X[c].fillna(X[c].median())

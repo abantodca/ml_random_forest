@@ -70,7 +70,7 @@ def _hydrate_data_from_s3(logger) -> bool:
     bucket = os.environ.get("S3_DATA_BUCKET")
     key = os.environ.get("S3_DATA_KEY")
     if not (bucket and key):
-        return True  # local: prepare_data ya corrio offline
+        return True
 
     logger.info(f"Hydratando data desde s3://{bucket}/{key}...")
     try:
@@ -157,7 +157,7 @@ def _run_eda_mode(varieties: list[str], logger) -> int:
     el hydrate de data desde S3 ya corrio (igual que el training)."""
     from src.diagnostics.eda import run_eda
 
-    init_mlflow()  # run_eda loguea a MLflow por variedad
+    init_mlflow()
     logger.info("=" * 78)
     logger.info(f"Modo EDA | variedades={varieties}")
     logger.info("=" * 78)
@@ -171,8 +171,6 @@ def _run_eda_mode(varieties: list[str], logger) -> int:
             logger.error(f"[EDA/{v}] fallo: {exc}")
             failed.append(v)
 
-    # Mismo sync que el training: empuja reports/ (HTML EDA) + artifacts/ a S3.
-    # En local (sin S3_ARTIFACTS_BUCKET) es no-op.
     if S3_ARTIFACTS_BUCKET:
         from scripts.s3_sync import sync_to_s3
 
@@ -191,13 +189,9 @@ def _run_eda_mode(varieties: list[str], logger) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     settings = resolve_settings(args)
-    init_dirs()  # crea logs/, artifacts/, reports/ (idempotente)
+    init_dirs()
     logger = setup_logging()
 
-    # En AWS Batch: descarga BD_HISTORICO_ACUMULADO.xlsx desde S3 y genera
-    # DB-HISTORICA.xlsx via scripts.prepare_data.split_workbook. En local
-    # (sin S3_DATA_BUCKET/S3_DATA_KEY) es no-op: asume que `task data:split`
-    # ya corrio offline.
     if not _hydrate_data_from_s3(logger):
         logger.error("Hydrate de data desde S3 fallo; abortando.")
         return 2
@@ -209,19 +203,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    # resolve_varieties valida contra el catalogo y aborta con sys.exit(2)
-    # ante variedades desconocidas (no lanza ValueError).
     varieties = resolve_varieties(args.varieties)
-    # El flujo normal NO permite forzar un modelo: entrena todos los backends
-    # y `champion.select_champion` decide. Más abajo, el modo shadow aplica la
-    # única excepción: backend validado, aislado y sin registro.
     models = list(valid_backends())
     if not varieties:
         logger.error("varieties vacio; revisa --varieties")
         return 2
 
-    # Modo EDA (--eda): standalone, NO entrena. No necesita el registry de
-    # modelos; corre el analisis exploratorio por variedad y sincroniza a S3.
     if args.eda:
         return _run_eda_mode(varieties, logger)
 
@@ -242,9 +229,6 @@ def main(argv: list[str] | None = None) -> int:
                 "smoke no aporta evidencia suficiente."
             )
             return 2
-        # La prueba que justificó el candidato fue con LightGBM. El modo
-        # normal conserva todos los backends; esta excepción explícita evita
-        # convertir un algoritmo no validado en candidato de sombra.
         models = ["lgb"]
         args.register_model = False
         args.registry_stage = "None"
@@ -268,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(f"MLflow tracking URI: {MLFLOW_TRACKING_URI}")
     logger.info("=" * 78)
 
-    init_mlflow()  # solo seteamos URI; experimento se setea por variedad
+    init_mlflow()
 
     t_total = time.perf_counter()
 
@@ -292,11 +276,7 @@ def main(argv: list[str] | None = None) -> int:
 
     total_dt = time.perf_counter() - t_total
     aggregate_path = _write_aggregate_summary(
-        aggregate,
-        failed_varieties,
-        varieties,
-        models,
-        total_dt
+        aggregate, failed_varieties, varieties, models, total_dt
     )
 
     logger.info("=" * 78)
@@ -315,8 +295,6 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(f"Resumen agregado: {aggregate_path}")
     logger.info("=" * 78)
 
-    # S3 sync: solo si S3_ARTIFACTS_BUCKET esta configurado (EC2/CI).
-    # En local el bucket esta vacio -> se omite silenciosamente.
     if S3_ARTIFACTS_BUCKET:
         from scripts.s3_sync import sync_to_s3
 

@@ -5,9 +5,6 @@ app.components.charts - Factory de figuras Plotly (funciones puras).
 y constantes compartidas entre los gráficos).
 """
 
-# Sin ciclo con `app.components.layout`: los módulos que cruzan de paquete
-# importan el submódulo hoja directamente (`layout.empty_state`,
-# `charts.gauge`), nunca el barrel del otro — el orden aquí ya no importa.
 from app.components.charts.bar_table import build_table_with_bars
 from app.components.charts.gauge import build_drift_gauge, build_simple_gauge
 from app.components.charts.heatmap import build_metrics_heatmap
@@ -26,7 +23,6 @@ __all__ = [
     "build_drift_gauge",
     "build_simple_gauge",
     "build_table_with_bars",
-    # Seguimiento / precisión
     "build_pred_vs_real_line",
     "build_parity_plot",
     "build_residual_bars",

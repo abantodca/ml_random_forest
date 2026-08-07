@@ -124,9 +124,7 @@ class ForecastService:
         )
         items = data.get("items")
         if not isinstance(items, list) or len(items) != len(payloads):
-            raise ApiResponseError(
-                "Respuesta batch inválida: cantidad de predicciones inesperada."
-            )
+            raise ApiResponseError("Respuesta batch inválida: cantidad de predicciones inesperada.")
         return tuple(
             self._to_prediction_result(item, variety, payload)
             for item, payload in zip(items, payloads, strict=True)
@@ -145,7 +143,6 @@ class ForecastService:
             variety=data.get("variety", variety),
             kghora=data.get("kghora_pred", 0.0),
             kgjn=data.get("kgjn_pred"),
-            # Banda de incertidumbre que el API ya calcula (antes se descartaba).
             kghora_std=data.get("kghora_std"),
             kghora_lo=data.get("kghora_lo"),
             kghora_hi=data.get("kghora_hi"),
